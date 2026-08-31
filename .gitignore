@@ -1,0 +1,20 @@
+# Секреты и данные пользователей — в репозиторий не попадают никогда.
+.env
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Исходники кружков (сотни мегабайт 4K) остаются у заказчика,
+# в репозитории только собранные media/circles/*.mp4
+*.MOV
+tools/_probe/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.coverage
+coverage.xml
+htmlcov/
+tools/_whoami.txt
