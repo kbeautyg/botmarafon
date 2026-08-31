@@ -46,7 +46,23 @@ ADMIN_IDS = _ids(os.getenv('ADMIN_IDS', ''))
 # туда ботом нельзя, только приводить человека за руку.
 CARE_CONTACT = os.getenv('CARE_CONTACT', '').strip().lstrip('@')
 
-DB_PATH = os.getenv('DB_PATH') or os.path.join(ROOT, 'data', 'marathon.db')
+def _db_path():
+    u"""Где держать базу.
+
+    На Railway файловая система контейнера эфемерная: без подключённого
+    диска база пропадёт при первом же перезапуске, а вместе с ней очередь
+    отложенных шагов и запомненные записи дней — люди зависнут посреди
+    воронки. Поэтому если диск примонтирован в /data, пишем туда.
+    """
+    told = os.getenv('DB_PATH')
+    if told:
+        return told
+    if os.path.isdir('/data'):
+        return '/data/marathon.db'
+    return os.path.join(ROOT, 'data', 'marathon.db')
+
+
+DB_PATH = _db_path()
 CIRCLES_DIR = os.path.join(ROOT, 'media', 'circles')
 
 # Если человек не ответил на опросник, воронка встанет навсегда: следующий
