@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import config, db, handlers, scheduler
+from . import config, db, delivery, handlers, scheduler, texts
 
 log = logging.getLogger('marathon')
 
@@ -38,6 +38,10 @@ async def run():
 
     me = await bot.get_me()
     log.info(u'бот @%s запущен, база %s', me.username, config.DB_PATH)
+    if config.on_railway() and not config.db_persistent():
+        # Молчать нельзя: узнаем о потере базы от заказчика, как 2 сентября.
+        log.warning(u'база %s не на диске — пропадёт при деплое', config.DB_PATH)
+        await delivery.alert_admins(bot, texts.DB_EPHEMERAL_ADMIN)
 
     # Планировщик живёт рядом с опросом обновлений: пауза в два с половиной
     # часа никого не держит, состояние очереди целиком в базе.

@@ -64,6 +64,14 @@ async def send_review(bot: Bot, user_id: int, index: int) -> Message | None:
     return await _guard(bot.send_message(user_id, texts.review_text(index)))
 
 
+def _day_from_env(day: int):
+    u"""Запись дня из переменной DAYn: ссылка, если начинается с http, иначе file_id."""
+    value = config.DAY_ENV.get(day, '')
+    if not value:
+        return None
+    return ('link', value) if value.lower().startswith('http') else ('video', value)
+
+
 async def send_day(bot: Bot, user_id: int, day: int,
                    admins_alert: bool = True) -> Message | None:
     u"""Запись дня и текст под ней.
@@ -73,7 +81,7 @@ async def send_day(bot: Bot, user_id: int, day: int,
     хуже всего, об этом узнаешь только от заказчика.
     """
     text = texts.DAY_TEXTS[day]
-    stored = db.get_content('day%d' % day)
+    stored = db.get_content('day%d' % day) or _day_from_env(day)
 
     if stored and stored[0] == 'video':
         return await _guard(bot.send_video(user_id, stored[1], caption=text))

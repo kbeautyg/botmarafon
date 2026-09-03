@@ -90,3 +90,38 @@ def test_у_каждого_дня_есть_текст():
 
 def test_отзывов_ровно_столько_сколько_шлём():
     assert len(texts.REVIEWS) == funnel.REVIEW_COUNT
+
+
+@pytest.mark.asyncio
+async def test_день_из_переменной_окружения_уходит_видео(monkeypatch):
+    u"""База пуста (контейнер переехал), но DAY2 задан в окружении."""
+    monkeypatch.setattr(config, 'DAY_ENV', {1: '', 2: 'ENVFILE2', 3: '', 4: ''})
+    bot = FakeBot()
+    await delivery.send_day(bot, 1, 2)
+    assert bot.sent == [('video', 1, 'ENVFILE2')]
+
+
+@pytest.mark.asyncio
+async def test_день_из_переменной_окружения_уходит_ссылкой(monkeypatch):
+    monkeypatch.setattr(config, 'DAY_ENV',
+                        {1: '', 2: '', 3: 'https://energy-sport-gum.ru/marathon/3?k=abc', 4: ''})
+    bot = FakeBot()
+    await delivery.send_day(bot, 1, 3)
+    kind, chat, body = bot.sent[0]
+    assert kind == 'text' and chat == 1 and 'marathon/3?k=abc' in body
+    assert 777 not in [c for _, c, _ in bot.sent], u'тревоги админам быть не должно'
+
+
+@pytest.mark.asyncio
+async def test_запись_из_базы_важнее_переменной(monkeypatch):
+    monkeypatch.setattr(config, 'DAY_ENV', {1: 'ENVFILE1', 2: '', 3: '', 4: ''})
+    db.put_content('day1', 'video', 'FILEID1')
+    bot = FakeBot()
+    await delivery.send_day(bot, 1, 1)
+    assert bot.sent == [('video', 1, 'FILEID1')]
+
+
+def test_база_в_папке_проекта_не_считается_диском(tmp_path, monkeypatch):
+    u"""Папка контейнера — не примонтированный том: бот должен это замечать."""
+    monkeypatch.setattr(config, 'DB_PATH', str(tmp_path / 'marathon.db'))
+    assert config.db_persistent() is False

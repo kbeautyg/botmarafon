@@ -63,6 +63,31 @@ def _db_path():
 
 
 DB_PATH = _db_path()
+
+# Запасной источник записей дней. База без диска на Railway не переживает
+# деплой (2 сентября так пропали все четыре дня), а переменные окружения
+# переживают: DAY1…DAY4 = file_id видео или ссылка на запись. Если в базе
+# запись есть, она важнее переменной.
+DAY_ENV = {n: os.getenv('DAY%d' % n, '').strip() for n in (1, 2, 3, 4)}
+
+
+def on_railway() -> bool:
+    return bool(os.getenv('RAILWAY_ENVIRONMENT'))
+
+
+def db_persistent() -> bool:
+    u"""Лежит ли база на примонтированном томе, а не в файловой системе контейнера.
+
+    Идём вверх от папки базы до корня: том может быть примонтирован и выше
+    (DB_PATH=/data/bot/marathon.db). Сам корень не считаем — в контейнере
+    он всегда «примонтирован», но живёт до первого деплоя.
+    """
+    folder = os.path.dirname(os.path.abspath(DB_PATH))
+    while folder != os.path.dirname(folder):
+        if os.path.ismount(folder):
+            return True
+        folder = os.path.dirname(folder)
+    return False
 CIRCLES_DIR = os.path.join(ROOT, 'media', 'circles')
 
 # Если человек не ответил на опросник, воронка встанет навсегда: следующий

@@ -85,7 +85,12 @@ async def on_video(message: Message):
     db.put_content('await:%d' % message.from_user.id, 'await', '')
     media = message.video or message.document or message.video_note
     db.put_content('day%d' % day, 'video', media.file_id)
-    await message.reply(u'Записал день %d ✅ Теперь он уходит людям.' % day)
+    note = u'Записал день %d ✅ Теперь он уходит людям.' % day
+    if config.on_railway() and not config.db_persistent():
+        note += (u'\n\nБаза не на диске — чтобы запись пережила деплой, добавьте '
+                 u'в Railway переменную <code>DAY%d</code> со значением:\n'
+                 u'<code>%s</code>' % (day, media.file_id))
+    await message.reply(note)
     log.info(u'админ %s задал день %d', message.from_user.id, day)
 
 
@@ -119,7 +124,9 @@ def _content_report() -> list[str]:
     lines = []
     for day in (1, 2, 3, 4):
         stored = db.get_content('day%d' % day)
-        if not stored:
+        if not stored and config.DAY_ENV.get(day):
+            lines.append(u'• День %d — из переменной DAY%d' % (day, day))
+        elif not stored:
             lines.append(u'• День %d — <b>НЕ ЗАДАН</b>' % day)
         elif stored[0] == 'link':
             lines.append(u'• День %d — ссылка' % day)
@@ -137,6 +144,11 @@ def _content_report() -> list[str]:
         lines.append(u'• Нет кружков: %s' % u', '.join(missing))
     else:
         lines.append(u'• Кружки на месте: %d' % len(wanted))
+
+    if config.on_railway():
+        lines.append(u'• База на диске ✅' if config.db_persistent() else
+                     u'• База <b>НЕ НА ДИСКЕ</b> — пропадёт при деплое '
+                     u'(Settings → Volumes → Add Volume, mount path /data)')
     return lines
 
 

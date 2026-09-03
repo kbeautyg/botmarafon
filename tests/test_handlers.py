@@ -255,6 +255,30 @@ async def test_статус_показывает_чего_не_хватает():
     assert u'ask_day3' in отчёт, u'про недостающий кружок надо предупреждать'
 
 
+async def test_статус_предупреждает_что_база_не_на_диске(monkeypatch):
+    u"""На Railway без тома база пропадёт при деплое — /status обязан кричать."""
+    monkeypatch.setattr(config, 'on_railway', lambda: True)
+    monkeypatch.setattr(config, 'db_persistent', lambda: False)
+    message = админ_сообщение(text='/status')
+    await admin.on_status(message)
+    assert u'НЕ НА ДИСКЕ' in message.answers[0]
+
+
+async def test_статус_видит_день_из_переменной(monkeypatch):
+    monkeypatch.setattr(config, 'DAY_ENV', {1: '', 2: 'https://x/2', 3: '', 4: ''})
+    message = админ_сообщение(text='/status')
+    await admin.on_status(message)
+    assert u'День 2 — из переменной DAY2' in message.answers[0]
+
+
+async def test_загрузка_без_диска_подсказывает_file_id(monkeypatch):
+    monkeypatch.setattr(config, 'on_railway', lambda: True)
+    monkeypatch.setattr(config, 'db_persistent', lambda: False)
+    message = админ_сообщение(caption='day2', video=FakeVideo('VIDEO2'))
+    await admin.on_video(message)
+    assert 'DAY2' in message.replies[0] and 'VIDEO2' in message.replies[0]
+
+
 async def test_статус_не_отвечает_чужому():
     message = FakeMessage(text='/status', user=FakeUser(2, 'stranger', u'Прохожий'))
     await admin.on_status(message)
