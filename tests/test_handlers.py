@@ -255,6 +255,12 @@ async def test_статус_показывает_чего_не_хватает():
     assert u'ask_day3' in отчёт, u'про недостающий кружок надо предупреждать'
 
 
+async def test_загрузка_записи_дублируется_в_закреп_у_админа():
+    message = админ_сообщение(caption='day2', video=FakeVideo('VIDEO2'))
+    await admin.on_video(message)
+    assert 'day2 video VIDEO2' in message.bot.pinned[ADMIN].text
+
+
 async def test_статус_предупреждает_что_база_не_на_диске(monkeypatch):
     u"""На Railway без тома база пропадёт при деплое — /status обязан кричать."""
     monkeypatch.setattr(config, 'on_railway', lambda: True)

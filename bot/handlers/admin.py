@@ -14,7 +14,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from .. import config, db, funnel, scheduler, texts
+from .. import backup, config, db, funnel, scheduler, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -85,6 +85,7 @@ async def on_video(message: Message):
     db.put_content('await:%d' % message.from_user.id, 'await', '')
     media = message.video or message.document or message.video_note
     db.put_content('day%d' % day, 'video', media.file_id)
+    await backup.save(message.bot)
     note = u'Записал день %d ✅ Теперь он уходит людям.' % day
     if config.on_railway() and not config.db_persistent():
         note += (u'\n\nБаза не на диске — чтобы запись пережила деплой, добавьте '
@@ -105,6 +106,7 @@ async def on_photo(message: Message):
 
     index = int(tag.group(1))
     db.put_content('review%d' % index, 'photo', message.photo[-1].file_id)
+    await backup.save(message.bot)
     await message.reply(u'Отзыв %d будет уходить картинкой ✅' % index)
 
 
@@ -116,6 +118,7 @@ async def on_link(message: Message):
     day = int(DAY_TAG.match(message.text.strip()).group(1))
     url = LINK.search(message.text).group(0)
     db.put_content('day%d' % day, 'link', url)
+    await backup.save(message.bot)
     await message.reply(u'День %d будет уходить ссылкой ✅' % day)
 
 

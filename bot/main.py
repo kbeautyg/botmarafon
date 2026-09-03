@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import config, db, delivery, handlers, scheduler, texts
+from . import backup, config, db, delivery, handlers, scheduler, texts
 
 log = logging.getLogger('marathon')
 
@@ -38,6 +38,9 @@ async def run():
 
     me = await bot.get_me()
     log.info(u'бот @%s запущен, база %s', me.username, config.DB_PATH)
+    restored = await backup.restore(bot)
+    if restored:
+        log.info(u'из закрепа у админа восстановлено записей: %d', restored)
     if config.on_railway() and not config.db_persistent():
         # Молчать нельзя: узнаем о потере базы от заказчика, как 2 сентября.
         log.warning(u'база %s не на диске — пропадёт при деплое', config.DB_PATH)

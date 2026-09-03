@@ -6,6 +6,7 @@ u"""Подделки телеграма для тестов обработчик
 записывают вызовы, и проверять можно то, что человек реально получил.
 """
 import os
+from types import SimpleNamespace
 
 
 class FakeUser(object):
@@ -24,6 +25,8 @@ class FakeBot(object):
         self.fail_times = fail_times
         self.forbidden = forbidden
         self._next_id = 100
+        self.by_id = {}        # message_id -> FakeMessage, чтобы править и закреплять
+        self.pinned = {}       # chat_id -> закреплённое сообщение
 
     async def _record(self, kind, chat_id, payload=None):
         from bot import delivery
@@ -34,8 +37,10 @@ class FakeBot(object):
             raise RuntimeError(u'телеграм не в духе')
         self.sent.append((kind, chat_id, payload))
         self._next_id += 1
-        return FakeMessage(text=payload, message_id=self._next_id, bot=self,
-                           chat_id=chat_id)
+        message = FakeMessage(text=payload, message_id=self._next_id, bot=self,
+                              chat_id=chat_id)
+        self.by_id[self._next_id] = message
+        return message
 
     async def send_message(self, chat_id, text, **kw):
         return await self._record('text', chat_id, text)
@@ -55,6 +60,16 @@ class FakeBot(object):
 
     async def copy_message(self, chat_id, from_chat_id, message_id, **kw):
         return await self._record('copy', chat_id, (from_chat_id, message_id))
+
+    # Закреп у админа — хранилище записей дней (bot/backup.py).
+    async def get_chat(self, chat_id):
+        return SimpleNamespace(pinned_message=self.pinned.get(chat_id))
+
+    async def pin_chat_message(self, chat_id, message_id, **kw):
+        self.pinned[chat_id] = self.by_id[message_id]
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None, **kw):
+        self.by_id[message_id].text = text
 
 
 class FakeMessage(object):
