@@ -88,6 +88,8 @@ def db_persistent() -> bool:
             return True
         folder = os.path.dirname(folder)
     return False
+
+
 CIRCLES_DIR = os.path.join(ROOT, 'media', 'circles')
 
 # Если человек не ответил на опросник, воронка встанет навсегда: следующий
