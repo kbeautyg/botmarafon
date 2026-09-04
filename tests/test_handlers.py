@@ -306,3 +306,61 @@ async def test_тестовый_прогон_сжимает_паузы():
 
     assert db.get_speed(ADMIN) == admin.TEST_SPEED
     assert [j['chain'] for j in db.user_jobs(ADMIN)] == ['launch']
+
+
+# ------------------------------------------------------- дослать запись дня
+
+async def test_дослать_день_получают_те_кому_он_ушёл_без_записи():
+    from bot import delivery
+    bot = FakeBot()
+    for uid in (1, 2):
+        db.remember_user(uid, 'u%d' % uid, u'Человек')
+        db.mark_launched(uid)
+    # Первому день ушёл пустым — записи ещё не было. Второму — с записью.
+    await delivery.send_day(bot, 1, 1, admins_alert=False)
+    db.put_content('day1', 'link', 'https://example.com/day1')
+    await delivery.send_day(bot, 2, 1)
+    bot.sent.clear()
+
+    message = админ_сообщение(text='/resend 1', bot=bot)
+    await admin.on_resend(message)
+
+    получатели = [chat for kind, chat, _ in bot.sent if kind == 'text' and chat in (1, 2)]
+    assert получатели == [1]
+    assert 'https://example.com/day1' in [p for k, c, p in bot.sent if c == 1][0]
+    assert u'1 чел' in message.answers[-1]
+    # Пометка снята: повторный /resend никого не найдёт и не задвоит.
+    assert db.missed_users(1) == []
+
+
+async def test_дослать_всем_идёт_по_очереди_и_не_трогает_тех_кто_день_не_получил():
+    bot = FakeBot()
+    db.put_content('day1', 'link', 'https://example.com/day1')
+    for uid in (1, 2, 3):
+        db.remember_user(uid, 'u%d' % uid, u'Человек')
+        db.mark_launched(uid)
+    db.add_job(1, 'after_day1', 0, 0)      # первый день уже ушёл, ждёт опросник
+    db.add_job(2, 'launch', 5, 0)          # ещё на отзывах — первого дня не было
+    # у третьего очередь пуста — воронка пройдена
+
+    message = админ_сообщение(text=u'/resend 1 всем', bot=bot)
+    await admin.on_resend(message)
+
+    получатели = sorted(chat for kind, chat, _ in bot.sent if kind == 'text' and chat in (1, 2, 3))
+    assert получатели == [1, 3]
+
+
+async def test_дослать_без_записи_отказывает():
+    message = админ_сообщение(text='/resend 2')
+    await admin.on_resend(message)
+    assert u'не задана' in message.answers[-1]
+
+
+def test_доставка_дня_по_очереди():
+    from bot import funnel
+    assert funnel.day_delivered(set(), 1)
+    assert funnel.day_delivered({'after_day1'}, 1)
+    assert not funnel.day_delivered({'launch'}, 1)
+    assert not funnel.day_delivered({'day1_no'}, 2)        # ждёт добивание — второго дня не было
+    assert funnel.day_delivered({'after_day2'}, 2)
+    assert not funnel.day_delivered({'after_day2'}, 3)

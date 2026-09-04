@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS care_links (
   user_id    INTEGER NOT NULL,
   PRIMARY KEY (chat_id, message_id)
 );
+
+-- Кому день ушёл без записи (записи ещё не было). Отсюда /resend знает,
+-- кому дослать, и не шлёт запись второй раз тем, кто её получил.
+CREATE TABLE IF NOT EXISTS missed (
+  user_id INTEGER NOT NULL,
+  day     INTEGER NOT NULL,
+  at      REAL NOT NULL,
+  PRIMARY KEY (user_id, day)
+);
 '''
 
 _conn = None
@@ -188,6 +197,36 @@ def user_jobs(user_id: int) -> list[dict]:
     rows = _conn.execute('SELECT * FROM jobs WHERE user_id=? ORDER BY run_at',
                          (user_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def pending_chains(user_id: int) -> set[str]:
+    u"""Цепочки, в которых у человека ещё есть шаги в очереди."""
+    rows = _conn.execute('SELECT DISTINCT chain FROM jobs WHERE user_id=?',
+                         (user_id,)).fetchall()
+    return {r['chain'] for r in rows}
+
+
+def launched_users() -> list[int]:
+    rows = _conn.execute('SELECT user_id FROM users WHERE launched_at IS NOT NULL '
+                         'ORDER BY user_id').fetchall()
+    return [r['user_id'] for r in rows]
+
+
+# ------------------------------------------------- дни, ушедшие без записи
+
+def mark_missed(user_id: int, day: int) -> None:
+    _run('INSERT OR IGNORE INTO missed (user_id, day, at) VALUES (?, ?, ?)',
+         (user_id, day, time.time()))
+
+
+def clear_missed(user_id: int, day: int) -> None:
+    _run('DELETE FROM missed WHERE user_id=? AND day=?', (user_id, day))
+
+
+def missed_users(day: int) -> list[int]:
+    rows = _conn.execute('SELECT user_id FROM missed WHERE day=? ORDER BY at',
+                         (day,)).fetchall()
+    return [r['user_id'] for r in rows]
 
 
 # --------------------------------------------------------------- контент

@@ -86,6 +86,30 @@ POLL_BRANCHES = {
 }
 
 
+# Какая цепочка отдаёт запись дня. Второй и дальше дни уходят в ветке
+# ответа на опросник — «да» и «нет» для этого равноправны.
+DAY_CHAINS = {
+    1: ('launch',),
+    2: ('day1_yes', 'day1_no'),
+    3: ('day2_yes', 'day2_no'),
+    4: ('day3_yes', 'day3_no'),
+}
+
+# Цепочки в порядке воронки — чтобы сравнивать «раньше/позже».
+ORDER = tuple(CHAINS)
+
+
+def day_delivered(pending, day: int) -> bool:
+    u"""Ушла ли человеку запись дня, судя по его очереди.
+
+    Запись — последний шаг своей цепочки, поэтому любой ожидающий шаг в
+    ней или раньше по воронке значит «ещё нет». Пустая очередь — воронка
+    пройдена до конца, запись давно ушла.
+    """
+    last = max(ORDER.index(chain) for chain in DAY_CHAINS[day])
+    return all(ORDER.index(chain) > last for chain in pending if chain in CHAINS)
+
+
 def step_at(chain: str, pos: int) -> Step | None:
     u"""Шаг по номеру или None, если цепочка кончилась."""
     steps = CHAINS[chain].steps

@@ -6,6 +6,7 @@ u"""Админка: загрузка записей дней, проверка �
 самому боту из телеграма: он запоминает file_id и потом рассылает его
 мгновенно, без перезаливки и без ограничения по размеру.
 """
+import asyncio
 import logging
 import os
 import re
@@ -14,7 +15,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from .. import backup, config, db, funnel, scheduler, texts
+from .. import backup, config, db, delivery, funnel, scheduler, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -167,6 +168,61 @@ async def on_status(message: Message):
     lines.append(u'Шагов в очереди: %d · заявок на покупку: %d'
                  % (counters['jobs'], counters['purchases']))
     await message.answer(u'\n'.join(lines))
+
+
+@router.message(Command('resend'))
+async def on_resend(message: Message):
+    u"""Дослать запись дня тем, кому день ушёл без неё.
+
+    Тревога «человеку ушёл только текст» просила «повторить отправку», а
+    повторять было нечем: 2–3 сентября записи так и не дошли до людей.
+    Теперь бот помнит, кому день ушёл пустым (таблица missed), и по
+    /resend N шлёт им запись — только запись, текст дня они читали.
+
+    /resend N всем — запасной ход, когда пометок нет (база пересоздана):
+    запись уходит всем, кто этот день уже прошёл, судя по очереди.
+    """
+    if not _is_admin(message.from_user.id):
+        return
+    words = (message.text or '').split()
+    days = [int(w) for w in words[1:] if w in ('1', '2', '3', '4')]
+    if not days:
+        await message.answer(u'Какой день? Например: /resend 1')
+        return
+    day = days[0]
+    if not (db.get_content('day%d' % day) or config.DAY_ENV.get(day)):
+        await message.answer(u'Запись дня %d ещё не задана — сначала пришлите '
+                             u'видео или ссылку (day%d https://…).' % (day, day))
+        return
+
+    everyone = any(w.lower() in (u'всем', 'all') for w in words[1:])
+    if everyone:
+        targets = [uid for uid in db.launched_users()
+                   if funnel.day_delivered(db.pending_chains(uid), day)]
+    else:
+        targets = db.missed_users(day)
+    if not targets:
+        await message.answer(u'День %d досылать некому: пометок «ушёл без записи» '
+                             u'нет. Всем, кто день уже прошёл: /resend %d всем' % (day, day))
+        return
+
+    sent = gone = failed = 0
+    for uid in targets:
+        try:
+            if await delivery.resend_day(message.bot, uid, day):
+                sent += 1
+        except delivery.Gone:
+            gone += 1
+            db.clear_missed(uid, day)
+        except Exception as err:                       # одного не доставили — идём дальше
+            failed += 1
+            log.warning(u'не дослали день %d человеку %s: %s', day, uid, err)
+        await asyncio.sleep(0.05)                      # лимит телеграма ~30 сообщений/с
+    await message.answer(u'День %d дослал: %d чел.%s%s'
+                         % (day, sent,
+                            u', закрыли бота: %d' % gone if gone else u'',
+                            u', не доставлено: %d' % failed if failed else u''))
+    log.info(u'админ %s дослал день %d: %d/%d', message.from_user.id, day, sent, len(targets))
 
 
 @router.message(Command('test'))

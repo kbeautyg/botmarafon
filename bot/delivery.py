@@ -89,9 +89,28 @@ async def send_day(bot: Bot, user_id: int, day: int,
         return await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text)))
 
     await _guard(bot.send_message(user_id, u'%s\n\n%s' % (text, texts.DAY_MISSING_USER)))
+    db.mark_missed(user_id, day)
     if admins_alert:
         await alert_admins(bot, texts.DAY_MISSING_ADMIN.format(day=day))
     return None
+
+
+async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
+    u"""Дослать запись тому, кому день ушёл без неё (/resend).
+
+    Только запись с короткой подводкой: текст дня человек уже читал.
+    False — записи всё ещё нет, слать нечего.
+    """
+    stored = db.get_content('day%d' % day) or _day_from_env(day)
+    if not stored:
+        return False
+    lead = texts.DAY_RESEND.format(day=day)
+    if stored[0] == 'video':
+        await _guard(bot.send_video(user_id, stored[1], caption=lead))
+    else:
+        await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1])))
+    db.clear_missed(user_id, day)
+    return True
 
 
 async def send_poll(bot: Bot, user_id: int, name: str) -> Message | None:
