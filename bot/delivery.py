@@ -13,7 +13,7 @@ from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram import Bot
 from aiogram.types import FSInputFile, Message
 
-from . import config, db, keyboards, texts
+from . import config, db, funnel, keyboards, texts
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +56,61 @@ async def send_circle(bot: Bot, user_id: int, name: str) -> Message | None:
     return msg
 
 
-async def send_review(bot: Bot, user_id: int, index: int) -> Message | None:
-    u"""Отзыв: картинкой, если админ загрузил, иначе текстом."""
-    loaded = db.get_content('review%d' % index)
-    if loaded and loaded[0] == 'photo':
-        return await _guard(bot.send_photo(user_id, loaded[1]))
-    return await _guard(bot.send_message(user_id, texts.review_text(index)))
+REVIEW_EXTENSIONS = ('.jpg', '.png', '.mp4')
+
+
+def review_path(name: str) -> str | None:
+    u"""Файл отзыва в media/reviews или None, если его ещё нет."""
+    for ext in REVIEW_EXTENSIONS:
+        path = os.path.join(config.REVIEWS_DIR, name + ext)
+        if os.path.exists(path):
+            return path
+    return None
+
+
+async def _send_media(bot: Bot, user_id: int, kind: str, media) -> Message | None:
+    if kind == 'video':
+        return await _guard(bot.send_video(user_id, media))
+    return await _guard(bot.send_photo(user_id, media))
+
+
+async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
+    u"""Отзыв из ленты: картинка-сторис или видеоотзыв.
+
+    Заказчик 03.09.2026: «картинка, видеоотзыв, картинка, видеоотзыв…
+    четыре картинки и пять видеоотзывов, а не просто Евгения и текст».
+    Файлы лежат в media/reviews (img1-4, vid1-5); после первой отправки
+    file_id кэшируется, как у кружков. Админ может подменить любой шаг
+    фото или видео с подписью reviewN. Нет файла — шаг молча пропускается:
+    видеоотзывы заказчик присылает отдельно.
+    """
+    index = funnel.REVIEW_SEQUENCE.index(name) + 1
+    override = db.get_content('review%d' % index)
+    if override:
+        return await _send_media(bot, user_id, override[0], override[1])
+
+    cached = db.get_content('review:%s' % name)
+    if cached:
+        try:
+            return await _send_media(bot, user_id, cached[0], cached[1])
+        except TelegramBadRequest:
+            log.warning(u'file_id отзыва %s не принят, шлём файлом', name)
+
+    path = review_path(name)
+    if not path:
+        log.warning(u'нет отзыва %s — шаг пропущен', name)
+        return None
+    kind = 'video' if path.endswith('.mp4') else 'photo'
+    msg = await _send_media(bot, user_id, kind, FSInputFile(path))
+
+    file_id = None
+    if msg is not None and kind == 'video' and getattr(msg, 'video', None):
+        file_id = msg.video.file_id
+    elif msg is not None and kind == 'photo' and getattr(msg, 'photo', None):
+        file_id = msg.photo[-1].file_id
+    if file_id:
+        db.put_content('review:%s' % name, kind, file_id)
+    return msg
 
 
 def _day_from_env(day: int):

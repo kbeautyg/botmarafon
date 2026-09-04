@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 router = Router(name='admin')
 
 DAY_TAG = re.compile(r'^day([1-4])\b', re.I)
-REVIEW_TAG = re.compile(r'^review([1-8])\b', re.I)
+REVIEW_TAG = re.compile(r'^review([1-9])\b', re.I)
 LINK = re.compile(r'https?://\S+')
 
 # Во сколько раз ускорить паузы в тестовом прогоне: два с половиной часа
@@ -77,7 +77,17 @@ async def on_video(message: Message):
     if not _is_admin(message.from_user.id):
         return
 
-    tag = DAY_TAG.match((message.caption or '').strip())
+    caption = (message.caption or '').strip()
+    review = REVIEW_TAG.match(caption)
+    if review and (message.video or message.document):
+        # Видеоотзыв в ленту: подменяет шаг reviewN (см. funnel.REVIEW_SEQUENCE).
+        db.put_content('review%s' % review.group(1), 'video',
+                       (message.video or message.document).file_id)
+        await backup.save(message.bot)
+        await message.reply(u'Отзыв %s будет уходить этим видео ✅' % review.group(1))
+        return
+
+    tag = DAY_TAG.match(caption)
     waiting = db.get_content('await:%d' % message.from_user.id)
     if not tag and not (waiting and waiting[1]):
         return
@@ -137,8 +147,14 @@ def _content_report() -> list[str]:
         else:
             lines.append(u'• День %d — видео ✅' % day)
 
-    pictured = sum(1 for i in range(1, 9) if db.get_content('review%d' % i))
-    lines.append(u'• Отзывы: %d картинкой, остальные текстом' % pictured)
+    on_disk = [name for name in funnel.REVIEW_SEQUENCE if delivery.review_path(name)]
+    replaced = sum(1 for i in range(1, funnel.REVIEW_COUNT + 1)
+                   if db.get_content('review%d' % i))
+    missing = [name for name in funnel.REVIEW_SEQUENCE if name not in on_disk]
+    lines.append(u'• Отзывы на диске: %d из %d%s%s' % (
+        len(on_disk), funnel.REVIEW_COUNT,
+        u', нет: %s' % u', '.join(missing) if missing else u'',
+        u'; подменено загрузкой: %d' % replaced if replaced else u''))
 
     wanted = {step.ref for chain in funnel.CHAINS.values()
               for step in chain.steps if step.kind == 'circle'}

@@ -23,7 +23,11 @@ MINUTE = 60
 Step = namedtuple('Step', ('kind', 'delay', 'ref'))
 Chain = namedtuple('Chain', ('steps', 'next'))
 
-REVIEW_COUNT = 8
+# Лента отзывов после приветствия. Заказчик 03.09.2026: «картинка,
+# видеоотзыв, картинка, видеоотзыв… четыре картинки и пять видеоотзывов,
+# а не просто Евгения и текст». Имена — файлы в media/reviews.
+REVIEW_SEQUENCE = ('img1', 'vid1', 'img2', 'vid2', 'img3', 'vid3', 'img4', 'vid4', 'vid5')
+REVIEW_COUNT = len(REVIEW_SEQUENCE)
 
 
 def _launch() -> Chain:
@@ -35,8 +39,8 @@ def _launch() -> Chain:
     """
     steps = [Step('circle', 0, 'welcome_1'),
              Step('circle', 2, 'welcome_2')]
-    for i in range(1, REVIEW_COUNT + 1):
-        steps.append(Step('review', 60 if i == 1 else 2, i))
+    for i, name in enumerate(REVIEW_SEQUENCE):
+        steps.append(Step('review', 60 if i == 0 else 2, name))
     steps.append(Step('day', 2, 1))
     return Chain(tuple(steps), 'after_day1')
 

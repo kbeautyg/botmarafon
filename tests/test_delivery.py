@@ -63,14 +63,28 @@ async def test_запись_ссылкой_уходит_сообщением():
 
 
 @pytest.mark.asyncio
-async def test_отзыв_текстом_а_после_загрузки_картинкой():
+async def test_отзыв_уходит_файлом_а_без_файла_шаг_пропускается(tmp_path, monkeypatch):
+    u"""Видеоотзывы заказчик присылает позже картинок — лента не должна ломаться."""
+    monkeypatch.setattr(config, 'REVIEWS_DIR', str(tmp_path))
     bot = FakeBot()
-    await delivery.send_review(bot, 1, 1)
-    assert bot.sent[0][0] == 'text' and u'Ольга' in bot.sent[0][2]
+    assert await delivery.send_review(bot, 1, 'vid5') is None
+    assert bot.sent == []
 
+    (tmp_path / 'img1.jpg').write_bytes(b'jpg')
+    (tmp_path / 'vid1.mp4').write_bytes(b'mp4')
+    await delivery.send_review(bot, 1, 'img1')
+    await delivery.send_review(bot, 1, 'vid1')
+    assert [kind for kind, _, _ in bot.sent] == ['photo', 'video']
+
+
+@pytest.mark.asyncio
+async def test_загруженный_админом_отзыв_важнее_файла(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, 'REVIEWS_DIR', str(tmp_path))
+    (tmp_path / 'img1.jpg').write_bytes(b'jpg')
     db.put_content('review1', 'photo', 'PHOTOID')
-    await delivery.send_review(bot, 1, 1)
-    assert bot.sent[1] == ('photo', 1, 'PHOTOID')
+    bot = FakeBot()
+    await delivery.send_review(bot, 1, 'img1')
+    assert bot.sent == [('photo', 1, 'PHOTOID')]
 
 
 def test_все_кружки_сценария_лежат_на_диске():
@@ -88,8 +102,18 @@ def test_у_каждого_дня_есть_текст():
     assert дни == set(texts.DAY_TEXTS)
 
 
-def test_отзывов_ровно_столько_сколько_шлём():
-    assert len(texts.REVIEWS) == funnel.REVIEW_COUNT
+def test_лента_отзывов_четыре_картинки_и_пять_видео():
+    u"""Заказчик: картинка, видеоотзыв, картинка, видеоотзыв… 4 картинки, 5 видео."""
+    seq = funnel.REVIEW_SEQUENCE
+    assert seq[:8] == ('img1', 'vid1', 'img2', 'vid2', 'img3', 'vid3', 'img4', 'vid4')
+    assert seq[8] == 'vid5' and funnel.REVIEW_COUNT == 9
+
+
+def test_картинки_отзывов_лежат_на_диске():
+    u"""Видеоотзывы заказчик ещё не прислал — их отсутствие допустимо, картинок нет."""
+    нет = [name for name in funnel.REVIEW_SEQUENCE
+           if name.startswith('img') and not delivery.review_path(name)]
+    assert нет == []
 
 
 @pytest.mark.asyncio

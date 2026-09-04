@@ -20,7 +20,7 @@ from . import config, db
 log = logging.getLogger(__name__)
 
 TAG = u'#хранилище'
-KEYS = tuple('day%d' % n for n in (1, 2, 3, 4)) + tuple('review%d' % n for n in range(1, 9))
+KEYS = tuple('day%d' % n for n in (1, 2, 3, 4)) + tuple('review%d' % n for n in range(1, 10))
 KINDS = ('video', 'link', 'photo')
 
 

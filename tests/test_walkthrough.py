@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bot import config, db, funnel, scheduler, texts                   # noqa: E402
+from bot import config, db, delivery, funnel, scheduler, texts         # noqa: E402
 from tests.fakes import FakeBot                                        # noqa: E402
 
 ME = 1
@@ -56,11 +56,15 @@ async def test_полный_путь_отвечающего_да():
 
     виды = [kind for kind, _, _ in bot.sent]
     кружки = [body for kind, _, body in bot.sent if kind == 'circle']
-    видео = [body for kind, _, body in bot.sent if kind == 'video']
+    # Записи дней уходят по file_id (строкой); видеоотзывы — файлом.
+    видео = [body for kind, _, body in bot.sent if kind == 'video' and isinstance(body, str)]
 
-    # Приветствие обеими половинами, потом восемь отзывов, потом первый день.
+    # Приветствие обеими половинами, потом лента отзывов — те её шаги, чьи
+    # файлы лежат на диске (видеоотзывы приезжают позже), — потом первый день.
+    отзывы = ['video' if delivery.review_path(name).endswith('.mp4') else 'photo'
+              for name in funnel.REVIEW_SEQUENCE if delivery.review_path(name)]
     assert виды[:2] == ['circle', 'circle']
-    assert виды[2:10] == ['text'] * 8
+    assert отзывы and виды[2:2 + len(отзывы)] == отзывы
     assert видео == ['DAY1', 'DAY2', 'DAY3', 'DAY4']
 
     # Приветствие, кружки веток «да» и ни одного из веток «нет».

@@ -16,28 +16,12 @@ def care() -> ReplyKeyboardMarkup:
     return _keys([texts.CARE_BUTTON])
 
 
-def start_menu() -> ReplyKeyboardMarkup:
-    u"""Приветственная клавиатура: запуск и забота.
-
-    Обе кнопки в одном ряду и в одном сообщении с приветствием. Раньше
-    «Запустить» было inline-кнопкой, а inline и обычную клавиатуру в одном
-    сообщении телеграм не отдаёт — приходилось слать вдогонку пустое «👇».
-    Человек видел два сообщения подряд, второе без смысла.
-    """
-    return _keys([texts.LAUNCH_BUTTON, texts.CARE_BUTTON])
-
-
 def _keys(titles) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=title) for title in titles]],
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder=u'Напишите нам, если что-то нужно')
-
-
-def launch() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=texts.LAUNCH_BUTTON, callback_data='launch')]])
 
 
 def poll(name: str) -> InlineKeyboardMarkup:

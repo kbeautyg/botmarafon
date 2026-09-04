@@ -61,10 +61,10 @@ def test_у_каждого_опросника_есть_обе_ветки():
             assert target in CHAINS
 
 
-def test_запуск_отдаёт_восемь_отзывов_и_первый_день():
+def test_запуск_отдаёт_ленту_отзывов_и_первый_день():
     steps = CHAINS['launch'].steps
     reviews = [s for s in steps if s.kind == 'review']
-    assert [s.ref for s in reviews] == list(range(1, 9))
+    assert [s.ref for s in reviews] == list(funnel.REVIEW_SEQUENCE)
 
     # ТЗ: отзывы через 60 секунд после кружка, дальше каждые две секунды.
     assert reviews[0].delay == 60

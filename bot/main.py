@@ -38,6 +38,13 @@ async def run():
 
     me = await bot.get_me()
     log.info(u'бот @%s запущен, база %s', me.username, config.DB_PATH)
+    # Приветствие заказчика — на пустом экране до кнопки «Старт», а не
+    # сообщением после неё (03.09.2026). Не вышло — не беда, бот работает.
+    try:
+        await bot.set_my_description(description=texts.WELCOME)
+        await bot.set_my_short_description(short_description=texts.SHORT_DESCRIPTION)
+    except Exception as err:
+        log.warning(u'описание бота не обновили: %s', err)
     restored = await backup.restore(bot)
     if restored:
         log.info(u'из закрепа у админа восстановлено записей: %d', restored)

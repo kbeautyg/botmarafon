@@ -29,60 +29,26 @@ def база(tmp_path, monkeypatch):
 
 # ------------------------------------------------------------------ старт
 
-async def test_старт_даёт_кнопку_заботы_сразу():
-    u"""ТЗ: служба заботы должна быть на виду с самого начала."""
+async def test_старт_сразу_запускает_воронку_и_даёт_кнопку_заботы():
+    u"""Заказчик 03.09.2026: «старт нажал — и пошло-поехало», без «Запустить».
+    Служба заботы — под полем ввода с первого же сообщения."""
     message = FakeMessage(text='/start')
     await start.on_start(message)
-
-    assert db.get_user(1) is not None
-    assert texts.WELCOME in message.answers
-
-
-async def test_приветствие_одним_сообщением_с_двумя_кнопками():
-    u"""Раньше следом летело пустое «👇» — inline и клавиатуру вместе не шлют."""
-    message = FakeMessage(text='/start')
-    await start.on_start(message)
-
-    assert len(message.answers) == 1, u'приветствие должно быть одним сообщением'
-    кнопки = [b.text for row in message.markups[0].keyboard for b in row]
-    assert кнопки == [texts.LAUNCH_BUTTON, texts.CARE_BUTTON]
-
-
-async def test_кнопка_запустить_текстом_заводит_воронку():
-    await start.on_start(FakeMessage(text='/start'))
-    нажатие = FakeMessage(text=texts.LAUNCH_BUTTON)
-    await start.on_launch_button(нажатие)
-
-    assert [j['chain'] for j in db.user_jobs(1)] == ['launch']
-    # После запуска остаётся только забота: запускать второй раз нечего.
-    кнопки = [b.text for row in нажатие.markups[0].keyboard for b in row]
-    assert кнопки == [texts.CARE_BUTTON]
-
-
-async def test_повторное_нажатие_запустить_не_удваивает_воронку():
-    await start.on_start(FakeMessage(text='/start'))
-    await start.on_launch_button(FakeMessage(text=texts.LAUNCH_BUTTON))
-    await start.on_launch_button(FakeMessage(text=texts.LAUNCH_BUTTON))
-    assert len(db.user_jobs(1)) == 1
-
-
-async def test_запуск_ставит_первый_шаг():
-    await start.on_start(FakeMessage(text='/start'))
-    call = FakeCall('launch')
-    await start.on_launch(call)
 
     assert db.get_user(1)['launched_at'] is not None
     assert [j['chain'] for j in db.user_jobs(1)] == ['launch']
-    assert call.markup_cleared, u'кнопку запуска надо убрать, чтобы не жали снова'
+    assert message.answers == [texts.START_TEXT]
+    кнопки = [b.text for row in message.markups[0].keyboard for b in row]
+    assert кнопки == [texts.CARE_BUTTON]
 
 
-async def test_повторный_запуск_не_удваивает_воронку():
+async def test_повторный_старт_не_удваивает_воронку():
     await start.on_start(FakeMessage(text='/start'))
-    call = FakeCall('launch')
-    await start.on_launch(call)
-    await start.on_launch(FakeCall('launch'))
+    второй = FakeMessage(text='/start')
+    await start.on_start(второй)
 
     assert len(db.user_jobs(1)) == 1
+    assert второй.answers == [texts.ALREADY_RUNNING]
 
 
 # --------------------------------------------------------------- опросник
