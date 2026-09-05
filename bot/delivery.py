@@ -111,22 +111,26 @@ async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
     if override:
         return await _send_media(bot, user_id, override[0], override[1])
 
-    cached = db.get_content('review:%s' % name)
+    found = review_file(name)
+    if not found:
+        log.warning(u'нет отзыва %s — шаг пропущен', name)
+        return None
+    kind, path = found
+
+    # Кэш file_id привязан к размеру файла: подменили картинку в репозитории —
+    # ключ сменился, и людям уходит новая, а не запомненный старый file_id.
+    cache_key = 'review:%s:%d' % (name, os.path.getsize(path))
+    cached = db.get_content(cache_key)
     if cached:
         try:
             return await _send_media(bot, user_id, cached[0], cached[1])
         except TelegramBadRequest:
             log.warning(u'file_id отзыва %s не принят, шлём файлом', name)
 
-    found = review_file(name)
-    if not found:
-        log.warning(u'нет отзыва %s — шаг пропущен', name)
-        return None
-    kind, path = found
     msg = await _send_media(bot, user_id, kind, FSInputFile(path))
     file_id = _file_id(msg, kind)
     if file_id:
-        db.put_content('review:%s' % name, kind, file_id)
+        db.put_content(cache_key, kind, file_id)
     return msg
 
 

@@ -151,3 +151,18 @@ def test_база_в_папке_проекта_не_считается_диск�
     u"""Папка контейнера — не примонтированный том: бот должен это замечать."""
     monkeypatch.setattr(config, 'DB_PATH', str(tmp_path / 'marathon.db'))
     assert config.db_persistent() is False
+
+
+@pytest.mark.asyncio
+async def test_подменённая_картинка_отзыва_уходит_новой_а_не_из_кэша(tmp_path, monkeypatch):
+    u"""file_id запоминается вместе с размером файла: заменили файл — кэш мимо."""
+    monkeypatch.setattr(config, 'REVIEWS_DIR', str(tmp_path))
+    (tmp_path / 'img1.jpg').write_bytes(b'old')
+    db.put_content('review:img1:3', 'photo', 'OLD_ID')
+    bot = FakeBot()
+    await delivery.send_review(bot, 1, 'img1')
+    assert bot.sent[0][2] == 'OLD_ID'
+
+    (tmp_path / 'img1.jpg').write_bytes(b'new-image')
+    await delivery.send_review(bot, 1, 'img1')
+    assert bot.sent[1][2] != 'OLD_ID'
