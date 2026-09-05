@@ -85,7 +85,7 @@ async def test_полный_путь_отвечающего_нет():
     scheduler.start_chain(ME, 'launch')
     await прогнать(bot, ('no', 'no', 'no'))
 
-    видео = [body for kind, _, body in bot.sent if kind == 'video']
+    видео = [body for kind, _, body in bot.sent if kind == 'video' and isinstance(body, str)]
     кружки = [body for kind, _, body in bot.sent if kind == 'circle']
     assert видео == ['DAY1', 'DAY2', 'DAY3', 'DAY4']
     assert 'day2_no' in кружки and 'day3_no' in кружки and 'day4_no' in кружки
@@ -99,7 +99,7 @@ async def test_молчун_доезжает_до_конца_по_ветке_н�
     scheduler.start_chain(ME, 'launch')
     await прогнать(bot, ())
 
-    видео = [body for kind, _, body in bot.sent if kind == 'video']
+    видео = [body for kind, _, body in bot.sent if kind == 'video' and isinstance(body, str)]
     assert видео == ['DAY1', 'DAY2', 'DAY3', 'DAY4'], (
         u'без добивания воронка встала бы на первом опроснике')
 
