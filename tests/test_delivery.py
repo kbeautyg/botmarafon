@@ -72,9 +72,11 @@ async def test_отзыв_уходит_файлом_а_без_файла_шаг_
 
     (tmp_path / 'img1.jpg').write_bytes(b'jpg')
     (tmp_path / 'vid1.mp4').write_bytes(b'mp4')
+    (tmp_path / 'vid2.note.mp4').write_bytes(b'mp4')      # кружок заказчика
     await delivery.send_review(bot, 1, 'img1')
     await delivery.send_review(bot, 1, 'vid1')
-    assert [kind for kind, _, _ in bot.sent] == ['photo', 'video']
+    await delivery.send_review(bot, 1, 'vid2')
+    assert [kind for kind, _, _ in bot.sent] == ['photo', 'video', 'circle']
 
 
 @pytest.mark.asyncio

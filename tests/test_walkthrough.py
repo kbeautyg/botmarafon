@@ -61,8 +61,8 @@ async def test_полный_путь_отвечающего_да():
 
     # Приветствие обеими половинами, потом лента отзывов — те её шаги, чьи
     # файлы лежат на диске (видеоотзывы приезжают позже), — потом первый день.
-    отзывы = ['video' if delivery.review_path(name).endswith('.mp4') else 'photo'
-              for name in funnel.REVIEW_SEQUENCE if delivery.review_path(name)]
+    отзывы = [delivery.review_file(name)[0]
+              for name in funnel.REVIEW_SEQUENCE if delivery.review_file(name)]
     assert виды[:2] == ['circle', 'circle']
     assert отзывы and виды[2:2 + len(отзывы)] == отзывы
     assert видео == ['DAY1', 'DAY2', 'DAY3', 'DAY4']

@@ -56,22 +56,44 @@ async def send_circle(bot: Bot, user_id: int, name: str) -> Message | None:
     return msg
 
 
-REVIEW_EXTENSIONS = ('.jpg', '.png', '.mp4')
+# Файл отзыва → как его слать. Часть видеоотзывов заказчика — кружки,
+# экспорт видеосообщений из Telegram (круг в кадре 9:16); они лежат как
+# vidN.note.mp4, вырезанные в квадрат, и уходят обратно видеосообщением.
+REVIEW_KINDS = (('.note.mp4', 'circle'), ('.mp4', 'video'), ('.jpg', 'photo'), ('.png', 'photo'))
 
 
-def review_path(name: str) -> str | None:
-    u"""Файл отзыва в media/reviews или None, если его ещё нет."""
-    for ext in REVIEW_EXTENSIONS:
+def review_file(name: str) -> tuple[str, str] | None:
+    u"""(вид, путь) файла отзыва в media/reviews или None, если его ещё нет."""
+    for ext, kind in REVIEW_KINDS:
         path = os.path.join(config.REVIEWS_DIR, name + ext)
         if os.path.exists(path):
-            return path
+            return kind, path
     return None
 
 
+def review_path(name: str) -> str | None:
+    found = review_file(name)
+    return found[1] if found else None
+
+
 async def _send_media(bot: Bot, user_id: int, kind: str, media) -> Message | None:
+    if kind == 'circle':
+        return await _guard(bot.send_video_note(user_id, media))
     if kind == 'video':
         return await _guard(bot.send_video(user_id, media))
     return await _guard(bot.send_photo(user_id, media))
+
+
+def _file_id(msg: Message | None, kind: str) -> str | None:
+    if msg is None:
+        return None
+    if kind == 'circle' and getattr(msg, 'video_note', None):
+        return msg.video_note.file_id
+    if kind == 'video' and getattr(msg, 'video', None):
+        return msg.video.file_id
+    if kind == 'photo' and getattr(msg, 'photo', None):
+        return msg.photo[-1].file_id
+    return None
 
 
 async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
@@ -96,18 +118,13 @@ async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
         except TelegramBadRequest:
             log.warning(u'file_id отзыва %s не принят, шлём файлом', name)
 
-    path = review_path(name)
-    if not path:
+    found = review_file(name)
+    if not found:
         log.warning(u'нет отзыва %s — шаг пропущен', name)
         return None
-    kind = 'video' if path.endswith('.mp4') else 'photo'
+    kind, path = found
     msg = await _send_media(bot, user_id, kind, FSInputFile(path))
-
-    file_id = None
-    if msg is not None and kind == 'video' and getattr(msg, 'video', None):
-        file_id = msg.video.file_id
-    elif msg is not None and kind == 'photo' and getattr(msg, 'photo', None):
-        file_id = msg.photo[-1].file_id
+    file_id = _file_id(msg, kind)
     if file_id:
         db.put_content('review:%s' % name, kind, file_id)
     return msg
