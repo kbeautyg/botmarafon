@@ -29,6 +29,12 @@ Finish» — это и есть тот «чёрный экран». Заглуш
 чёткими. Всё кодируется заново одним проходом ffmpeg: заставка → запись
 со схемой, звук единой дорожкой.
 
+Что класть на сессию — SESSION ниже. Два мнения с разницей в день: Павел
+05.09 просил превью дня, Sharp тем же вечером прислал новую схему
+тонкого плана (светлый фон, чёрные точки — правки AleX) и попросил на
+сессии её. Собрано по последней просьбе; переключить — одно слово, оба
+варианта записей лежат в «Марафон записи».
+
 Запуск:  python tools/days.py [1 2 3 4]
 """
 from __future__ import print_function
@@ -42,6 +48,11 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA = os.path.join(ROOT, 'media', 'intro')
+SCHEMA = os.path.join(MEDIA, 'schema.png')
+
+# Картинка на сессии с выключенной камерой: 'schema' — схема тонкого плана,
+# 'preview' — превью дня (последний кадр заставки, он же обложка в боте).
+SESSION = 'schema'
 
 SOURCE_DIR = u'C:/Users/Sharp/Downloads/Telegram Desktop'
 OUT_DIR = u'C:/Users/Sharp/Desktop/Марафон записи'
@@ -178,7 +189,8 @@ def build(day, source, segments, stage, dst):
         '-i', intro,
         '-loop', '1', '-framerate', str(FPS), '-i', 'bg.png',
         '-i', source,
-        '-loop', '1', '-framerate', str(FPS), '-i', 'cover.png',
+        '-loop', '1', '-framerate', str(FPS),
+        '-i', SCHEMA if SESSION == 'schema' else 'cover.png',
         '-filter_complex', graph, '-map', '[v]', '-map', '[a]',
         '-c:v', 'libx264', '-preset', 'medium', '-crf', '26',
         '-profile:v', 'high', '-pix_fmt', 'yuv420p',
