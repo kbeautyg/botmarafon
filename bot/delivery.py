@@ -6,6 +6,7 @@ u"""Отправка шагов воронки.
 отправки возвращает file_id, дальше файл уходит по нему мгновенно, и
 хранить этот id надо в базе, иначе он теряется на перезапуске.
 """
+import json
 import logging
 import os
 
@@ -76,11 +77,31 @@ def review_path(name: str) -> str | None:
     return found[1] if found else None
 
 
-async def _send_media(bot: Bot, user_id: int, kind: str, media) -> Message | None:
+def review_meta(path: str) -> dict:
+    u"""Размеры и длительность ролика из media/reviews/meta.json.
+
+    Без width/height/duration Bot API показывает видео квадратной заглушкой
+    до первого нажатия — заказчик 05.09.2026: «отзыв какой-то кривой».
+    Снимает их tools/reviews_meta.py при сборке; на сервере ffprobe нет.
+    """
+    listing = os.path.join(os.path.dirname(path), 'meta.json')
+    try:
+        with open(listing, encoding='utf-8') as handle:
+            return json.load(handle).get(os.path.basename(path), {})
+    except (OSError, ValueError):
+        return {}
+
+
+async def _send_media(bot: Bot, user_id: int, kind: str, media,
+                      meta: dict | None = None) -> Message | None:
+    meta = meta or {}
     if kind == 'circle':
-        return await _guard(bot.send_video_note(user_id, media))
+        return await _guard(bot.send_video_note(
+            user_id, media, duration=meta.get('duration'), length=meta.get('width')))
     if kind == 'video':
-        return await _guard(bot.send_video(user_id, media))
+        return await _guard(bot.send_video(
+            user_id, media, duration=meta.get('duration'), width=meta.get('width'),
+            height=meta.get('height'), supports_streaming=True))
     return await _guard(bot.send_photo(user_id, media))
 
 
@@ -127,11 +148,22 @@ async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
         except TelegramBadRequest:
             log.warning(u'file_id отзыва %s не принят, шлём файлом', name)
 
-    msg = await _send_media(bot, user_id, kind, FSInputFile(path))
+    msg = await _send_media(bot, user_id, kind, FSInputFile(path), review_meta(path))
     file_id = _file_id(msg, kind)
     if file_id:
         db.put_content(cache_key, kind, file_id)
     return msg
+
+
+def day_cover(day: int) -> FSInputFile | None:
+    u"""Обложка записи дня — превью с энергией в сферу дня.
+
+    Заказчик 05.09.2026: «первый день должен появляться с превью, где
+    энергия идёт в предназначение». Видео уходит по file_id, а обложка —
+    файлом рядом (Bot API 9: cover можно приложить к готовому видео).
+    """
+    path = os.path.join(config.COVERS_DIR, 'cover%d.jpg' % day)
+    return FSInputFile(path) if os.path.exists(path) else None
 
 
 def _day_from_env(day: int):
@@ -154,7 +186,8 @@ async def send_day(bot: Bot, user_id: int, day: int,
     stored = db.get_content('day%d' % day) or _day_from_env(day)
 
     if stored and stored[0] == 'video':
-        return await _guard(bot.send_video(user_id, stored[1], caption=text))
+        return await _guard(bot.send_video(user_id, stored[1], caption=text,
+                                           cover=day_cover(day)))
     if stored and stored[0] == 'link':
         return await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text)))
 
@@ -176,7 +209,7 @@ async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
         return False
     lead = texts.DAY_RESEND.format(day=day)
     if stored[0] == 'video':
-        await _guard(bot.send_video(user_id, stored[1], caption=lead))
+        await _guard(bot.send_video(user_id, stored[1], caption=lead, cover=day_cover(day)))
     else:
         await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1])))
     db.clear_missed(user_id, day)

@@ -93,6 +93,9 @@ def db_persistent() -> bool:
 CIRCLES_DIR = os.path.join(ROOT, 'media', 'circles')
 # Лента отзывов: img1-4 — сторис с отзывами, vid1-5 — видеоотзывы заказчика.
 REVIEWS_DIR = os.path.join(ROOT, 'media', 'reviews')
+# Обложки записей дней — превью дня с энергией в сферу (tools/days.py).
+# Без своей обложки Telegram берёт первый кадр, а он у заставки тёмный.
+COVERS_DIR = os.path.join(ROOT, 'media', 'intro')
 
 # Если человек не ответил на опросник, воронка встанет навсегда: следующий
 # день привязан к его ответу. Через столько часов ведём по ветке «нет» —

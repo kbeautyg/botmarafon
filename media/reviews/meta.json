@@ -1,0 +1,27 @@
+{
+  "vid1.mp4": {
+    "width": 720,
+    "height": 1280,
+    "duration": 32
+  },
+  "vid2.mp4": {
+    "width": 720,
+    "height": 1280,
+    "duration": 28
+  },
+  "vid3.mp4": {
+    "width": 720,
+    "height": 1280,
+    "duration": 93
+  },
+  "vid4.note.mp4": {
+    "width": 640,
+    "height": 640,
+    "duration": 34
+  },
+  "vid5.mp4": {
+    "width": 640,
+    "height": 640,
+    "duration": 261
+  }
+}

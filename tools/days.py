@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
-u"""Сборка записей дней марафона: заставка дня + схема тонкого плана.
+u"""Сборка записей дней марафона: заставка дня + превью дня на сессии.
 
 Заказчик (30.08 и 03.09.2026): в начале каждой записи — баннер дня со
 звуком, а «когда Павел закрывает глаза и уходит в энергию» — вместо
-пустого экрана схема тонкого плана и энергий.
+пустого экрана картинка. Сначала это была схема тонкого плана, но Павел
+05.09.2026, посмотрев первый день: «когда я делаю сессию и молчу, когда
+меня не видно и выключена камера, надо чтобы была видна эта превьюшка,
+которую вы делали с Лёхой» — то есть афиша дня с энергией, идущей в
+сферу дня. Это последний кадр заставки; он же становится обложкой
+видео в боте (media/intro/coverN.jpg): «первый день должен появляться
+с превью, где энергия идёт в предназначение».
 
 Что на самом деле в записях. Перед сессией Павел выключает камеру в
 зуме, и вместо него на 20–25 минут остаётся серая заглушка «Метод
@@ -36,7 +42,6 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA = os.path.join(ROOT, 'media', 'intro')
-SCHEMA = os.path.join(MEDIA, 'schema.png')
 
 SOURCE_DIR = u'C:/Users/Sharp/Downloads/Telegram Desktop'
 OUT_DIR = u'C:/Users/Sharp/Desktop/Марафон записи'
@@ -122,6 +127,21 @@ def build(day, source, segments, stage, dst):
     subprocess.check_call([
         'ffmpeg', '-v', 'error', '-ss', '0.2', '-i', intro, '-frames:v', '1',
         os.path.join(stage, 'bg.png'), '-y'])
+    # Превью дня — последний кадр заставки (сфера дня подсвечена) в том же
+    # кадре 16:9 с размытыми боками. Идёт на сессию и обложкой в бота.
+    subprocess.check_call([
+        'ffmpeg', '-v', 'error', '-sseof', '-0.15', '-i', intro, '-frames:v', '1',
+        '-update', '1', os.path.join(stage, 'last.png'), '-y'])
+    subprocess.check_call([
+        'ffmpeg', '-v', 'error', '-loop', '1', '-i', 'bg.png', '-i', 'last.png',
+        '-filter_complex',
+        '[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,'
+        'boxblur=16:2,eq=saturation=1.15[bg];[1:v]scale=-2:%d[fg];'
+        '[bg][fg]overlay=(W-w)/2:0:shortest=1' % (W, H, W, H, H),
+        '-frames:v', '1', '-update', '1', 'cover.png', '-y'], cwd=stage)
+    subprocess.check_call([
+        'ffmpeg', '-v', 'error', '-i', os.path.join(stage, 'cover.png'), '-q:v', '3',
+        os.path.join(MEDIA, 'cover%d.jpg' % day), '-y'])
 
     enable = '+'.join('between(t,%.2f,%.2f)' % (a, b - 1.0 / FPS)
                       for a, b in segments)
@@ -158,7 +178,7 @@ def build(day, source, segments, stage, dst):
         '-i', intro,
         '-loop', '1', '-framerate', str(FPS), '-i', 'bg.png',
         '-i', source,
-        '-loop', '1', '-framerate', str(FPS), '-i', SCHEMA,
+        '-loop', '1', '-framerate', str(FPS), '-i', 'cover.png',
         '-filter_complex', graph, '-map', '[v]', '-map', '[a]',
         '-c:v', 'libx264', '-preset', 'medium', '-crf', '26',
         '-profile:v', 'high', '-pix_fmt', 'yuv420p',

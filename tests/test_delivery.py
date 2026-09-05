@@ -166,3 +166,20 @@ async def test_подменённая_картинка_отзыва_уходит
     (tmp_path / 'img1.jpg').write_bytes(b'new-image')
     await delivery.send_review(bot, 1, 'img1')
     assert bot.sent[1][2] != 'OLD_ID'
+
+
+def test_размеры_видеоотзыва_берутся_из_meta_json(tmp_path):
+    u"""Без width/height Bot API показывает видео квадратной заглушкой."""
+    (tmp_path / 'meta.json').write_text(
+        '{"vid1.mp4": {"width": 720, "height": 1280, "duration": 32}}', encoding='utf-8')
+    assert delivery.review_meta(str(tmp_path / 'vid1.mp4')) == {'width': 720, 'height': 1280, 'duration': 32}
+    assert delivery.review_meta(str(tmp_path / 'vid9.mp4')) == {}
+    assert delivery.review_meta(str(tmp_path / 'nowhere' / 'vid1.mp4')) == {}
+
+
+def test_у_каждого_видеоотзыва_на_диске_есть_размеры():
+    u"""meta.json собирает tools/reviews_meta.py — после замены роликов не забыть."""
+    for name in funnel.REVIEW_SEQUENCE:
+        found = delivery.review_file(name)
+        if found and found[0] in ('video', 'circle'):
+            assert delivery.review_meta(found[1]).get('width'), name
