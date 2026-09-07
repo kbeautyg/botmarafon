@@ -15,7 +15,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from .. import backup, config, db, delivery, funnel, scheduler, texts
+from .. import backup, config, db, delivery, funnel, scheduler, stats, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -184,6 +184,14 @@ async def on_status(message: Message):
     lines.append(u'Шагов в очереди: %d · заявок на покупку: %d'
                  % (counters['jobs'], counters['purchases']))
     await message.answer(u'\n'.join(lines))
+
+
+@router.message(Command('stats'))
+async def on_stats(message: Message):
+    u"""Откуда приходят люди: сегодня, за неделю, за всё время."""
+    if not _is_admin(message.from_user.id):
+        return
+    await message.answer(stats.report())
 
 
 @router.message(Command('resend'))

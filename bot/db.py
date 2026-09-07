@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
   first_name  TEXT,
   started_at  REAL NOT NULL,
   launched_at REAL,
+  source      TEXT,          -- откуда пришёл: хвост ссылки t.me/бот?start=…
   poll        TEXT,          -- какой опросник сейчас ждёт ответа
   care_open   INTEGER DEFAULT 0,
   -- Множитель пауз. Единица — боевые сроки заказчика. /test ставит
@@ -97,6 +98,10 @@ def connect(path: str) -> sqlite3.Connection:
     # база остаётся целой — бот стоит на сервере без ИБП.
     _conn.execute('PRAGMA journal_mode=WAL')
     _conn.executescript(SCHEMA)
+    # База, созданная до 07.09.2026, колонки source не знает — добавляем.
+    columns = [row[1] for row in _conn.execute('PRAGMA table_info(users)')]
+    if 'source' not in columns:
+        _conn.execute('ALTER TABLE users ADD COLUMN source TEXT')
     _conn.commit()
     return _conn
 
@@ -109,11 +114,31 @@ def _run(sql: str, args: tuple = ()) -> sqlite3.Cursor:
 
 # ------------------------------------------------------------------ люди
 
-def remember_user(user_id: int, username: str | None, first_name: str | None) -> None:
-    _run('INSERT INTO users (user_id, username, first_name, started_at) '
-         'VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET '
-         'username=excluded.username, first_name=excluded.first_name',
-         (user_id, username, first_name, time.time()))
+def remember_user(user_id: int, username: str | None, first_name: str | None,
+                  source: str = '') -> None:
+    u"""Запомнить человека. Источник — первый непустой: откуда пришёл в
+    первый раз, оттуда и пришёл; повторный /start по другой ссылке его
+    не переписывает."""
+    _run('INSERT INTO users (user_id, username, first_name, started_at, source) '
+         'VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET '
+         'username=excluded.username, first_name=excluded.first_name, '
+         "source=COALESCE(NULLIF(users.source, ''), excluded.source)",
+         (user_id, username, first_name, time.time(), source or ''))
+
+
+# ------------------------------------------------------------ источники
+
+def new_users(since: float) -> list[tuple[str, int]]:
+    u"""Сколько пришло с момента since, по источникам, больше — выше."""
+    rows = _conn.execute(
+        "SELECT COALESCE(source, '') AS src, COUNT(*) AS n FROM users "
+        'WHERE started_at >= ? GROUP BY src ORDER BY n DESC, src', (since,)).fetchall()
+    return [(r['src'], r['n']) for r in rows]
+
+
+def launched_since(since: float) -> int:
+    return _conn.execute('SELECT COUNT(*) FROM users WHERE launched_at >= ?',
+                         (since,)).fetchone()[0]
 
 
 def get_user(user_id: int) -> dict | None:

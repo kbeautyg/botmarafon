@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import backup, config, db, delivery, handlers, scheduler, texts
+from . import backup, config, db, delivery, handlers, scheduler, stats, texts
 
 log = logging.getLogger('marathon')
 
@@ -56,10 +56,12 @@ async def run():
     # Планировщик живёт рядом с опросом обновлений: пауза в два с половиной
     # часа никого не держит, состояние очереди целиком в базе.
     worker = asyncio.create_task(scheduler.loop(bot))
+    reporter = asyncio.create_task(stats.loop(bot))
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
         worker.cancel()
+        reporter.cancel()
         await bot.session.close()
 
 

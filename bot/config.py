@@ -37,6 +37,9 @@ BOT_TOKEN = os.getenv('BOT_TOKEN', '').strip()
 
 # Куда падают заявки на покупку и вопросы в службу заботы.
 PURCHASE_CHAT_ID = _int(os.getenv('PURCHASE_CHAT_ID'), 0)
+# Чат для почасовой сводки: сколько новых людей и откуда (AleX, 07.09.2026).
+# Пусто — сводка не шлётся, остаётся команда /stats.
+STATS_CHAT_ID = _int(os.getenv('STATS_CHAT_ID'), 0)
 SUPPORT_CHAT_ID = _int(os.getenv('SUPPORT_CHAT_ID'), 0)
 
 ADMIN_IDS = _ids(os.getenv('ADMIN_IDS', ''))

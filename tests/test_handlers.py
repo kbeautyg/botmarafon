@@ -330,3 +330,40 @@ def test_доставка_дня_по_очереди():
     assert not funnel.day_delivered({'day1_no'}, 2)        # ждёт добивание — второго дня не было
     assert funnel.day_delivered({'after_day2'}, 2)
     assert not funnel.day_delivered({'after_day2'}, 3)
+
+
+# ------------------------------------------------------------- источники
+
+async def test_старт_по_ссылке_запоминает_источник():
+    u"""t.me/бот?start=ig приходит как «/start ig» — откуда человек, знаем."""
+    await start.on_start(FakeMessage(text='/start ig'))
+    assert db.get_user(1)['source'] == 'ig'
+
+
+async def test_повторный_старт_источник_не_переписывает():
+    await start.on_start(FakeMessage(text='/start site_facebook'))
+    await start.on_start(FakeMessage(text='/start tg'))
+    assert db.get_user(1)['source'] == 'site_facebook'
+
+
+async def test_старт_без_хвоста_и_с_мусором_даёт_пустой_источник():
+    await start.on_start(FakeMessage(text='/start'))
+    assert db.get_user(1)['source'] == ''
+    await start.on_start(FakeMessage(text=u'/start <script>alert(1)</script>', user=FakeUser(2)))
+    assert db.get_user(2)['source'] == ''
+
+
+async def test_stats_показывает_источники():
+    from bot import stats
+    for uid, src in ((1, 'ig'), (2, 'ig'), (3, 'site_fb'), (4, '')):
+        db.remember_user(uid, 'u%d' % uid, u'Человек', src)
+        db.mark_launched(uid)
+    message = админ_сообщение(text='/stats')
+    await admin.on_stats(message)
+    text = message.answers[-1]
+    assert u'Instagram 2' in text and u'Сайт ← Facebook 1' in text and u'напрямую 1' in text
+    assert u'Всё время:</b> 4 человек, запустили 4' in text
+
+    assert stats.hourly() is not None and u'+4' in stats.hourly()
+    assert stats.parse_source('Instagram') == 'ig'
+    assert stats.label('site_instagram') == u'Сайт ← Instagram'
