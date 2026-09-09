@@ -136,6 +136,41 @@ def new_users(since: float) -> list[tuple[str, int]]:
     return [(r['src'], r['n']) for r in rows]
 
 
+def source_funnel(since: float) -> list[dict]:
+    u"""Что дал каждый источник: пришло → запустили → отвечали → дошли → купили.
+
+    AleX 09.09.2026: «мы разные рассылки используем в телеграме, нужно
+    понять, какая из них лучше и продуктивнее». По одному числу «пришло»
+    этого не увидеть: рассылка может привести сотню зевак и ни одного
+    человека, который дойдёт до конца. Поэтому считаем весь путь.
+
+    «Дошли» — ответившие на опросник третьего дня: он приходит перед
+    четвёртым днём, и дальше остаются только кнопки покупки.
+    """
+    rows = _conn.execute(
+        "SELECT COALESCE(u.source, '') AS src,"
+        ' COUNT(*) AS people,'
+        ' SUM(CASE WHEN u.launched_at IS NOT NULL THEN 1 ELSE 0 END) AS launched,'
+        ' SUM(CASE WHEN EXISTS (SELECT 1 FROM answers a WHERE a.user_id = u.user_id)'
+        '     THEN 1 ELSE 0 END) AS active,'
+        " SUM(CASE WHEN EXISTS (SELECT 1 FROM answers a WHERE a.user_id = u.user_id"
+        "     AND a.poll = 'day3') THEN 1 ELSE 0 END) AS finished,"
+        ' SUM(CASE WHEN EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = u.user_id)'
+        '     THEN 1 ELSE 0 END) AS buys'
+        ' FROM users u WHERE u.started_at >= ?'
+        ' GROUP BY src ORDER BY people DESC, src', (since,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def recent_users(limit: int = 30, since: float = 0) -> list[dict]:
+    u"""Кто заходил в бота — свежие сверху. Для /кто."""
+    rows = _conn.execute(
+        'SELECT user_id, username, first_name, started_at, launched_at,'
+        " COALESCE(source, '') AS source FROM users WHERE started_at >= ?"
+        ' ORDER BY started_at DESC LIMIT ?', (since, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def launched_since(since: float) -> int:
     return _conn.execute('SELECT COUNT(*) FROM users WHERE launched_at >= ?',
                          (since,)).fetchone()[0]

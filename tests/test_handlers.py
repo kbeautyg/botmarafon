@@ -51,6 +51,68 @@ async def test_повторный_старт_не_удваивает_ворон�
     assert второй.answers == [texts.ALREADY_RUNNING]
 
 
+async def test_повторный_старт_предлагает_пройти_заново():
+    u"""AleX 09.09.2026: удалил переписку, нажал старт — «уже запущен» и тишина.
+    Теперь рядом кнопка, которой человек возвращает себе марафон."""
+    await start.on_start(FakeMessage(text='/start'))
+    второй = FakeMessage(text='/start')
+    await start.on_start(второй)
+
+    кнопки = [b.text for row in второй.markups[0].inline_keyboard for b in row]
+    assert кнопки == [texts.RESTART_BUTTON]
+
+
+async def test_кнопка_заново_запускает_воронку_с_первого_дня():
+    await start.on_start(FakeMessage(text='/start'))
+    db.save_answer(1, 'day1', 'yes')
+    scheduler.schedule(1, 'day2', 0, 60)
+
+    call = FakeCall('restart')
+    await start.on_restart(call)
+
+    assert [j['chain'] for j in db.user_jobs(1)] == ['launch']
+    assert db.get_user(1)['launched_at'] is not None
+    assert call.message.answers == [texts.RESTART_DONE]
+    assert call.markup_cleared                      # второй раз не нажать
+
+
+# ------------------------------------------------- заявка с сайта в боте
+
+async def test_заявка_с_сайта_не_запускает_марафон_а_зовёт_менеджера():
+    u"""Павел 09.09.2026: люди не пишут сами, менеджер пишет первым — и его
+    аккаунт ограничивают. Ссылка из заявки ведёт в бота: «Запустить» и есть
+    первое сообщение человека. Марафон при этом не начинается — человек
+    оставил заявку на спортзал и ждёт менеджера."""
+    message = FakeMessage(text='/start zayavka57')
+    await start.on_start(message)
+
+    assert db.get_user(1)['launched_at'] is None
+    assert db.user_jobs(1) == []
+    assert u'№57' in message.answers[0]
+
+    ушло = [s for s in message.bot.sent if s[1] == CARE_CHAT]
+    assert len(ушло) == 1
+    assert u'№57' in ушло[0][2] and u'@tester' in ушло[0][2]
+
+
+async def test_ответ_менеджера_на_заявку_возвращается_человеку():
+    u"""Мост тот же, что у службы заботы: реплай в чате — ответ в бота."""
+    message = FakeMessage(text='/start zayavka57')
+    await start.on_start(message)
+
+    голова = message.bot.by_id[max(message.bot.by_id)]
+    assert db.care_target(CARE_CHAT, голова.message_id) == 1
+
+
+async def test_источник_заявки_не_дробится_по_номерам():
+    u"""Иначе в сводке было бы полсотни строк zayavka1, zayavka2…"""
+    await start.on_start(FakeMessage(text='/start zayavka57'))
+    await start.on_start(FakeMessage(text='/start zayavka58', user=FakeUser(2)))
+
+    assert db.get_user(1)['source'] == 'zayavka'
+    assert db.new_users(0) == [('zayavka', 2)]
+
+
 # --------------------------------------------------------------- опросник
 
 async def test_ответ_запускает_свою_ветку():

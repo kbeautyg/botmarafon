@@ -15,6 +15,7 @@ Telegram отдаёт его первым сообщением /start ig, и б�
 часы молчат: ночью в чате иначе было бы восемь сообщений «+0».
 """
 import asyncio
+import html
 import logging
 import time
 from datetime import datetime, timedelta
@@ -38,6 +39,7 @@ LABELS = {
     'yt': u'YouTube',
     'vk': u'ВКонтакте',
     'tt': u'TikTok',
+    'zayavka': u'Заявка с сайта',
 }
 # Полные имена, которые приходят из utm-меток сайта, — к коротким.
 ALIASES = {
@@ -56,13 +58,21 @@ def parse_source(payload: str | None) -> str:
 
 
 def label(source: str) -> str:
-    u"""«Сайт ← Instagram» для site_ig, «Instagram» для ig, метка как есть иначе."""
+    u"""«Сайт ← Instagram» для site_ig, «Telegram ← рассылка1» для tg_рассылка1.
+
+    Хвост после подчёркивания — название конкретной рассылки или
+    объявления: AleX 09.09.2026 гоняет их несколько разом и сравнивает
+    между собой. Имя после подчёркивания произвольное, поэтому если оно
+    не из известных — показываем как есть, а не прячем.
+    """
     if not source:
         return DIRECT
-    if source.startswith('site_'):
-        tail = source[5:]
-        tail = ALIASES.get(tail, tail)
-        return u'%s ← %s' % (LABELS['site'], LABELS.get(tail, tail))
+    if '_' in source:
+        head, tail = source.split('_', 1)
+        head = ALIASES.get(head, head)
+        if head in LABELS:
+            tail = ALIASES.get(tail, tail)
+            return u'%s ← %s' % (LABELS[head], LABELS.get(tail, tail))
     return LABELS.get(source, source)
 
 
@@ -77,8 +87,35 @@ def period_line(title: str, since: float) -> str:
                                                     breakdown(pairs))
 
 
+def pct(part: int, whole: int) -> str:
+    return u'%d%%' % round(part * 100.0 / whole) if whole else u'—'
+
+
+def funnel_lines(since: float) -> str:
+    u"""Что дала каждая ссылка: путь от захода до покупки, строкой на источник.
+
+    Сравнивать рассылки по одному «пришло» бесполезно — важно, сколько из
+    пришедших вообще запустились и сколько досмотрели до конца. Проценты
+    считаем от пришедших: это и есть качество ссылки.
+    """
+    rows = db.source_funnel(since)
+    if not rows:
+        return u'За этот срок никто не заходил.'
+    out = []
+    for r in rows:
+        people = r['people']
+        line = u'<b>%s</b> — пришло %d' % (label(r['src']), people)
+        line += u'\n   запустили %d (%s)' % (r['launched'], pct(r['launched'], people))
+        line += u' · отвечали %d' % r['active']
+        line += u' · дошли %d (%s)' % (r['finished'], pct(r['finished'], people))
+        if r['buys']:
+            line += u' · <b>заявок %d</b>' % r['buys']
+        out.append(line)
+    return u'\n'.join(out)
+
+
 def report() -> str:
-    u"""Ответ на /stats: сегодня, неделя, всё время."""
+    u"""Ответ на /stats: сегодня, неделя, всё время + качество источников."""
     now = datetime.now(MSK)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     week = (now - timedelta(days=7)).timestamp()
@@ -89,7 +126,52 @@ def report() -> str:
         period_line(u'7 дней', week),
         u'<b>Всё время:</b> %d человек, запустили %d\n%s'
         % (counters['users'], counters['launched'], breakdown(db.new_users(0))),
+        u'📈 <b>Что дала каждая ссылка за 7 дней</b>\n%s' % funnel_lines(week),
+        u'Кто именно заходил — /кто. Готовые ссылки для рассылок — /ссылки.',
     ])
+
+
+def who_report(limit: int = 30) -> str:
+    u"""Ответ на /кто: поимённо, кто заходил и откуда.
+
+    AleX 09.09.2026 просил видеть не только числа, но и людей: «наблюдали,
+    кто в него заходил». Ник — чтобы менеджер мог написать, если человек
+    завис на середине.
+    """
+    rows = db.recent_users(limit)
+    if not rows:
+        return u'В бота ещё никто не заходил.'
+    out = [u'👥 <b>Кто заходил в бота</b> — последние %d' % len(rows)]
+    for r in rows:
+        when = datetime.fromtimestamp(r['started_at'], MSK).strftime('%d.%m %H:%M')
+        who = html.escape(r['first_name'] or u'без имени')
+        handle = u'@%s' % r['username'] if r['username'] else u'без ника'
+        mark = u'запустил' if r['launched_at'] else u'<i>не запустил</i>'
+        out.append(u'%s · %s · %s · %s · %s'
+                   % (when, who, handle, label(r['source']), mark))
+    return u'\n'.join(out)
+
+
+def links_report(username: str) -> str:
+    u"""Готовые ссылки под рассылки: скопировал — и в пост.
+
+    Метка после «tg_» произвольная: сколько рассылок, столько и меток.
+    Главное — у каждой своя, иначе в сводке они сольются в одну строку.
+    """
+    base = u'https://t.me/%s?start=' % username
+    rows = [
+        (u'Telegram — рассылка №1', 'tg_1'),
+        (u'Telegram — рассылка №2', 'tg_2'),
+        (u'Telegram — свой канал', 'tg_kanal'),
+        (u'Instagram', 'ig'),
+        (u'Facebook', 'fb'),
+        (u'Сайт', 'site'),
+    ]
+    body = u'\n'.join(u'%s\n<code>%s%s</code>' % (title, base, tag) for title, tag in rows)
+    return (u'🔗 <b>Ссылки на бота с метками</b>\n\n%s\n\n'
+            u'Метку после <code>tg_</code> придумывайте любую — латиницей, цифрами, '
+            u'без пробелов: <code>%stg_storis5</code>. В сводке она встанет отдельной '
+            u'строкой, и будет видно, какая рассылка сработала лучше.' % (body, base))
 
 
 def hourly(now: float | None = None) -> str | None:

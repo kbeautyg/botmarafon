@@ -194,6 +194,26 @@ async def on_stats(message: Message):
     await message.answer(stats.report())
 
 
+# Команды по-русски: заказчик набирает их с телефона и латиницу не ищет.
+@router.message(Command('who', 'кто'))
+async def on_who(message: Message, command: CommandObject):
+    u"""Поимённо, кто заходил в бота и по какой ссылке."""
+    if not _is_admin(message.from_user.id):
+        return
+    asked = (command.args or '').strip()
+    limit = int(asked) if asked.isdigit() and 0 < int(asked) <= 100 else 30
+    await message.answer(stats.who_report(limit))
+
+
+@router.message(Command('links', 'ссылки'))
+async def on_links(message: Message):
+    u"""Готовые ссылки с метками — вставить в рассылку."""
+    if not _is_admin(message.from_user.id):
+        return
+    me = await message.bot.get_me()
+    await message.answer(stats.links_report(me.username))
+
+
 @router.message(Command('resend'))
 async def on_resend(message: Message):
     u"""Дослать запись дня тем, кому день ушёл без неё.

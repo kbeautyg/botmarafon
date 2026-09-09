@@ -31,6 +31,16 @@ def poll(name: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.POLL_NO, callback_data='poll:%s:no' % name)]])
 
 
+def restart() -> InlineKeyboardMarkup:
+    u"""Кнопка «пройти заново» под ответом на повторный /start.
+
+    Inline, а не автоматический перезапуск: человек мог нажать /start
+    случайно, и обрывать ему марафон на середине без спроса нельзя.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.RESTART_BUTTON, callback_data='restart')]])
+
+
 def care_link() -> InlineKeyboardMarkup | None:
     u"""Кнопка «написать в службу заботы».
 
