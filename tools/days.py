@@ -39,6 +39,7 @@ Finish» — это и есть тот «чёрный экран». Заглуш
 """
 from __future__ import print_function
 
+import json
 import os
 import re
 import shutil
@@ -49,6 +50,10 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA = os.path.join(ROOT, 'media', 'intro')
 SCHEMA = os.path.join(MEDIA, 'schema.png')
+# Вертикальная схема (заказчик, 10.09.2026: «все точки, полоски и стрелки
+# на своих местах — вставь в сессии вместо чёрной картинки»). 939×1674,
+# то есть уже 9:16 — в вертикальной сборке ложится на весь кадр.
+SCHEMA_V = os.path.join(MEDIA, 'schema-9x16.png')
 
 # Картинка на сессии с выключенной камерой: 'schema' — схема тонкого плана,
 # 'preview' — превью дня (последний кадр заставки, он же обложка в боте).
@@ -67,6 +72,21 @@ DAYS = {
 
 W, H = 1280, 720
 FPS = 25
+
+# ---- Вертикальная сборка 9:16 (Павел и AleX, 10.09.2026) ----
+# Запись Zoom — 640×360, и в ней телефон Павла стоит вертикальной полосой
+# по центру: 204×360 при x=218, одинаково во всех четырёх днях (промерено
+# cropdetect по семи точкам каждой записи). На телефоне такая запись
+# играла узкой полоской посреди чёрного: «люди хер пойми какие видео
+# смотрят, маленькие». Вертикальная сборка вырезает полосу и растягивает
+# её на весь экран телефона 720×1280; заставки дней и так 9:16.
+# Флаг --9x16 в командной строке; результат — в OUT_DIR/9x16.
+VERTICAL = False
+STRIP = 'crop=204:360:218:0,'   # полоса телефона в кадре Zoom
+# Сжатие. Вертикальный кадр растянут в 3,5 раза из полосы 204 px — деталей
+# в нём не больше, чем в широкой сборке, а битрейт при том же crf выходил
+# на треть выше (шум растяжения). crf 27 даёт те же ~600 МБ на день 1.
+CRF = '26'
 SCAN_FPS = 5          # шаг поиска заглушки, кадров в секунду
 MIN_SESSION = 60.0    # секунд: короче — не сессия, а хвост записи
 FADE = 0.6            # секунд: появление и уход схемы
@@ -154,6 +174,28 @@ def build(day, source, segments, stage, dst):
         'ffmpeg', '-v', 'error', '-i', os.path.join(stage, 'cover.png'), '-q:v', '3',
         os.path.join(MEDIA, 'cover%d.jpg' % day), '-y'])
 
+    # Картинка на сессию. Схема нарисована широкой (16:9); в вертикальном
+    # кадре её не растянуть — кладём по ширине на тот же размытый фон, по
+    # центру. Растяжение в 16:9 остаётся, как было.
+    session = SCHEMA if SESSION == 'schema' else 'cover.png'
+    if VERTICAL and SESSION == 'schema' and os.path.exists(SCHEMA_V):
+        # своя вертикальная схема — на весь кадр, без полей и фона
+        subprocess.check_call([
+            'ffmpeg', '-v', 'error', '-i', SCHEMA_V,
+            '-vf', 'scale=%d:%d:force_original_aspect_ratio=increase:flags=lanczos,'
+                   'crop=%d:%d' % (W, H, W, H),
+            '-frames:v', '1', '-update', '1', 'session.png', '-y'], cwd=stage)
+        session = 'session.png'
+    elif VERTICAL:
+        subprocess.check_call([
+            'ffmpeg', '-v', 'error', '-loop', '1', '-i', 'bg.png', '-i', session,
+            '-filter_complex',
+            '[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,'
+            'boxblur=16:2,eq=saturation=1.15[bg];[1:v]scale=%d:-2[fg];'
+            '[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1' % (W, H, W, H, W - 40),
+            '-frames:v', '1', '-update', '1', 'session.png', '-y'], cwd=stage)
+        session = 'session.png'
+
     enable = '+'.join('between(t,%.2f,%.2f)' % (a, b - 1.0 / FPS)
                       for a, b in segments)
     fades = ''.join(
@@ -169,8 +211,10 @@ def build(day, source, segments, stage, dst):
         'trim=duration=%.3f,fade=t=out:st=%.3f:d=0.4[iv];'
         '[0:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=%.1fdB,'
         'apad=whole_dur=%.3f,atrim=duration=%.3f,afade=t=out:st=%.3f:d=0.4[ia];'
-        # запись: растянуть до 720p, поверх — схема, пока камера выключена
-        '[2:v]setpts=PTS-STARTPTS,scale=%d:%d:flags=lanczos,fps=%d,setsar=1,'
+        # запись: (вертикально — сначала вырезать полосу телефона) растянуть
+        # до кадра, поверх — схема, пока камера выключена
+        '[2:v]setpts=PTS-STARTPTS,%s'
+        'scale=%d:%d:flags=lanczos,fps=%d,setsar=1,'
         'format=yuv420p[rv0];'
         '[3:v]scale=%d:%d,format=rgba%s[sch];'
         "[rv0][sch]overlay=0:0:enable='%s':shortest=1,fade=t=in:st=0:d=0.5[rv];"
@@ -180,7 +224,7 @@ def build(day, source, segments, stage, dst):
         % (W, H, W, H, H, FPS,
            intro_len, intro_len - 0.4,
            gain, intro_len, intro_len, intro_len - 0.4,
-           W, H, FPS,
+           STRIP if VERTICAL else '', W, H, FPS,
            W, H, fades,
            enable))
 
@@ -190,9 +234,9 @@ def build(day, source, segments, stage, dst):
         '-loop', '1', '-framerate', str(FPS), '-i', 'bg.png',
         '-i', source,
         '-loop', '1', '-framerate', str(FPS),
-        '-i', SCHEMA if SESSION == 'schema' else 'cover.png',
+        '-i', session,
         '-filter_complex', graph, '-map', '[v]', '-map', '[a]',
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '26',
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', CRF,
         '-profile:v', 'high', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '160k',
         '-movflags', '+faststart', dst, '-y'], cwd=stage)
@@ -204,11 +248,43 @@ def hms(seconds):
     return '%d:%02d:%02d' % (seconds // 3600, seconds % 3600 // 60, seconds % 60)
 
 
+def cached_segments(day, source, stage):
+    u"""Отрезки сессии из segments.json рядом с готовыми записями.
+
+    Поиск заглушки идёт по всей записи и занимает минуты; отрезки от
+    исходника не зависят от сборки, поэтому найденные один раз лежат в
+    файле, и вертикальная пересборка их не ищет заново. Ключ — имя и
+    размер исходника: подменили запись — отрезки найдутся снова.
+    """
+    cache = os.path.join(OUT_DIR, 'segments.json')
+    key = u'%d:%s:%d' % (day, os.path.basename(source), os.path.getsize(source))
+    known = {}
+    if os.path.exists(cache):
+        with open(cache, 'r', encoding='utf-8') as f:
+            known = json.load(f)
+    if key in known:
+        return [tuple(s) for s in known[key]]
+    segments = scan(source, stage)
+    known[key] = segments
+    with open(cache, 'w', encoding='utf-8') as f:
+        json.dump(known, f, ensure_ascii=False, indent=1)
+    return segments
+
+
 def main(argv):
+    global VERTICAL, W, H, OUT_DIR, CRF
     # Консоль Windows — cp1251, стрелки и галочки в отчёте в неё не лезут.
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
+    if '--9x16' in argv:
+        VERTICAL = True
+        W, H = 720, 1280
+        CRF = '27'
+        argv = [a for a in argv if a != '--9x16']
     days = [int(a) for a in argv] or sorted(DAYS)
+    base = OUT_DIR
+    if VERTICAL:
+        OUT_DIR = os.path.join(base, '9x16')
     if not os.path.isdir(OUT_DIR):
         os.makedirs(OUT_DIR)
 
@@ -220,7 +296,7 @@ def main(argv):
 
         stage = tempfile.mkdtemp(prefix='day%d-' % day)
         try:
-            segments = scan(source, stage)
+            segments = cached_segments(day, source, stage)
             print(u'День %d: схема на %s' % (day, u'; '.join(
                 u'%s → %s (%d мин)' % (hms(a), hms(b), (b - a) / 60)
                 for a, b in segments) or u'— заглушка не найдена'))

@@ -9,12 +9,14 @@
 # подменяется одним mv — сайт ни секунды не отдаёт недокачанное.
 #
 # Запуск из Git Bash:  bash tools/upload_days.sh 1 2 3 4
+# Вертикальные записи (tools/days.py --9x16) лежат в подпапке 9x16:
+#   SRC="C:/Users/Sharp/Desktop/Марафон записи/9x16" bash tools/upload_days.sh 2
 set -u
 
 HOST=root@91.230.94.147
 KEY=~/.ssh/retreat_deploy
 DIR=/var/lib/gym/marathon
-SRC="C:/Users/Sharp/Desktop/Марафон записи"
+SRC="${SRC:-C:/Users/Sharp/Desktop/Марафон записи}"
 
 remote() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 "$HOST" "$@"; }
 
