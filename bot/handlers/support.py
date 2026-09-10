@@ -48,6 +48,17 @@ async def _mirror_to_chat(message: Message):
     db.link_care(config.SUPPORT_CHAT_ID, copy.message_id, message.from_user.id)
 
 
+@router.message(F.chat.type == 'private', F.text.regexp(r'^/\w'))
+async def on_stray_command(message: Message):
+    u"""Команда от того, кому она не открыта, — не вопрос в заботу.
+
+    До сюда доходят только команды, которые админский роутер не взял:
+    чужие /stats, /status и просто опечатки. Пересылать «/stats» в чат
+    поддержки как вопрос — бессмыслица; отвечаем, что делать.
+    """
+    await message.answer(texts.NOT_ALLOWED_COMMAND.format(id=message.from_user.id))
+
+
 @router.message(F.chat.type == 'private')
 async def to_support(message: Message):
     u"""Всё, что человек пишет боту, — вопрос в заботу.

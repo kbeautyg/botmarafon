@@ -44,6 +44,22 @@ SUPPORT_CHAT_ID = _int(os.getenv('SUPPORT_CHAT_ID'), 0)
 
 ADMIN_IDS = _ids(os.getenv('ADMIN_IDS', ''))
 
+# Кому можно смотреть статистику (/stats, /кто, /ссылки, /status), не
+# будучи админом. Sharp 10.09.2026: заказчик набрал /stats, а бот принял
+# это за вопрос в заботу — команды были только для ADMIN_IDS. Пусто —
+# статистика только админам и участникам командных чатов (ниже).
+STATS_IDS = _ids(os.getenv('STATS_IDS', ''))
+
+
+def can_stats(user_id: int, chat_id: int | None = None) -> bool:
+    u"""Статистику видят админы, STATS_IDS и любой, кто пишет из
+    командного чата — сводки, поддержки или заявок: там только свои,
+    и заводить под них ещё одну переменную незачем."""
+    if user_id in ADMIN_IDS or user_id in STATS_IDS:
+        return True
+    team = {c for c in (STATS_CHAT_ID, SUPPORT_CHAT_ID, PURCHASE_CHAT_ID) if c}
+    return chat_id is not None and chat_id in team
+
 # Аккаунт службы заботы: кнопка ведёт прямо в переписку с ним. У заказчика
 # это @Metod_Finish_Official — живой аккаунт, а не группа, поэтому писать
 # туда ботом нельзя, только приводить человека за руку.

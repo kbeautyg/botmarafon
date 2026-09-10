@@ -76,6 +76,35 @@ async def test_кнопка_заново_запускает_воронку_с_п
     assert call.markup_cleared                      # второй раз не нажать
 
 
+# ------------------------------------------------ кому открыта статистика
+
+async def test_чужой_stats_не_уходит_в_заботу_а_объясняет():
+    u"""Sharp 10.09.2026: заказчик набрал /stats, а бот принял это за вопрос."""
+    message = FakeMessage(text='/stats', user=FakeUser(555))
+    assert not admin.from_admin(message)
+
+    await support.on_stray_command(message)
+    assert u'555' in message.answers[0]
+    assert not [s for s in message.bot.sent if s[1] == CARE_CHAT]
+
+
+async def test_stats_ids_открывает_статистику_но_не_загрузку(monkeypatch):
+    monkeypatch.setattr(config, 'STATS_IDS', (555,))
+    stats_msg = FakeMessage(text='/stats', user=FakeUser(555))
+    assert admin.from_admin(stats_msg)
+    await admin.on_stats(stats_msg)
+    assert u'Откуда приходят' in stats_msg.answers[0]
+
+    # видео с подписью day1 от такого человека в базу не попадает
+    video = FakeMessage(caption='day1', user=FakeUser(555), video=FakeVideo('f1'))
+    assert not admin.from_admin(video)
+
+
+async def test_из_командного_чата_статистика_доступна_всем_участникам():
+    message = FakeMessage(text='/stats@finish_marafon_bot', user=FakeUser(555), chat_id=CARE_CHAT)
+    assert admin.from_admin(message)
+
+
 # ------------------------------------------------- заявка с сайта в боте
 
 async def test_заявка_с_сайта_не_запускает_марафон_а_зовёт_менеджера():

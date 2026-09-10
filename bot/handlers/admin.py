@@ -33,8 +33,24 @@ def _is_admin(user_id: int) -> bool:
     return user_id in config.ADMIN_IDS
 
 
+STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status')
+
+
+def _command(message: Message) -> str:
+    u"""Имя команды без слэша и без @бота: «/stats@finish_marafon_bot 5» → stats."""
+    text = (message.text or '').strip()
+    if not text.startswith('/'):
+        return ''
+    return text.split(None, 1)[0][1:].split('@', 1)[0].lower()
+
+
+def _can_stats(message: Message) -> bool:
+    return bool(message.from_user) and config.can_stats(message.from_user.id, message.chat.id)
+
+
 def from_admin(message: Message) -> bool:
-    u"""Пропускать в этот роутер только админов.
+    u"""Пропускать в этот роутер админов — и команды статистики от тех, кому
+    она разрешена (config.can_stats).
 
     Фильтр обязателен, а не для красоты. Обработчики ниже ловят любое видео
     и любое фото — без фильтра сообщение обычного человека попадало бы сюда,
@@ -44,7 +60,11 @@ def from_admin(message: Message) -> bool:
     Проверяем функцией, а не F.from_user.id.in_(...): список админов должен
     читаться на каждом сообщении, иначе он застынет на моменте импорта.
     """
-    return bool(message.from_user) and _is_admin(message.from_user.id)
+    if not message.from_user:
+        return False
+    if _is_admin(message.from_user.id):
+        return True
+    return _command(message) in STATS_COMMANDS and _can_stats(message)
 
 
 router.message.filter(from_admin)
@@ -174,7 +194,7 @@ def _content_report() -> list[str]:
 
 @router.message(Command('status'))
 async def on_status(message: Message):
-    if not _is_admin(message.from_user.id):
+    if not _can_stats(message):
         return
     counters = db.stats()
     lines = _content_report()
@@ -189,7 +209,7 @@ async def on_status(message: Message):
 @router.message(Command('stats'))
 async def on_stats(message: Message):
     u"""Откуда приходят люди: сегодня, за неделю, за всё время."""
-    if not _is_admin(message.from_user.id):
+    if not _can_stats(message):
         return
     await message.answer(stats.report())
 
@@ -198,7 +218,7 @@ async def on_stats(message: Message):
 @router.message(Command('who', 'кто'))
 async def on_who(message: Message, command: CommandObject):
     u"""Поимённо, кто заходил в бота и по какой ссылке."""
-    if not _is_admin(message.from_user.id):
+    if not _can_stats(message):
         return
     asked = (command.args or '').strip()
     limit = int(asked) if asked.isdigit() and 0 < int(asked) <= 100 else 30
@@ -208,7 +228,7 @@ async def on_who(message: Message, command: CommandObject):
 @router.message(Command('links', 'ссылки'))
 async def on_links(message: Message):
     u"""Готовые ссылки с метками — вставить в рассылку."""
-    if not _is_admin(message.from_user.id):
+    if not _can_stats(message):
         return
     me = await message.bot.get_me()
     await message.answer(stats.links_report(me.username))
