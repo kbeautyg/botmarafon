@@ -31,6 +31,27 @@ def poll(name: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.POLL_NO, callback_data='poll:%s:no' % name)]])
 
 
+def stats_menu(section: str, period: str) -> InlineKeyboardMarkup:
+    u"""Кнопки под /stats: разделы по два в ряд, периоды, выгрузка.
+
+    Текущие раздел и период помечены точкой. Нажатие правит то же
+    сообщение, а не шлёт новое — чат не превращается в ленту отчётов.
+    """
+    from . import insights
+
+    def button(title: str, data: str, on: bool) -> InlineKeyboardButton:
+        return InlineKeyboardButton(text=(u'• ' + title) if on else title, callback_data=data)
+
+    sections = list(insights.SECTIONS.items())
+    rows = [[button(title, 'st:%s:%s' % (key, period), key == section)
+             for key, title in sections[i:i + 2]] for i in range(0, len(sections), 2)]
+    rows.append([button(title, 'st:%s:%s' % (section, key), key == period)
+                 for key, title in insights.PERIOD_BUTTONS])
+    rows.append([InlineKeyboardButton(text=u'📥 Все люди таблицей (Excel)',
+                                      callback_data='st:csv:%s' % period)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def restart() -> InlineKeyboardMarkup:
     u"""Кнопка «пройти заново» под ответом на повторный /start.
 

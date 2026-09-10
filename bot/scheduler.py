@@ -83,6 +83,7 @@ async def run_job(bot: Bot, job: dict) -> None:
         log.info(u'%s закрыл бота — снимаем его очередь', job['user_id'])
         db.drop_job(job['id'])
         db.drop_chains(job['user_id'], tuple(funnel.CHAINS))
+        db.mark_blocked(job['user_id'])
         return
     except Exception as err:
         if job['tries'] + 1 >= MAX_TRIES:
@@ -99,6 +100,10 @@ async def run_job(bot: Bot, job: dict) -> None:
         return
 
     db.drop_job(job['id'])
+    # Для статистики: докуда человек дошёл. Кружки и отзывы не пишем — их
+    # полтора десятка на человека, и о пути они ничего не говорят.
+    if step.kind in ('day', 'poll', 'offer'):
+        db.log_event(job['user_id'], step.kind, step.ref)
     log.info(u'%s ← %s#%s (%s %s)', job['user_id'], job['chain'], job['pos'],
              step.kind, step.ref if step.ref is not None else '')
     _plan_next(job['user_id'], job['chain'], job['pos'], step, base=job['run_at'])

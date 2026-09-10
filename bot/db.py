@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS missed (
   at      REAL NOT NULL,
   PRIMARY KEY (user_id, day)
 );
+
+-- Что человек получил: каждый выполненный шаг воронки — день, вопрос,
+-- кнопки покупки (с 11.09.2026). Без этого бот не знал, кто докуда дошёл,
+-- и подробной статистики было не из чего строить.
+CREATE TABLE IF NOT EXISTS events (
+  user_id INTEGER NOT NULL,
+  kind    TEXT NOT NULL,      -- day | poll | offer
+  ref     TEXT NOT NULL DEFAULT '',
+  at      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_user ON events(user_id);
 '''
 
 _conn = None
@@ -102,6 +113,9 @@ def connect(path: str) -> sqlite3.Connection:
     columns = [row[1] for row in _conn.execute('PRAGMA table_info(users)')]
     if 'source' not in columns:
         _conn.execute('ALTER TABLE users ADD COLUMN source TEXT')
+    # 11.09.2026: когда человек закрыл бота — для статистики «ушли».
+    if 'blocked_at' not in columns:
+        _conn.execute('ALTER TABLE users ADD COLUMN blocked_at REAL')
     _conn.commit()
     return _conn
 
@@ -122,7 +136,9 @@ def remember_user(user_id: int, username: str | None, first_name: str | None,
     _run('INSERT INTO users (user_id, username, first_name, started_at, source) '
          'VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET '
          'username=excluded.username, first_name=excluded.first_name, '
-         "source=COALESCE(NULLIF(users.source, ''), excluded.source)",
+         "source=COALESCE(NULLIF(users.source, ''), excluded.source), "
+         # написал боту или нажал «Старт» — значит, больше не закрыт
+         'blocked_at=NULL',
          (user_id, username, first_name, time.time(), source or ''))
 
 
@@ -320,6 +336,41 @@ def care_target(chat_id: int, message_id: int) -> int | None:
     row = _conn.execute('SELECT user_id FROM care_links WHERE chat_id=? AND message_id=?',
                         (chat_id, message_id)).fetchone()
     return row['user_id'] if row else None
+
+
+# ------------------------------------------------------- шаги и уходы
+
+def log_event(user_id: int, kind: str, ref=None) -> None:
+    u"""Записать выполненный шаг воронки: день, вопрос, кнопки покупки."""
+    _run('INSERT INTO events (user_id, kind, ref, at) VALUES (?, ?, ?, ?)',
+         (user_id, kind, '' if ref is None else str(ref), time.time()))
+
+
+def mark_blocked(user_id: int) -> None:
+    u"""Человек закрыл бота — отметить момент (первый, повторы не трогаем)."""
+    _run('UPDATE users SET blocked_at=? WHERE user_id=? AND blocked_at IS NULL',
+         (time.time(), user_id))
+
+
+def snapshot() -> dict[str, list[dict]]:
+    u"""Всё, из чего считается подробная статистика (bot/insights.py).
+
+    Одним чтением, без расчётов: база маленькая (сотни и тысячи людей), а
+    считать в Python проще и проверяемее, чем городить это в SQL.
+    """
+    def rows(sql: str) -> list[dict]:
+        return [dict(r) for r in _conn.execute(sql).fetchall()]
+    return {
+        'users': rows("SELECT user_id, username, first_name, started_at, launched_at, "
+                      "COALESCE(source, '') AS source, poll, blocked_at FROM users"),
+        'events': rows("SELECT user_id, kind, ref, at FROM events "
+                       "WHERE kind IN ('day', 'poll', 'offer') ORDER BY at"),
+        'answers': rows('SELECT user_id, poll, answer, answered FROM answers'),
+        'purchases': rows('SELECT id, user_id, product, at FROM purchases ORDER BY at'),
+        'jobs': rows('SELECT user_id, chain, pos, run_at FROM jobs'),
+        'care': rows('SELECT user_id, COUNT(*) AS n FROM care_links GROUP BY user_id'),
+        'missed': rows('SELECT user_id, day FROM missed'),
+    }
 
 
 def stats() -> dict[str, int]:

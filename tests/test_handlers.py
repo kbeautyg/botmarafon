@@ -93,7 +93,7 @@ async def test_stats_ids_открывает_статистику_но_не_за�
     stats_msg = FakeMessage(text='/stats', user=FakeUser(555))
     assert admin.from_admin(stats_msg)
     await admin.on_stats(stats_msg)
-    assert u'Откуда приходят' in stats_msg.answers[0]
+    assert u'сводка' in stats_msg.answers[0]
 
     # видео с подписью day1 от такого человека в базу не попадает
     video = FakeMessage(caption='day1', user=FakeUser(555), video=FakeVideo('f1'))
@@ -472,3 +472,40 @@ async def test_stats_показывает_источники():
     assert stats.hourly() is not None and u'+4' in stats.hourly()
     assert stats.parse_source('Instagram') == 'ig'
     assert stats.label('site_instagram') == u'Сайт ← Instagram'
+
+
+# ------------------------------------------------ подробная статистика
+
+async def test_stats_показывает_сводку_с_кнопками_разделов():
+    u"""Sharp 11.09.2026: «статистика маленькая, сильно расширь»."""
+    message = FakeMessage(text='/stats', user=FakeUser(ADMIN))
+    await admin.on_stats(message)
+    assert u'сводка' in message.answers[0]
+    кнопки = [b.text for row in message.markups[0].inline_keyboard for b in row]
+    assert u'• Сводка' in кнопки and u'Воронка' in кнопки and u'Где люди сейчас' in кнопки
+    assert u'📥 Все люди таблицей (Excel)' in кнопки
+
+
+async def test_кнопка_раздела_правит_то_же_сообщение():
+    call = FakeCall('st:fun:30', user=FakeUser(ADMIN))
+    await admin.on_stats_button(call)
+    assert u'Воронка' in call.edited[0] and u'за 30 дней' in call.edited[0]
+
+
+async def test_кнопка_статистики_чужому_не_открывается():
+    call = FakeCall('st:fun:7', user=FakeUser(555))
+    await admin.on_stats_button(call)
+    assert call.edited == [] and call.answers == [u'Нет доступа']
+
+
+async def test_выгрузка_таблицей_уходит_документом():
+    call = FakeCall('st:csv:7', user=FakeUser(ADMIN))
+    await admin.on_stats_button(call)
+    документы = [s for s in call.bot.sent if s[0] == 'document']
+    assert документы and документы[0][2].endswith('.csv')
+
+
+async def test_stats_csv_командой():
+    message = FakeMessage(text='/stats csv', user=FakeUser(ADMIN))
+    await admin.on_stats(message, SimpleNamespace(args='csv'))
+    assert [s for s in message.bot.sent if s[0] == 'document']

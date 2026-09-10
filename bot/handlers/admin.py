@@ -11,12 +11,14 @@ import html
 import logging
 import os
 import re
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import backup, config, db, delivery, funnel, scheduler, stats, texts
+from .. import (backup, config, db, delivery, funnel, insights, keyboards, scheduler,
+                stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -217,11 +219,50 @@ async def on_status(message: Message):
 
 
 @router.message(Command('stats'))
-async def on_stats(message: Message):
-    u"""Откуда приходят люди: сегодня, за неделю, за всё время."""
+async def on_stats(message: Message, command: CommandObject | None = None):
+    u"""Подробная статистика разделами с кнопками; «/stats csv» — таблица.
+
+    Sharp 11.09.2026: «статистика маленькая, сильно расширь». Разделы и
+    расчёты — bot/insights.py.
+    """
     if not _can_stats(message):
         return
-    await message.answer(stats.report())
+    arg = ((command.args if command else '') or '').strip().lower()
+    if arg in ('csv', 'таблица', 'выгрузка', 'excel'):
+        await _send_csv(message.bot, message.chat.id)
+        return
+    await message.answer(insights.render('sum', '7'),
+                         reply_markup=keyboards.stats_menu('sum', '7'))
+
+
+async def _send_csv(bot, chat_id: int) -> None:
+    u"""Все люди таблицей: откуда пришли, докуда дошли, ответы, покупки."""
+    name = 'marathon-%s.csv' % datetime.now(insights.MSK).strftime('%Y-%m-%d')
+    await bot.send_document(chat_id, BufferedInputFile(insights.csv_bytes(), filename=name),
+                            caption=texts.STATS_CSV_CAPTION)
+
+
+@router.callback_query(F.data.startswith('st:'))
+async def on_stats_button(call: CallbackQuery):
+    u"""Кнопки разделов и периодов под /stats — правят то же сообщение."""
+    chat_id = call.message.chat.id if call.message else None
+    if not config.can_stats(call.from_user.id, chat_id):
+        await call.answer(u'Нет доступа')
+        return
+    parts = (call.data.split(':') + ['', ''])[:3]
+    section = parts[1] if parts[1] in insights.SECTIONS or parts[1] == 'csv' else 'sum'
+    period = parts[2] if parts[2] in insights.PERIODS else '7'
+    if section == 'csv':
+        await call.answer(u'Готовлю таблицу…')
+        await _send_csv(call.bot, chat_id)
+        return
+    try:
+        await call.message.edit_text(insights.render(section, period),
+                                     reply_markup=keyboards.stats_menu(section, period))
+    except Exception as err:                       # нажали ту же кнопку — текст не менялся
+        if 'not modified' not in str(err):
+            log.warning(u'раздел статистики %s не показали: %s', section, err)
+    await call.answer()
 
 
 # Команды по-русски: заказчик набирает их с телефона и латиницу не ищет.
