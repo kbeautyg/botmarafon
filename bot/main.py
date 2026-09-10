@@ -48,6 +48,12 @@ async def run():
     restored = await backup.restore(bot)
     if restored:
         log.info(u'из закрепа у админа восстановлено записей: %d', restored)
+    # Записи, залитые самим ботом (tools/upload_days_bot.py), — поверх
+    # закрепа; закреп тут же обновляется, чтобы хранил уже новые file_id.
+    applied = backup.apply_committed()
+    if applied:
+        log.info(u'записи дней из media/days.json: %s', u', '.join(applied))
+        await backup.save(bot)
     if config.on_railway() and not config.db_persistent():
         # Молчать нельзя: узнаем о потере базы от заказчика, как 2 сентября.
         log.warning(u'база %s не на диске — пропадёт при деплое', config.DB_PATH)

@@ -86,3 +86,45 @@ async def test_беда_телеграма_не_ломает_сохранени�
 def test_разбор_терпит_мусор():
     text = backup.TAG + u' — заметка\nчто-то не то\nday1 video X\nday9 video Y\nreview3 photo P'
     assert backup.parse(text) == [('day1', 'video', 'X'), ('review3', 'photo', 'P')]
+
+
+# ------------------------------------------- записи, залитые самим ботом
+
+def _days_file(tmp_path, data):
+    import json
+    path = tmp_path / 'days.json'
+    path.write_text(json.dumps(data), encoding='utf-8')
+    return str(path)
+
+
+def test_file_id_из_файла_ставится_поверх_старой_записи(tmp_path):
+    u"""10.09.2026: вертикальные записи залил бот, file_id приехали с коммитом."""
+    db.put_content('day1', 'video', 'OLD1')
+    path = _days_file(tmp_path, {'day1': 'NEW1', 'day2': 'NEW2'})
+
+    assert backup.apply_committed(path) == ['day1', 'day2']
+    assert db.get_content('day1') == ('video', 'NEW1')
+    assert db.get_content('day2') == ('video', 'NEW2')
+
+
+def test_тот_же_file_id_второй_раз_не_применяется(tmp_path):
+    path = _days_file(tmp_path, {'day1': 'NEW1'})
+    backup.apply_committed(path)
+    assert backup.apply_committed(path) == []
+
+
+def test_ручная_загрузка_после_файла_не_перетирается_деплоем(tmp_path):
+    u"""Админ залил день руками — следующий деплой с тем же файлом его не трогает."""
+    path = _days_file(tmp_path, {'day1': 'NEW1'})
+    backup.apply_committed(path)
+    db.put_content('day1', 'video', 'MANUAL')
+
+    assert backup.apply_committed(path) == []
+    assert db.get_content('day1') == ('video', 'MANUAL')
+
+
+def test_нет_файла_или_он_битый_ничего_не_ломает(tmp_path):
+    assert backup.apply_committed(str(tmp_path / 'нет.json')) == []
+    broken = tmp_path / 'broken.json'
+    broken.write_text('{не json', encoding='utf-8')
+    assert backup.apply_committed(str(broken)) == []

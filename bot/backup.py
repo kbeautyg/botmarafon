@@ -11,13 +11,20 @@ u"""Запас записей дней — в закрепе у админа.
 дней и отзывы-картинки больше не теряются, в каком бы порядке ни делали
 диск и загрузку.
 """
+import json
 import logging
+import os
 
 from aiogram import Bot
 
 from . import config, db
 
 log = logging.getLogger(__name__)
+
+# Записи дней, загруженные в обход админского чата (tools/upload_days_bot.py):
+# сам бот заливает файл через MTProto (там предел 2 ГБ, а не 50 МБ Bot API),
+# а file_id кладётся сюда и приезжает с деплоем.
+COMMITTED = os.path.join(config.ROOT, 'media', 'days.json')
 
 TAG = u'#хранилище'
 KEYS = tuple('day%d' % n for n in (1, 2, 3, 4)) + tuple('review%d' % n for n in range(1, 10))
@@ -69,6 +76,41 @@ async def save(bot: Bot) -> None:
             await bot.pin_chat_message(admin, sent.message_id, disable_notification=True)
         except Exception as err:                       # noqa: BLE001 — любая ошибка телеграма
             log.warning(u'закреп у админа %s не обновили: %s', admin, err)
+
+
+def apply_committed(path: str = COMMITTED) -> list[str]:
+    u"""Поставить записи дней из media/days.json. Вернуть, какие дни сменились.
+
+    Зачем. 10.09.2026 записи пересобрали вертикально (300–800 МБ), а залить
+    их руками в админский чат было некому — людям продолжали уходить старые.
+    Тогда их залил сам бот (tools/upload_days_bot.py), а file_id приехали
+    сюда с коммитом.
+
+    Каждый file_id применяется ОДИН раз: отметка committed:dayN помнит, что
+    уже стояло. Поэтому если админ потом зальёт день руками, следующий
+    деплой его не перетрёт — перетрёт только новый file_id в файле.
+    """
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as err:
+        log.warning(u'media/days.json не прочитали: %s', err)
+        return []
+    changed = []
+    for key in ('day1', 'day2', 'day3', 'day4'):
+        file_id = str((data or {}).get(key) or '').strip()
+        if not file_id:
+            continue
+        mark = 'committed:%s' % key
+        seen = db.get_content(mark)
+        if seen and seen[1] == file_id:
+            continue
+        db.put_content(key, 'video', file_id)
+        db.put_content(mark, 'committed', file_id)
+        changed.append(key)
+    return changed
 
 
 async def restore(bot: Bot) -> int:
