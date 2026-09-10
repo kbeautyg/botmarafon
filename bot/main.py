@@ -38,6 +38,9 @@ async def run():
 
     me = await bot.get_me()
     log.info(u'бот @%s запущен, база %s', me.username, config.DB_PATH)
+    log.info(u'доступ: админов %d, статистика (STATS_IDS) %d%s',
+             len(config.ADMIN_IDS), len(config.STATS_IDS),
+             u' — не понято: %s' % u', '.join(config.IDS_SKIPPED) if config.IDS_SKIPPED else u'')
     # Приветствие заказчика — на пустом экране до кнопки «Старт», а не
     # сообщением после неё (03.09.2026). Не вышло — не беда, бот работает.
     try:

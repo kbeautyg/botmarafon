@@ -7,6 +7,8 @@ u"""Настройки из окружения.
 """
 import os
 
+import re
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,9 +16,29 @@ load_dotenv()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _ids(raw: str) -> tuple[int, ...]:
-    u"""Список числовых id из строки «111, 222»."""
-    return tuple(int(x) for x in raw.replace(';', ',').split(',') if x.strip())
+# Что в ADMIN_IDS / STATS_IDS не удалось понять как id — для /status.
+IDS_SKIPPED: list[str] = []
+
+
+def _ids(raw: str | None) -> tuple[int, ...]:
+    u"""Список числовых id: «111, 222», «111;222», «111 222», в кавычках — всё годится.
+
+    Раньше строка делилась только по запятой и каждый кусок шёл в int():
+    одна кавычка или пробел вместо запятой роняли бота целиком на старте, а
+    @ник вместо числа — тоже. Sharp 10.09.2026 добавил AleX в переменные, а
+    доступа так и не появилось. Теперь непонятное пропускаем и запоминаем —
+    /status покажет, что именно бот не понял.
+    """
+    out = []
+    for token in re.split(r'[\s,;]+', str(raw or '')):
+        token = token.strip().strip('"\'')
+        if not token:
+            continue
+        if token.lstrip('-').isdigit():
+            out.append(int(token))
+        else:
+            IDS_SKIPPED.append(token)
+    return tuple(dict.fromkeys(out))
 
 
 def _int(raw: str | None, default: int) -> int:

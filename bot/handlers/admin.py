@@ -7,6 +7,7 @@ u"""Админка: загрузка записей дней, проверка �
 мгновенно, без перезаливки и без ограничения по размеру.
 """
 import asyncio
+import html
 import logging
 import os
 import re
@@ -203,6 +204,15 @@ async def on_status(message: Message):
                  % (counters['users'], counters['launched']))
     lines.append(u'Шагов в очереди: %d · заявок на покупку: %d'
                  % (counters['jobs'], counters['purchases']))
+    # Кого бот реально видит в доступе: правка переменных в Railway не
+    # действует, пока её не применили деплоем, — отсюда это видно сразу.
+    listed = lambda ids: u', '.join(str(i) for i in ids) or u'—'
+    lines.append(u'')
+    lines.append(u'Доступ — админы: %s' % listed(config.ADMIN_IDS))
+    lines.append(u'Доступ — статистика (STATS_IDS): %s' % listed(config.STATS_IDS))
+    if config.IDS_SKIPPED:
+        lines.append(u'⚠️ В ADMIN_IDS/STATS_IDS бот не понял: %s — нужны числовые id '
+                     u'через запятую' % html.escape(u', '.join(config.IDS_SKIPPED)))
     await message.answer(u'\n'.join(lines))
 
 

@@ -100,6 +100,20 @@ async def test_stats_ids_открывает_статистику_но_не_за�
     assert not admin.from_admin(video)
 
 
+async def test_status_показывает_кого_бот_видит_в_доступе(monkeypatch):
+    u"""Sharp 10.09.2026: добавил AleX в переменные — а бот его не видел.
+    /status обязан показать списки такими, какими их прочитал бот."""
+    monkeypatch.setattr(config, 'STATS_IDS', (350631550,))
+    monkeypatch.setattr(config, 'IDS_SKIPPED', ['@FinancialFlow23'])
+    message = FakeMessage(text='/status', user=FakeUser(ADMIN))
+    await admin.on_status(message)
+
+    текст = message.answers[0]
+    assert u'админы: %d' % ADMIN in текст
+    assert u'(STATS_IDS): 350631550' in текст
+    assert u'@FinancialFlow23' in текст
+
+
 async def test_из_командного_чата_статистика_доступна_всем_участникам():
     message = FakeMessage(text='/stats@finish_marafon_bot', user=FakeUser(555), chat_id=CARE_CHAT)
     assert admin.from_admin(message)
