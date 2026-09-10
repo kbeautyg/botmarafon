@@ -37,3 +37,12 @@ def test_пусто_и_повторы():
     assert config._ids('') == ()
     assert config._ids(None) == ()
     assert config._ids('350631550, 350631550') == (350631550,)
+
+
+def test_павел_и_alex_в_доступе_к_статистике_без_переменных():
+    u"""11.09.2026: переменная ушла не в тот сервис — команда видит статистику всегда."""
+    assert 312701042 in config.STATS_IDS
+    assert 350631550 in config.STATS_IDS
+    assert config.can_stats(350631550)
+    assert config.can_stats(312701042)
+    assert not config.can_stats(555)
