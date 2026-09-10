@@ -29,6 +29,10 @@ async def run():
         raise SystemExit(u'Не заданы настройки:\n  ' + u'\n  '.join(missing))
 
     db.connect(config.DB_PATH)
+    if config.POLL_FALLBACK_HOURS > 0:
+        stale = db.clear_stale_polls()
+        if stale:
+            log.info(u'закрыто устаревших вопросов «посмотрел?»: %d', stale)
 
     bot = Bot(config.BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))

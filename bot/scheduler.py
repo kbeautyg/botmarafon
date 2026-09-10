@@ -19,6 +19,11 @@ log = logging.getLogger(__name__)
 MAX_TRIES = 3
 RETRY_PAUSE = 60
 
+# Ветка ответа → её вопрос: day1_no → day1. Нужна, чтобы закрыть вопрос,
+# когда ветка «нет» пошла сама, по таймеру.
+BRANCH_POLL = {chain: poll for poll, branches in funnel.POLL_BRANCHES.items()
+               for chain in branches.values()}
+
 # Насколько шаг может опоздать, чтобы следующий всё ещё считался от плана.
 GRACE = 5
 
@@ -67,6 +72,31 @@ def _plan_next(user_id: int, chain: str, pos: int, step: funnel.Step,
         schedule(user_id, following[0], following[1], following[2], base=base)
 
 
+def _close_poll(job: dict) -> str | None:
+    u"""Ветка «нет» пошла сама, по таймеру: человек так и не ответил.
+
+    Вопрос закрываем до отправки. Иначе старая кнопка под ним запустила бы
+    ветку второй раз — тот же день и весь остаток воронки параллельно, — а
+    статистика вечно числила бы его «не ответившим» (ревью 11.09.2026).
+    Возвращает закрытый вопрос, чтобы открыть его обратно, если шаг не ушёл.
+    """
+    poll = BRANCH_POLL.get(job['chain'])
+    if not poll or job['pos'] != 0:
+        return None
+    user = db.get_user(job['user_id'])
+    if not user or user.get('poll') != poll:
+        return None
+    db.set_poll(job['user_id'], None)
+    return poll
+
+
+def _reopen_poll(job: dict, poll: str | None) -> None:
+    u"""Шаг не ушёл — вопрос снова открыт. Кнопка под ним остаётся способом
+    продолжить: при повторе через минуту и когда закрывший бота вернётся."""
+    if poll:
+        db.set_poll(job['user_id'], poll)
+
+
 async def run_job(bot: Bot, job: dict) -> None:
     u"""Один шаг: отправить и запланировать следующий."""
     step = funnel.step_at(job['chain'], job['pos'])
@@ -75,17 +105,21 @@ async def run_job(bot: Bot, job: dict) -> None:
         db.drop_job(job['id'])
         return
 
+    closed = _close_poll(job)
+
     try:
         await delivery.perform(bot, job['user_id'], step)
     except delivery.Gone:
         # Человек закрыл бота: снимаем всё, что ему было запланировано,
         # иначе очередь будет биться о него до конца воронки.
         log.info(u'%s закрыл бота — снимаем его очередь', job['user_id'])
+        _reopen_poll(job, closed)
         db.drop_job(job['id'])
         db.drop_chains(job['user_id'], tuple(funnel.CHAINS))
-        db.mark_blocked(job['user_id'])
+        _for_stats(db.mark_blocked, job['user_id'])
         return
     except Exception as err:
+        _reopen_poll(job, closed)
         if job['tries'] + 1 >= MAX_TRIES:
             log.exception(u'шаг %s#%s для %s провален окончательно: %s',
                           job['chain'], job['pos'], job['user_id'], err)
@@ -100,13 +134,24 @@ async def run_job(bot: Bot, job: dict) -> None:
         return
 
     db.drop_job(job['id'])
-    # Для статистики: докуда человек дошёл. Кружки и отзывы не пишем — их
-    # полтора десятка на человека, и о пути они ничего не говорят.
-    if step.kind in ('day', 'poll', 'offer'):
-        db.log_event(job['user_id'], step.kind, step.ref)
     log.info(u'%s ← %s#%s (%s %s)', job['user_id'], job['chain'], job['pos'],
              step.kind, step.ref if step.ref is not None else '')
     _plan_next(job['user_id'], job['chain'], job['pos'], step, base=job['run_at'])
+    # Для статистики — строго ПОСЛЕ планирования следующего шага: сбой записи
+    # не должен оставить человека без марафона (ревью 11.09.2026). Кружки и
+    # отзывы не пишем — их полтора десятка, о пути они ничего не говорят.
+    if step.kind in ('day', 'poll', 'offer'):
+        _for_stats(db.log_event, job['user_id'], step.kind, step.ref)
+    # дошло — значит, бот у человека открыт, даже если раньше он его закрывал
+    _for_stats(db.unblock, job['user_id'])
+
+
+def _for_stats(write, *args) -> None:
+    u"""Запись только для статистики: её сбой воронку не останавливает."""
+    try:
+        write(*args)
+    except Exception as err:
+        log.warning(u'запись для статистики не удалась (%s): %s', write.__name__, err)
 
 
 async def tick(bot: Bot) -> int:

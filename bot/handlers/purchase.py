@@ -37,6 +37,7 @@ async def on_buy(call: CallbackQuery):
         return
 
     number = db.add_purchase(call.from_user.id, product)
+    db.unblock(call.from_user.id)              # нажал кнопку — бот у него открыт
     await call.answer(u'Заявка принята')
     await call.message.answer(texts.OFFER_DONE)
 

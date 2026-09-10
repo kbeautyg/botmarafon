@@ -28,6 +28,7 @@ MSK = ZoneInfo('Europe/Moscow')
 DAY = 86400
 LIMIT = 3900                      # запас до 4096 — предела сообщения Telegram
 TRACK_SINCE = u'11.09.2026'
+TRACK_TS = datetime(2026, 9, 11, tzinfo=ZoneInfo('Europe/Moscow')).timestamp()
 
 SECTIONS = {
     'sum': u'Сводка',
@@ -96,15 +97,27 @@ def _reached(p: dict) -> int:
     """
     u = p['u']
     days = set(p['days'])
-    days |= {_day_of(k) for k in p['answers']}
     days |= {_day_of(k) for k in p['polls']}
     days.add(_day_of(u.get('poll')))
+    # Ответ на вопрос N запускает ветку, которая через секунды шлёт день N+1.
+    # Ветки в очереди больше нет — значит, день N+1 уже ушёл (ревью 11.09).
+    for poll in p['answers']:
+        n = _day_of(poll)
+        if n:
+            days.add(n)
+            branches = set(funnel.POLL_BRANCHES.get(poll, {}).values())
+            if not branches & p['pending']:
+                days.add(n + 1)
     if p['pending']:
         days |= {n for n in (1, 2, 3, 4) if funnel.day_delivered(p['pending'], n)}
     days.discard(0)
     reached = LAUNCHED if u.get('launched_at') else 0
     if days:
-        reached = max(reached, 1 + max(days))
+        reached = max(reached, 1 + min(max(days), 4))
+    # Очередь пуста после 4-го дня — единственным продолжением были кнопки
+    # покупки (after_day4). У начавших до учёта шагов это и есть «дошёл».
+    if 4 in days and not p['pending'] and u.get('launched_at') and not u.get('blocked_at'):
+        reached = max(reached, OFFER)
     if p['offer']:
         reached = max(reached, OFFER)
     if p['buys']:
@@ -117,7 +130,10 @@ def _position(p: dict) -> str:
     u = p['u']
     if u.get('blocked_at'):
         return 'blocked'
-    if u.get('poll'):
+    # Вопрос живой, только пока в очереди ждёт ветка «нет»: без неё он
+    # устарел — бот уже повёл человека дальше сам (ревью 11.09).
+    fallback = funnel.POLL_BRANCHES.get(u.get('poll') or '', {}).get('no')
+    if u.get('poll') and (config.POLL_FALLBACK_HOURS <= 0 or fallback in p['pending']):
         return 'a%d' % _day_of(u['poll'])
     nxt = p['next']
     if nxt:
@@ -227,6 +243,24 @@ def reach_counts(group: list[dict]) -> list[int]:
     return [sum(1 for p in group if p['reached'] >= i) for i in range(len(FUNNEL))]
 
 
+def _moving(p: dict) -> bool:
+    u"""Ещё идёт по расписанию: есть шаги в очереди и бота не закрыл."""
+    return bool(p['pending']) and not p['u'].get('blocked_at')
+
+
+def stopped_counts(group: list[dict]) -> list[int]:
+    u"""Сколько остановилось на каждой строке: дошли до неё и дальше не идут.
+
+    Идущие по расписанию не потеряны — весь путь занимает от шести часов до
+    полутора суток, и сегодняшние люди просто ещё в дороге (ревью 11.09).
+    """
+    out = [0] * len(FUNNEL)
+    for p in group:
+        if not _moving(p):
+            out[p['reached']] += 1
+    return out
+
+
 def _pct(part: float, whole: float) -> str:
     return u'%d%%' % round(part * 100.0 / whole) if whole else u'—'
 
@@ -295,15 +329,16 @@ def section_sum(m: dict, period: str, now: float) -> str:
     if prev:
         delta = u' <i>(%+d%% к прошлым %s дн.)</i>' % (
             round((c[0] - prev) * 100.0 / prev), period)
+    # по людям, а не по нажатиям: кнопку жмут и дважды
     products = {}
     for p in g:
-        for b in p['buys']:
-            products[b['product']] = products.get(b['product'], 0) + 1
-    bought_line = u', '.join(u'%s %d' % (PRODUCT_NAMES.get(k, k), n)
+        for key in {b['product'] for b in p['buys']}:
+            products[key] = products.get(key, 0) + 1
+    bought_line = u', '.join(u'%s %d' % (PRODUCT_NAMES.get(k, _esc(k)), n)
                              for k, n in sorted(products.items()))
     everyone = list(m['people'].values())
-    running = sum(1 for p in everyone if p['pending'] and not p['u'].get('blocked_at'))
-    waiting = sum(1 for p in everyone if p['u'].get('poll'))
+    running = sum(1 for p in everyone if _moving(p))
+    waiting = sum(1 for p in everyone if p['position'].startswith('a'))
 
     lines = [_head(u'Марафон — сводка', period), u'',
              u'👥 Пришли в бота: <b>%d</b>%s' % (c[0], delta),
@@ -339,7 +374,8 @@ def section_sum(m: dict, period: str, now: float) -> str:
         rate, launched, src = max(rated)
         lines.append(u'🏆 Лучше всех доходит до 4-го дня: <b>%s</b> — %d%% из %d запустивших'
                      % (_esc(stats.label(src)), round(rate * 100), launched))
-    drops = [(c[i - 1] - c[i], i) for i in range(2, len(FUNNEL))]
+    stopped = stopped_counts(g)
+    drops = [(stopped[i - 1], i) for i in range(2, len(FUNNEL))]
     lost, i = max(drops) if drops else (0, 0)
     if lost > 0:
         lines.append(u'📍 Больше всего теряем: «%s» → «%s», −%d (%s)'
@@ -350,15 +386,20 @@ def section_sum(m: dict, period: str, now: float) -> str:
 
 def section_fun(m: dict, period: str, now: float) -> str:
     lo, hi, _ = bounds(period, now)
-    c = reach_counts(cohort(m, lo, hi))
+    group = cohort(m, lo, hi)
+    c = reach_counts(group)
+    stopped = stopped_counts(group)
+    moving = sum(1 for p in group if _moving(p))
     lines = [_head(u'Воронка', period),
-             u'Из %d пришедших — докуда дошли; справа — сколько потеряли на шаге:' % c[0],
+             u'Из %d пришедших — докуда дошли; справа — сколько остановились перед шагом:' % c[0],
              u'<pre>']
     for i, (_, label) in enumerate(FUNNEL):
-        lost = c[i - 1] - c[i] if i else 0
+        lost = stopped[i - 1] if i else 0
         lines.append(_esc(u'%-15s %4d %4s %s %s' % (
             label, c[i], _pct(c[i], c[0]), _bar(c[i], c[0]), (u'−%d' % lost) if lost else u'')))
     lines.append(u'</pre>')
+    if moving:
+        lines.append(u'⏳ Ещё в пути по расписанию: %d — идут дальше, в потери не считаются.' % moving)
     if c[1]:
         lines.append(u'От запустивших до 4-го дня доходят %s, до кнопок — %s, покупают — %s.'
                      % (_pct(c[5], c[1]), _pct(c[6], c[1]), _pct(c[7], c[1])))
@@ -424,9 +465,11 @@ def section_days(m: dict, period: str, now: float) -> str:
 
 
 def section_time(m: dict, period: str, now: float) -> str:
-    people = list(m['people'].values())
+    # заявки с сайта марафон не запускают — как и в воронке, считаем без них
+    people = [p for p in m['people'].values() if p['u'].get('source') != LEAD_SOURCE]
     today = datetime.fromtimestamp(now, MSK).replace(hour=0, minute=0, second=0, microsecond=0)
-    lines = [_head(u'По времени', None), u'Последние 14 дней, время московское:', u'<pre>',
+    lines = [_head(u'По времени', None),
+             u'Последние 14 дней, время московское, без заявок с сайта:', u'<pre>',
              _esc(u'дата   пришли зап  д4 куп')]
     for back in range(13, -1, -1):
         start = (today - timedelta(days=back)).timestamp()
@@ -434,10 +477,13 @@ def section_time(m: dict, period: str, now: float) -> str:
         came = sum(1 for p in people if start <= (p['u'].get('started_at') or 0) < end)
         launched = sum(1 for p in people if start <= (p['u'].get('launched_at') or 0) < end)
         day4 = sum(1 for p in people if start <= p['day_at'].get(4, 0) < end)
+        # до начала учёта шагов 4-й день не записывался — прочерк, а не ноль
+        day4_cell = str(day4) if end > TRACK_TS else u'—'
         bought = sum(1 for p in people for b in p['buys'] if start <= b['at'] < end)
         label = (today - timedelta(days=back)).strftime('%d.%m')
-        lines.append(_esc(u'%s %6d %4d %3d %3d' % (label, came, launched, day4, bought)))
+        lines.append(_esc(u'%s %6d %4d %3s %3d' % (label, came, launched, day4_cell, bought)))
     lines.append(u'</pre>')
+    lines.append(u'<i>«д4» — дошли до 4-го дня; записывается с %s.</i>' % TRACK_SINCE)
 
     since = now - 30 * DAY
     recent = [p for p in people if (p['u'].get('started_at') or 0) >= since]
@@ -485,8 +531,9 @@ def section_buy(m: dict, period: str, now: float) -> str:
         key = stats.label(p['u'].get('source') or '')
         by_source[key] = by_source.get(key, 0) + 1
     if by_source:
+        ranked = sorted(by_source.items(), key=lambda kv: -kv[1])
         lines.append(u'По источникам: ' + u' · '.join(
-            u'%s %d' % (_esc(k), n) for k, n in sorted(by_source.items(), key=lambda kv: -kv[1])))
+            u'%s %d' % (_esc(k), n) for k, n in ranked[:10]) + (u' · …' if len(ranked) > 10 else u''))
     if buys:
         lines += [u'', u'<b>Последние:</b>']
         for b, p in sorted(buys, key=lambda bp: -bp[0]['at'])[:12]:
@@ -538,6 +585,19 @@ CSV_HEADER = (u'id', u'ник', u'имя', u'пришёл (МСК)', u'исто�
               u'дошёл до', u'ответ после дня 1', u'ответ после дня 2', u'ответ после дня 3',
               u'купил', u'закрыл бота (МСК)', u'сейчас', u'писал в заботу')
 ANSWER_NAMES = {'yes': u'да', 'no': u'нет'}
+FORMULA_START = (u'=', u'+', u'-', u'@', u'\t', u'\r')
+
+
+def _cell(value) -> str:
+    u"""Текстовая ячейка, безопасная для Excel.
+
+    Имя в Telegram может быть любым: начнись оно с «=», «+», «-» или «@» —
+    Excel выполнит ячейку как формулу (так через таблицу подсовывают ссылки
+    и команды). Апостроф в начале Excel и Google Таблицы прячут и
+    показывают текст как есть.
+    """
+    text = u'' if value is None else str(value)
+    return u"'" + text if text.startswith(FORMULA_START) else text
 
 
 def csv_bytes(snap: dict | None = None) -> bytes:
@@ -550,16 +610,18 @@ def csv_bytes(snap: dict | None = None) -> bytes:
     full = '%d.%m.%Y %H:%M'
     for p in sorted(m['people'].values(), key=lambda q: -(q['u'].get('started_at') or 0)):
         u = p['u']
+        # Ник — без «@»: в таблице он просто текст, а «@» в начале ячейки
+        # Excel принял бы за формулу.
         writer.writerow((
-            u['user_id'], u'@%s' % u['username'] if u.get('username') else u'',
-            u.get('first_name') or u'', _when(u.get('started_at'), full),
-            stats.label(u.get('source') or ''), _when(u.get('launched_at'), full),
+            u['user_id'], _cell(u.get('username') or u''),
+            _cell(u.get('first_name') or u''), _when(u.get('started_at'), full),
+            _cell(stats.label(u.get('source') or '')), _when(u.get('launched_at'), full),
             FUNNEL[p['reached']][1],
             ANSWER_NAMES.get(p['answers'].get('day1', ('', 0))[0], u''),
             ANSWER_NAMES.get(p['answers'].get('day2', ('', 0))[0], u''),
             ANSWER_NAMES.get(p['answers'].get('day3', ('', 0))[0], u''),
-            u', '.join(u'%s %s' % (PRODUCT_NAMES.get(b['product'], b['product']),
-                                   _when(b['at'], full)) for b in p['buys']),
+            _cell(u', '.join(u'%s %s' % (PRODUCT_NAMES.get(b['product'], b['product']),
+                                         _when(b['at'], full)) for b in p['buys'])),
             _when(u.get('blocked_at'), full),
             titles.get(p['position'], u''),
             p['care'] or u''))

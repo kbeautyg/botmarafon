@@ -221,6 +221,9 @@ def reset_funnel(user_id: int) -> None:
     u"""Убрать все шаги и ответы человека — для повторного прогона."""
     _run('DELETE FROM jobs WHERE user_id=?', (user_id,))
     _run('DELETE FROM answers WHERE user_id=?', (user_id,))
+    # и записанные шаги прошлого прогона: иначе статистика считала бы
+    # прошлые вопросы безответными и мерила время ответа через прогоны
+    _run('DELETE FROM events WHERE user_id=?', (user_id,))
     _run('UPDATE users SET launched_at=NULL, poll=NULL WHERE user_id=?', (user_id,))
 
 
@@ -350,6 +353,28 @@ def mark_blocked(user_id: int) -> None:
     u"""Человек закрыл бота — отметить момент (первый, повторы не трогаем)."""
     _run('UPDATE users SET blocked_at=? WHERE user_id=? AND blocked_at IS NULL',
          (time.time(), user_id))
+
+
+def unblock(user_id: int) -> None:
+    u"""Бот у человека снова открыт: дошло сообщение или он нажал кнопку."""
+    _run('UPDATE users SET blocked_at=NULL WHERE user_id=? AND blocked_at IS NOT NULL',
+         (user_id,))
+
+
+def clear_stale_polls() -> int:
+    u"""Закрыть вопросы, по которым бот уже сам повёл человека дальше.
+
+    Пока вопрос ждёт ответа, в очереди стоит ветка «нет» (dayN_no) — через
+    POLL_FALLBACK_HOURS она пойдёт сама. Её нет — значит, прошла, а вопрос
+    остался открытым: до 11.09.2026 его на таймере не закрывали, и старая
+    кнопка под ним запускала ветку повторно. Закрывших бота не трогаем:
+    вернутся — кнопка под вопросом продолжит марафон. Вызывать, только
+    когда добивание включено (POLL_FALLBACK_HOURS > 0).
+    """
+    cur = _run("UPDATE users SET poll=NULL WHERE poll IS NOT NULL AND blocked_at IS NULL "
+               "AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.user_id = users.user_id "
+               "AND jobs.chain = users.poll || '_no')")
+    return cur.rowcount
 
 
 def snapshot() -> dict[str, list[dict]]:

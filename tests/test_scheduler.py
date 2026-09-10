@@ -44,13 +44,20 @@ async def test_опросник_ставит_отложенное_добиван
     u"""Не ответил — через POLL_FALLBACK_HOURS уходит ветка «нет»."""
     scheduler.start_chain(1, 'after_day1')
     bot = FakeBot()
-    for _ in range(3):
+    for _ in range(2):                                   # кружок, вопрос
         сдвинуть_время(1)
         await scheduler.tick(bot)
 
     ветки = {job['chain'] for job in db.user_jobs(1)}
     assert 'day1_no' in ветки
     assert db.get_user(1)['poll'] == 'day1'
+
+    # Ветка «нет» пошла сама — вопрос закрыт: старая кнопка под ним больше
+    # не запустит ветку второй раз (ревью 11.09.2026).
+    сдвинуть_время(1)
+    await scheduler.tick(bot)
+    assert db.get_user(1)['poll'] is None
+    assert 'day1_no' in {job['chain'] for job in db.user_jobs(1)}
 
 
 @pytest.mark.asyncio

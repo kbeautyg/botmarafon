@@ -30,6 +30,7 @@ async def on_answer(call: CallbackQuery):
 
     branches = funnel.POLL_BRANCHES[poll]
     db.save_answer(user_id, poll, answer)
+    db.unblock(user_id)                        # нажал кнопку — бот у него открыт
     db.set_poll(user_id, None)
     db.drop_chains(user_id, tuple(branches.values()))
 
