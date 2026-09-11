@@ -625,7 +625,7 @@ def csv_bytes(snap: dict | None = None) -> bytes:
         writer.writerow((
             u['user_id'], _cell(u.get('username') or u''),
             _cell(u.get('first_name') or u''), _when(u.get('started_at'), full),
-            _cell(stats.label(u.get('source') or '')), _when(u.get('launched_at'), full),
+            _cell(stats.source_label(u)), _when(u.get('launched_at'), full),
             FUNNEL[p['reached']][1],
             ANSWER_NAMES.get(p['answers'].get('day1', ('', 0))[0], u''),
             ANSWER_NAMES.get(p['answers'].get('day2', ('', 0))[0], u''),

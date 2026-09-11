@@ -23,6 +23,8 @@ u"""Старт — и сразу воронка.
 import html
 import logging
 import re
+import time
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
@@ -50,6 +52,27 @@ def _who(user) -> str:
     name = html.escape(user.full_name or u'без имени')
     handle = u'@%s' % user.username if user.username else u'без ника'
     return u'%s · %s · <code>%s</code>' % (name, handle, user.id)
+
+
+def _nth(n: int) -> str:
+    return u'в первый раз' if n <= 1 else u'%d-й раз' % n
+
+
+def _entry_text(user, template: str, **extra) -> str:
+    known = db.get_user(user.id) or {}
+    when = datetime.fromtimestamp(time.time(), stats.MSK).strftime('%d.%m %H:%M')
+    return template.format(who=_who(user), when=when,
+                           source=stats.source_label(known), **extra)
+
+
+async def _announce(bot, user, text: str) -> None:
+    u"""Сообщение о входе — в чат уведомлений. Его сбой человека не касается."""
+    if not config.ENTRY_CHAT_ID:
+        return
+    try:
+        await bot.send_message(config.ENTRY_CHAT_ID, text)
+    except Exception as err:
+        log.warning(u'уведомление о входе %s не ушло: %s', user.id, err)
 
 
 async def _lead_arrived(message: Message, number: str) -> None:
@@ -98,8 +121,14 @@ async def on_start(message: Message, command: CommandObject | None = None):
     db.remember_user(user_id, message.from_user.username, message.from_user.first_name, source)
 
     if lead:
+        if lead.group(1):
+            db.set_lead_no(user_id, int(lead.group(1)))
         await _lead_arrived(message, lead.group(1))
         log.info(u'заявка с сайта: человек %s открыл бота', user_id)
+        # в чат заботы заявка уже упала — туда же второй раз не шлём
+        if config.ENTRY_CHAT_ID != config.SUPPORT_CHAT_ID:
+            await _announce(message.bot, message.from_user,
+                            _entry_text(message.from_user, texts.ENTRY_LEAD))
         return
 
     # Повторный /start воронку не удваивает: mark_launched проходит один раз.
@@ -117,7 +146,12 @@ async def on_start(message: Message, command: CommandObject | None = None):
         # правду, а не «придёт по расписанию».
         _launching.discard(user_id)
         scheduler.start_chain(user_id, 'launch')
+        nth = db.count_launch(user_id)
         log.info(u'воронка запущена для %s', user_id)
+        # Уведомление тоже здесь: даже если приветствие не ушло, вход был и
+        # марафон запущен — команда должна это видеть (AleX 11.09.2026).
+        await _announce(message.bot, message.from_user,
+                        _entry_text(message.from_user, texts.ENTRY_LAUNCHED, nth=_nth(nth)))
 
 
 @router.callback_query(F.data == 'restart')
@@ -127,6 +161,7 @@ async def on_restart(call: CallbackQuery):
     db.reset_funnel(user_id)
     db.mark_launched(user_id)
     scheduler.start_chain(user_id, 'launch')
+    nth = db.count_launch(user_id)
     # Кнопку убираем, чтобы её не нажали второй раз и не задвоили воронку.
     try:
         await call.message.edit_reply_markup(reply_markup=None)
@@ -135,3 +170,5 @@ async def on_restart(call: CallbackQuery):
     await call.message.answer(texts.RESTART_DONE, reply_markup=keyboards.care())
     await call.answer()
     log.info(u'воронка перезапущена по кнопке для %s', user_id)
+    await _announce(call.bot, call.from_user,
+                    _entry_text(call.from_user, texts.ENTRY_LAUNCHED, nth=_nth(nth)))

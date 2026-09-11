@@ -63,6 +63,10 @@ PURCHASE_CHAT_ID = _int(os.getenv('PURCHASE_CHAT_ID'), 0)
 # Пусто — сводка не шлётся, остаётся команда /stats.
 STATS_CHAT_ID = _int(os.getenv('STATS_CHAT_ID'), 0)
 SUPPORT_CHAT_ID = _int(os.getenv('SUPPORT_CHAT_ID'), 0)
+# Куда сразу прилетает каждый вход в бота (AleX 11.09.2026: «как только
+# кто-то зашёл — сообщение: ник, id, время, запустил ли марафон и в который
+# раз»). Пусто — в чат сводок STATS_CHAT_ID; бот должен состоять в чате.
+ENTRY_CHAT_ID = _int(os.getenv('ENTRY_CHAT_ID'), 0) or STATS_CHAT_ID
 
 ADMIN_IDS = _ids(os.getenv('ADMIN_IDS', ''))
 
@@ -87,7 +91,7 @@ def can_stats(user_id: int, chat_id: int | None = None) -> bool:
     и заводить под них ещё одну переменную незачем."""
     if user_id in ADMIN_IDS or user_id in STATS_IDS:
         return True
-    team = {c for c in (STATS_CHAT_ID, SUPPORT_CHAT_ID, PURCHASE_CHAT_ID) if c}
+    team = {c for c in (STATS_CHAT_ID, SUPPORT_CHAT_ID, PURCHASE_CHAT_ID, ENTRY_CHAT_ID) if c}
     return chat_id is not None and chat_id in team
 
 # Аккаунт службы заботы: кнопка ведёт прямо в переписку с ним. У заказчика

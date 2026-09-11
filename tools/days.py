@@ -84,6 +84,16 @@ DAYS = {
 W, H = 1280, 720
 FPS = 25
 
+# Подпись внизу картинки на сессии (AleX 11.09.2026: «в каждом видео во
+# время сессии чтобы было написано — уже только внизу, т.к. сверху на схеме
+# теперь «ДУХ»: Трансформационная сессия 1, сфера «Предназначение»»).
+SPHERES = {1: u'Предназначение', 2: u'Отношения', 3: u'Здоровье', 4: u'Финансы'}
+CAPTION = u'Трансформационная сессия %d'
+CAPTION_SPHERE = u'сфера «%s»'
+FONT_DIR = u'C:/Windows/Fonts'
+FONTS_BOLD = ('Inter-SemiBold.ttf', 'arialbd.ttf', 'arial.ttf')
+FONTS_TEXT = ('Inter-Medium.ttf', 'arial.ttf')
+
 # ---- Вертикальная сборка 9:16 (Павел и AleX, 10.09.2026) ----
 # Запись Zoom — 640×360, и в ней телефон Павла стоит вертикальной полосой
 # по центру: 204×360 при x=218, одинаково во всех четырёх днях (промерено
@@ -182,6 +192,47 @@ def edges(segments, total):
     return start, end, flashes, sessions
 
 
+def _font(names, size):
+    from PIL import ImageFont
+    for name in names:
+        path = os.path.join(FONT_DIR, name)
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def caption(path, day):
+    u"""Дорисовать внизу картинки сессии плашку с названием сессии и сферой.
+
+    Плашка тёмная полупрозрачная, текст белый, сфера золотом — читается на
+    светлой схеме и с телефона. Правится на месте, картинка уже в кадре.
+    """
+    from PIL import Image, ImageDraw
+    img = Image.open(path).convert('RGBA')
+    w, h = img.size
+    title = _font(FONTS_BOLD, int(h * 0.031))
+    sub = _font(FONTS_TEXT, int(h * 0.027))
+    line1 = CAPTION % day
+    line2 = CAPTION_SPHERE % SPHERES[day]
+
+    layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    pad_x, pad_y, gap = int(w * 0.045), int(h * 0.016), int(h * 0.006)
+    b1 = draw.textbbox((0, 0), line1, font=title)
+    b2 = draw.textbbox((0, 0), line2, font=sub)
+    box_w = max(b1[2] - b1[0], b2[2] - b2[0]) + 2 * pad_x
+    box_h = (b1[3] - b1[1]) + gap + (b2[3] - b2[1]) + 2 * pad_y
+    x0 = (w - box_w) // 2
+    y0 = h - box_h - int(h * 0.028)
+    draw.rounded_rectangle((x0, y0, x0 + box_w, y0 + box_h), radius=int(h * 0.014),
+                           fill=(38, 26, 8, 190))
+    draw.text(((w - (b1[2] - b1[0])) // 2 - b1[0], y0 + pad_y - b1[1]),
+              line1, font=title, fill=(255, 255, 255, 255))
+    draw.text(((w - (b2[2] - b2[0])) // 2 - b2[0], y0 + pad_y + (b1[3] - b1[1]) + gap - b2[1]),
+              line2, font=sub, fill=(243, 199, 96, 255))
+    Image.alpha_composite(img, layer).convert('RGB').save(path)
+
+
 def build(day, source, segments, stage, dst, start=0.0, end=None, flashes=()):
     intro = os.path.join(MEDIA, 'day%d.mp4' % day)
     intro_len = duration(intro)
@@ -241,6 +292,12 @@ def build(day, source, segments, stage, dst, start=0.0, end=None, flashes=()):
             '[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1' % (W, H, W, H, W - 40),
             '-frames:v', '1', '-update', '1', 'session.png', '-y'], cwd=stage)
         session = 'session.png'
+    if session != 'session.png':
+        # широкая сборка берёт схему из media как есть — копия, чтобы не портить
+        shutil.copyfile(session if os.path.isabs(session) else os.path.join(stage, session),
+                        os.path.join(stage, 'session.png'))
+        session = 'session.png'
+    caption(os.path.join(stage, 'session.png'), day)
 
     enable = '+'.join('between(t,%.2f,%.2f)' % (a, b - 1.0 / FPS)
                       for a, b in segments) or '0'

@@ -172,12 +172,21 @@ WHO_FOOTER = (
 CHUNK = 3900                      # запас до 4096 — предела сообщения Telegram
 
 
+def source_label(u: dict) -> str:
+    u"""Источник с номером заявки: «Заявка с сайта №65» — сверяется с сайтом
+    (AleX 11.09.2026 искал людей из бота в отчёте сайта и не нашёл)."""
+    text = label(u.get('source') or '')
+    if u.get('lead_no'):
+        text += u' №%d' % u['lead_no']
+    return text
+
+
 def _who_entry(r: dict, p: dict | None) -> str:
     u"""Две строки на человека: кто и откуда; докуда дошёл и где сейчас."""
     when = datetime.fromtimestamp(r['started_at'], MSK).strftime('%d.%m %H:%M')
     who = html.escape(r['first_name'] or u'без имени')
     handle = u'@%s' % r['username'] if r['username'] else u'без ника'
-    head = u'%s · %s · %s · %s' % (when, who, handle, label(r['source']))
+    head = u'%s · %s · %s · %s' % (when, who, handle, source_label(r))
     if p is None:
         return head + u'\n   ↳ команда проекта'
     from . import insights          # insights сам импортирует stats — поэтому здесь

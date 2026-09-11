@@ -116,6 +116,13 @@ def connect(path: str) -> sqlite3.Connection:
     # 11.09.2026: когда человек закрыл бота — для статистики «ушли».
     if 'blocked_at' not in columns:
         _conn.execute('ALTER TABLE users ADD COLUMN blocked_at REAL')
+    # 12.09.2026: номер заявки с сайта (сверка с заявками сайта) и счётчик
+    # запусков марафона (уведомление о входе: «в который раз»).
+    if 'lead_no' not in columns:
+        _conn.execute('ALTER TABLE users ADD COLUMN lead_no INTEGER')
+    if 'launches' not in columns:
+        _conn.execute('ALTER TABLE users ADD COLUMN launches INTEGER NOT NULL DEFAULT 0')
+        _conn.execute('UPDATE users SET launches=1 WHERE launched_at IS NOT NULL')
     _conn.commit()
     return _conn
 
@@ -182,7 +189,7 @@ def recent_users(limit: int = 30, since: float = 0) -> list[dict]:
     u"""Кто заходил в бота — свежие сверху. Для /кто."""
     rows = _conn.execute(
         'SELECT user_id, username, first_name, started_at, launched_at,'
-        " COALESCE(source, '') AS source FROM users WHERE started_at >= ?"
+        " COALESCE(source, '') AS source, lead_no, launches FROM users WHERE started_at >= ?"
         ' ORDER BY started_at DESC LIMIT ?', (since, limit)).fetchall()
     return [dict(r) for r in rows]
 
@@ -202,6 +209,18 @@ def mark_launched(user_id: int) -> bool:
     cur = _run('UPDATE users SET launched_at=? WHERE user_id=? AND launched_at IS NULL',
                (time.time(), user_id))
     return cur.rowcount > 0
+
+
+def count_launch(user_id: int) -> int:
+    u"""Отметить ещё один запуск марафона; вернуть, который он по счёту."""
+    _run('UPDATE users SET launches=launches+1 WHERE user_id=?', (user_id,))
+    row = _conn.execute('SELECT launches FROM users WHERE user_id=?', (user_id,)).fetchone()
+    return int(row[0]) if row else 1
+
+
+def set_lead_no(user_id: int, number: int) -> None:
+    u"""Номер заявки с сайта — первый, по которому человек пришёл."""
+    _run('UPDATE users SET lead_no=? WHERE user_id=? AND lead_no IS NULL', (number, user_id))
 
 
 def set_poll(user_id: int, poll: str | None) -> None:
@@ -393,7 +412,7 @@ def snapshot() -> dict[str, list[dict]]:
         return [dict(r) for r in _conn.execute(sql).fetchall()]
     return {
         'users': rows("SELECT user_id, username, first_name, started_at, launched_at, "
-                      "COALESCE(source, '') AS source, poll, blocked_at FROM users"),
+                      "COALESCE(source, '') AS source, poll, blocked_at, lead_no, launches FROM users"),
         'events': rows("SELECT user_id, kind, ref, at FROM events "
                        "WHERE kind IN ('day', 'poll', 'offer') ORDER BY at"),
         'answers': rows('SELECT user_id, poll, answer, answered FROM answers'),
