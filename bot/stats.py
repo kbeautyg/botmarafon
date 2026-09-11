@@ -109,7 +109,7 @@ def funnel_lines(since: float) -> str:
         line += u' · отвечали %d' % r['active']
         line += u' · дошли %d (%s)' % (r['finished'], pct(r['finished'], people))
         if r['buys']:
-            line += u' · <b>заявок %d</b>' % r['buys']
+            line += u' · <b>нажали «купить» %d</b>' % r['buys']
         out.append(line)
     return u'\n'.join(out)
 
@@ -131,25 +131,78 @@ def report() -> str:
     ])
 
 
-def who_report(limit: int = 30) -> str:
-    u"""Ответ на /кто: поимённо, кто заходил и откуда.
+# Докуда дошёл человек — по строкам воронки insights.FUNNEL (reached).
+PASSED = (u'—', u'запуск', u'день 1', u'день 2', u'день 3', u'день 4',
+          u'кнопки покупки', u'«купить»')
+
+# Где человек сейчас — ключи insights.POSITIONS, но про одного и без рода.
+PLACE = {
+    'launch': u'смотрит приветствие и отзывы, ждёт 1-й день',
+    'q1': u'1-й день получен, ждёт вопроса',
+    'a1': u'молчит на вопросе после 1-го дня',
+    'd2': u'ждёт 2-й день',
+    'q2': u'2-й день получен, ждёт вопроса',
+    'a2': u'молчит на вопросе после 2-го дня',
+    'd3': u'ждёт 3-й день',
+    'q3': u'3-й день получен, ждёт вопроса',
+    'a3': u'молчит на вопросе после 3-го дня',
+    'd4': u'ждёт 4-й день',
+    'offer_wait': u'4-й день получен, ждёт кнопок покупки',
+    'offer_got': u'кнопки покупки получены',
+    'done': u'марафон пройден',
+    'bought': u'нажата «купить»',
+    'blocked': u'бот закрыт',
+    'lead': u'заявка с сайта, ждёт менеджера',
+    'not_launched': u'марафон не запущен',
+    'idle': u'стоит: шагов в очереди нет',
+}
+CHUNK = 3900                      # запас до 4096 — предела сообщения Telegram
+
+
+def _who_entry(r: dict, p: dict | None) -> str:
+    u"""Две строки на человека: кто и откуда; докуда дошёл и где сейчас."""
+    when = datetime.fromtimestamp(r['started_at'], MSK).strftime('%d.%m %H:%M')
+    who = html.escape(r['first_name'] or u'без имени')
+    handle = u'@%s' % r['username'] if r['username'] else u'без ника'
+    head = u'%s · %s · %s · %s' % (when, who, handle, label(r['source']))
+    if p is None:
+        return head + u'\n   ↳ команда проекта'
+    place = PLACE.get(p['position'], p['position'])
+    blocked = p['u'].get('blocked_at')
+    if blocked:
+        place += u' ' + datetime.fromtimestamp(blocked, MSK).strftime('%d.%m %H:%M')
+    return head + u'\n   ↳ пройдено: %s · сейчас: %s' % (PASSED[p['reached']], place)
+
+
+def who_messages(limit: int = 30) -> list[str]:
+    u"""Ответ на /кто сообщениями не длиннее предела Telegram.
 
     AleX 09.09.2026 просил видеть не только числа, но и людей: «наблюдали,
-    кто в него заходил». Ник — чтобы менеджер мог написать, если человек
-    завис на середине.
+    кто в него заходил». 10.09.2026 — ещё и «напротив каждого, до какого
+    шага дошёл, где остановился и вышел, заблокировал ли бота». Путь
+    считается тем же расчётом, что в подробной статистике (bot/insights.py).
     """
+    from . import insights          # insights сам импортирует stats — поэтому здесь
+
     rows = db.recent_users(limit)
     if not rows:
-        return u'В бота ещё никто не заходил.'
-    out = [u'👥 <b>Кто заходил в бота</b> — последние %d' % len(rows)]
+        return [u'В бота ещё никто не заходил.']
+    people = insights.model()['people']
+    chunks, current = [], u'👥 <b>Кто заходил в бота</b> — последние %d' % len(rows)
     for r in rows:
-        when = datetime.fromtimestamp(r['started_at'], MSK).strftime('%d.%m %H:%M')
-        who = html.escape(r['first_name'] or u'без имени')
-        handle = u'@%s' % r['username'] if r['username'] else u'без ника'
-        mark = u'запустил' if r['launched_at'] else u'<i>не запустил</i>'
-        out.append(u'%s · %s · %s · %s · %s'
-                   % (when, who, handle, label(r['source']), mark))
-    return u'\n'.join(out)
+        entry = _who_entry(r, people.get(r['user_id']))
+        if len(current) + 1 + len(entry) > CHUNK:
+            chunks.append(current)
+            current = entry
+        else:
+            current += u'\n' + entry
+    chunks.append(current)
+    return chunks
+
+
+def who_report(limit: int = 30) -> str:
+    u"""То же одним текстом — для проверок и выгрузок."""
+    return u'\n'.join(who_messages(limit))
 
 
 def links_report(username: str) -> str:

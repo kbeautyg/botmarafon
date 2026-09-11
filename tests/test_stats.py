@@ -112,7 +112,40 @@ def test_список_зашедших_показывает_ник_источн�
     текст = stats.who_report()
     assert u'@u1' in текст and u'@u2' in текст
     assert u'Telegram ← 1' in текст and u'Instagram' in текст
-    assert u'не запустил' in текст
+    assert u'марафон не запущен' in текст
+
+
+def _строка_после(текст, ник):
+    строки = текст.split('\n')
+    i = next(i for i, s in enumerate(строки) if ник in s)
+    return строки[i + 1]
+
+
+def test_кто_показывает_докуда_дошёл_где_сейчас_и_закрыл_ли_бота():
+    u"""AleX 10.09: «напротив каждого — до какого шага дошёл, где остановился,
+    заблокировал ли бота»."""
+    _человек(1, 'tg_1', launched=True)
+    db.log_event(1, 'day', 1)
+    db.log_event(1, 'day', 2)
+    _человек(2, 'ig', launched=True)
+    db.log_event(2, 'day', 1)
+    db.mark_blocked(2)
+    _человек(3, 'zayavka')
+
+    текст = stats.who_report()
+    assert u'пройдено: день 2' in _строка_после(текст, '@u1')
+    второй = _строка_после(текст, '@u2')
+    assert u'пройдено: день 1' in второй and u'бот закрыт' in второй
+    assert u'заявка с сайта, ждёт менеджера' in _строка_после(текст, '@u3')
+
+
+def test_длинный_список_режется_на_сообщения_по_пределу_телеграма():
+    for i in range(1, 91):
+        _человек(i, 'tg_%d' % i, launched=True)
+    части = stats.who_messages(90)
+    assert len(части) > 1
+    assert all(len(ч) <= stats.CHUNK for ч in части)
+    assert sum(ч.count(u'пройдено:') for ч in части) == 90
 
 
 def test_список_пуст_когда_никого_нет():

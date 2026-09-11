@@ -204,7 +204,7 @@ async def on_status(message: Message):
     lines.append(u'')
     lines.append(u'Людей в боте: %d, запустили марафон: %d'
                  % (counters['users'], counters['launched']))
-    lines.append(u'Шагов в очереди: %d · заявок на покупку: %d'
+    lines.append(u'Шагов в очереди: %d · нажали «купить»: %d'
                  % (counters['jobs'], counters['purchases']))
     # Кого бот реально видит в доступе: правка переменных в Railway не
     # действует, пока её не применили деплоем, — отсюда это видно сразу.
@@ -273,7 +273,8 @@ async def on_who(message: Message, command: CommandObject):
         return
     asked = (command.args or '').strip()
     limit = int(asked) if asked.isdigit() and 0 < int(asked) <= 100 else 30
-    await message.answer(stats.who_report(limit))
+    for chunk in stats.who_messages(limit):
+        await message.answer(chunk)
 
 
 @router.message(Command('links', 'ссылки'))

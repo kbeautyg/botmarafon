@@ -510,7 +510,7 @@ def section_buy(m: dict, period: str, now: float) -> str:
     buyers = {p['u']['user_id'] for _, p in buys}
     c = reach_counts(cohort(m, lo, hi))
     lines = [_head(u'Покупки', period), u'',
-             u'🛒 Нажали «купить»: <b>%d</b> человек, заявок %d' % (len(buyers), len(buys))]
+             u'🛒 Нажали «купить»: <b>%d</b> человек, нажатий %d' % (len(buyers), len(buys))]
     products = {}
     for b, _ in buys:
         products[b['product']] = products.get(b['product'], 0) + 1
