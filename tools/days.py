@@ -35,6 +35,17 @@ Finish» — это и есть тот «чёрный экран». Заглуш
 сессии её. Собрано по последней просьбе; переключить — одно слово, оба
 варианта записей лежат в «Марафон записи».
 
+Края записи (AleX и Sharp, 11.09.2026). Павел включает камеру не сразу и
+выключает её после прощания — в эти секунды в кадре та же заглушка «Метод
+Finish». В широком кадре это было терпимо, в вертикальном от надписи
+оставалось «етод Finis» сразу после заставки: «надо сохранить баннер, но
+вырезать, когда появляется надпись, чтобы сразу к Павлу после баннера».
+Речи в этих секундах нет (сверено по расшифровке всех четырёх дней: первое
+слово звучит уже в кадре, последнее — до выключения камеры), поэтому край
+режется вместе со звуком. Короткая вспышка заглушки внутри записи (камера
+мигнула на секунду посреди фразы) не режется — звук там живой, — а
+закрывается кадром перед ней. В конце — плавный уход в чёрное.
+
 Запуск:  python tools/days.py [1 2 3 4]
 """
 from __future__ import print_function
@@ -90,6 +101,7 @@ CRF = '26'
 SCAN_FPS = 5          # шаг поиска заглушки, кадров в секунду
 MIN_SESSION = 60.0    # секунд: короче — не сессия, а хвост записи
 FADE = 0.6            # секунд: появление и уход схемы
+EDGE_SLACK = 1.0      # секунд: отрезок заглушки у самого края — это начало или конец
 
 # Где смотреть на заглушку: полоска над головой Павла, внутри его
 # вертикального кадра (запись — телефон посреди чёрных полей).
@@ -146,13 +158,47 @@ def scan(source, stage):
             start = None
     if start is not None:
         segments.append((start, frames[-1][0] + 1.0 / SCAN_FPS))
-    return [s for s in segments if s[1] - s[0] >= MIN_SESSION]
+    return segments
 
 
-def build(day, source, segments, stage, dst):
+def edges(segments, total):
+    u"""Разложить отрезки заглушки: (начало записи, конец, вспышки, сессии).
+
+    Длинные — сессия с выключенной камерой, на них схема. Короткие у самого
+    начала и у самого конца — край записи, его режем. Короткие внутри —
+    вспышки, их закрываем кадром перед ними.
+    """
+    start, end = 0.0, total
+    sessions, flashes = [], []
+    for a, b in segments:
+        if b - a >= MIN_SESSION:
+            sessions.append((a, b))
+        elif a <= EDGE_SLACK:
+            start = max(start, b)
+        elif b >= total - EDGE_SLACK:
+            end = min(end, a)
+        else:
+            flashes.append((a, b))
+    return start, end, flashes, sessions
+
+
+def build(day, source, segments, stage, dst, start=0.0, end=None, flashes=()):
     intro = os.path.join(MEDIA, 'day%d.mp4' % day)
     intro_len = duration(intro)
     gain = -6.0 - peak(intro)
+
+    # Запись берётся со start до end; всё, что во времени исходника, сдвигаем.
+    if end is None:
+        end = duration(source)
+    length = end - start
+    segments = [(max(0.0, a - start), min(length, b - start))
+                for a, b in segments if b > start and a < end]
+    flashes = [(a - start, b - start) for a, b in flashes if a >= start and b <= end]
+    for i, (a, _) in enumerate(flashes):
+        subprocess.check_call([
+            'ffmpeg', '-v', 'error', '-ss', '%.3f' % max(0.0, start + a - 0.2),
+            '-i', source, '-frames:v', '1', '-update', '1',
+            os.path.join(stage, 'freeze%d.png' % i), '-y'])
 
     # Фон заставки — её же первый кадр, размытый; он не движется.
     subprocess.check_call([
@@ -197,7 +243,15 @@ def build(day, source, segments, stage, dst):
         session = 'session.png'
 
     enable = '+'.join('between(t,%.2f,%.2f)' % (a, b - 1.0 / FPS)
-                      for a, b in segments)
+                      for a, b in segments) or '0'
+    # вспышки: поверх записи — кадр перед вспышкой, с запасом в кадр-два
+    freeze, last = '', 'rvs'
+    for i, (a, b) in enumerate(flashes):
+        freeze += ('[%d:v]%sscale=%d:%d:flags=lanczos,setsar=1,format=yuv420p[fz%d];'
+                   "[%s][fz%d]overlay=0:0:enable='between(t,%.2f,%.2f)':shortest=1[rvf%d];"
+                   % (4 + i, STRIP if VERTICAL else '', W, H, i, last, i, a - 0.1, b + 0.1, i))
+        last = 'rvf%d' % i
+    freeze += '[%s]null[rvf];' % last
     fades = ''.join(
         ',fade=t=in:st=%.2f:d=%.1f:alpha=1,fade=t=out:st=%.2f:d=%.1f:alpha=1'
         % (a, FADE, b - FADE, FADE) for a, b in segments)
@@ -217,30 +271,34 @@ def build(day, source, segments, stage, dst):
         'scale=%d:%d:flags=lanczos,fps=%d,setsar=1,'
         'format=yuv420p[rv0];'
         '[3:v]scale=%d:%d,format=rgba%s[sch];'
-        "[rv0][sch]overlay=0:0:enable='%s':shortest=1,fade=t=in:st=0:d=0.5[rv];"
+        "[rv0][sch]overlay=0:0:enable='%s':shortest=1[rvs];"
+        '%s'
+        '[rvf]fade=t=in:st=0:d=0.5,fade=t=out:st=%.3f:d=0.6[rv];'
         '[2:a]aformat=sample_rates=48000:channel_layouts=stereo,'
-        'asetpts=PTS-STARTPTS[ra];'
+        'asetpts=PTS-STARTPTS,afade=t=out:st=%.3f:d=0.6[ra];'
         '[iv][ia][rv][ra]concat=n=2:v=1:a=1[v][a]'
         % (W, H, W, H, H, FPS,
            intro_len, intro_len - 0.4,
            gain, intro_len, intro_len, intro_len - 0.4,
            STRIP if VERTICAL else '', W, H, FPS,
            W, H, fades,
-           enable))
+           enable, freeze, length - 0.6, length - 0.6))
 
     subprocess.check_call([
         'ffmpeg', '-v', 'error', '-nostats',
         '-i', intro,
         '-loop', '1', '-framerate', str(FPS), '-i', 'bg.png',
-        '-i', source,
+        '-ss', '%.3f' % start, '-t', '%.3f' % length, '-i', source,
         '-loop', '1', '-framerate', str(FPS),
-        '-i', session,
+        '-i', session] + [
+        a for i in range(len(flashes))
+        for a in ('-loop', '1', '-framerate', str(FPS), '-i', 'freeze%d.png' % i)] + [
         '-filter_complex', graph, '-map', '[v]', '-map', '[a]',
         '-c:v', 'libx264', '-preset', 'medium', '-crf', CRF,
         '-profile:v', 'high', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '160k',
         '-movflags', '+faststart', dst, '-y'], cwd=stage)
-    return intro_len
+    return intro_len, length
 
 
 def hms(seconds):
@@ -257,7 +315,8 @@ def cached_segments(day, source, stage):
     размер исходника: подменили запись — отрезки найдутся снова.
     """
     cache = os.path.join(OUT_DIR, 'segments.json')
-    key = u'%d:%s:%d' % (day, os.path.basename(source), os.path.getsize(source))
+    # «all:» — все отрезки любой длины; прежние ключи хранили только длинные
+    key = u'all:%d:%s:%d' % (day, os.path.basename(source), os.path.getsize(source))
     known = {}
     if os.path.exists(cache):
         with open(cache, 'r', encoding='utf-8') as f:
@@ -296,20 +355,23 @@ def main(argv):
 
         stage = tempfile.mkdtemp(prefix='day%d-' % day)
         try:
-            segments = cached_segments(day, source, stage)
+            total = duration(source)
+            start, end, flashes, segments = edges(cached_segments(day, source, stage), total)
             print(u'День %d: схема на %s' % (day, u'; '.join(
                 u'%s → %s (%d мин)' % (hms(a), hms(b), (b - a) / 60)
                 for a, b in segments) or u'— заглушка не найдена'))
+            print(u'День %d: заглушку режу — %.1f с в начале, %.1f с в конце; '
+                  u'вспышек внутри %d' % (day, start, total - end, len(flashes)))
             sys.stdout.flush()
 
             dst = os.path.join(OUT_DIR, u'День %d.mp4' % day)
-            intro_len = build(day, source, segments, stage, dst)
+            intro_len, was = build(day, source, segments, stage, dst, start, end, flashes)
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
-        was, now = duration(source), duration(dst)
-        print(u'День %d: %s → %s (+%.1f с заставки), %.0f МБ  %s'
-              % (day, hms(was), hms(now), now - was,
+        now = duration(dst)
+        print(u'День %d: запись %s → %s с заставкой, %.0f МБ  %s'
+              % (day, hms(was), hms(now),
                  os.path.getsize(dst) / 1048576.0,
                  u'✓' if abs(now - was - intro_len) < 1.0 else u'✗ ДЛИНА УЕХАЛА'))
         sys.stdout.flush()
