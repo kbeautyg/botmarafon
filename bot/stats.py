@@ -139,23 +139,36 @@ PASSED = (u'—', u'запуск', u'день 1', u'день 2', u'день 3', 
 PLACE = {
     'launch': u'смотрит приветствие и отзывы, ждёт 1-й день',
     'q1': u'1-й день получен, ждёт вопроса',
-    'a1': u'молчит на вопросе после 1-го дня',
+    'a1': u'не ответил на «посмотрел?» после 1-го дня',
     'd2': u'ждёт 2-й день',
     'q2': u'2-й день получен, ждёт вопроса',
-    'a2': u'молчит на вопросе после 2-го дня',
+    'a2': u'не ответил на «посмотрел?» после 2-го дня',
     'd3': u'ждёт 3-й день',
     'q3': u'3-й день получен, ждёт вопроса',
-    'a3': u'молчит на вопросе после 3-го дня',
+    'a3': u'не ответил на «посмотрел?» после 3-го дня',
     'd4': u'ждёт 4-й день',
     'offer_wait': u'4-й день получен, ждёт кнопок покупки',
     'offer_got': u'кнопки покупки получены',
-    'done': u'марафон пройден',
+    'done': u'марафон закончился, «купить» не нажал',
     'bought': u'нажата «купить»',
-    'blocked': u'бот закрыт',
+    'blocked': u'заблокировал бота',
     'lead': u'заявка с сайта, ждёт менеджера',
     'not_launched': u'марафон не запущен',
-    'idle': u'стоит: шагов в очереди нет',
+    'idle': u'марафон прервался — бот ему больше не пишет',
 }
+
+# Начал до учёта шагов (11.09) и бот ему больше не пишет: марафон прервался
+# на сбое, человек заблокировал бота или прошёл всё молча — по базе не
+# различить (ревью 11.09.2026).
+IDLE_BEFORE_TRACKING = (u'бот больше не пишет: марафон прервался (сбой или блокировка) '
+                        u'или пройден молча — по базе не различить')
+
+WHO_FOOTER = (
+    u'ℹ️ «Заблокировал бота» видно, только когда бот пытается отправить следующий '
+    u'шаг, — в скобках, когда бот это заметил. Тем, кто прошёл марафон, нажал «купить», '
+    u'пришёл по заявке, не запустил марафон или у кого марафон прервался, бот больше '
+    u'не пишет: заблокировали ли они его, неизвестно. До 11.09 шаги и блокировки не '
+    u'записывались — у начавших раньше «или дальше» значит, что точный шаг неизвестен.')
 CHUNK = 3900                      # запас до 4096 — предела сообщения Telegram
 
 
@@ -167,11 +180,31 @@ def _who_entry(r: dict, p: dict | None) -> str:
     head = u'%s · %s · %s · %s' % (when, who, handle, label(r['source']))
     if p is None:
         return head + u'\n   ↳ команда проекта'
-    place = PLACE.get(p['position'], p['position'])
+    from . import insights          # insights сам импортирует stats — поэтому здесь
+
+    position = p['position']
+    place = PLACE.get(position, position)
+    passed = PASSED[p['reached']]
+    launched = p['u'].get('launched_at')
+    logged = p['days'] or p['polls'] or p['offer']
+    if launched and launched < insights.TRACK_TS and not (p['pending'] or p['buys'] or logged):
+        # До учёта шагов молча пройденные дни следа не оставили: это нижняя граница.
+        if p['reached'] < insights.OFFER:
+            passed += u' или дальше'
+        if position == 'idle':
+            place = IDLE_BEFORE_TRACKING
     blocked = p['u'].get('blocked_at')
     if blocked:
-        place += u' ' + datetime.fromtimestamp(blocked, MSK).strftime('%d.%m %H:%M')
-    return head + u'\n   ↳ пройдено: %s · сейчас: %s' % (PASSED[p['reached']], place)
+        place += u' (бот заметил %s)' % _moment(blocked)
+    nxt = p['next']
+    if position in ('a1', 'a2', 'a3') and nxt and nxt['chain'].endswith('_no'):
+        # не застрял: без ответа ветка «нет» сама пришлёт следующий день
+        place += u' · %d-й день придёт сам %s' % (int(position[1:]) + 1, _moment(nxt['run_at']))
+    return head + u'\n   ↳ пройдено: %s · сейчас: %s' % (passed, place)
+
+
+def _moment(ts: float) -> str:
+    return datetime.fromtimestamp(ts, MSK).strftime('%d.%m %H:%M')
 
 
 def who_messages(limit: int = 30) -> list[str]:
@@ -196,6 +229,11 @@ def who_messages(limit: int = 30) -> list[str]:
             current = entry
         else:
             current += u'\n' + entry
+    if len(current) + 2 + len(WHO_FOOTER) > CHUNK:
+        chunks.append(current)
+        current = WHO_FOOTER
+    else:
+        current += u'\n\n' + WHO_FOOTER
     chunks.append(current)
     return chunks
 

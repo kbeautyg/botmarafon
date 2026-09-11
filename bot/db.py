@@ -237,6 +237,12 @@ def save_answer(user_id: int, poll: str, answer: str) -> None:
          'answered=excluded.answered', (user_id, poll, answer, time.time()))
 
 
+def answered(user_id: int, poll: str) -> bool:
+    u"""Ответил ли человек на вопрос в этом прогоне (reset_funnel стирает ответы)."""
+    return _conn.execute('SELECT 1 FROM answers WHERE user_id=? AND poll=?',
+                         (user_id, poll)).fetchone() is not None
+
+
 # --------------------------------------------------------------- очередь
 
 def add_job(user_id: int, chain: str, pos: int, run_at: float) -> None:

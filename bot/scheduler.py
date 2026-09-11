@@ -7,6 +7,7 @@ u"""Планировщик: кто и когда получает следующ
 воронку: после старта очередь просто разбирается дальше.
 """
 import asyncio
+import html
 import logging
 import time
 
@@ -18,6 +19,14 @@ log = logging.getLogger(__name__)
 
 MAX_TRIES = 3
 RETRY_PAUSE = 60
+
+# Сбой связи с Telegram (delivery.is_transient) — не вина шага. Три попытки
+# за две минуты роняли бы при любом сбое дольше двух минут все созревшие
+# шаги у всех людей разом (ревью 11.09.2026). Такие сбои ждём с растущей
+# паузой, не длиннее RETRY_CAP, — около трёх с половиной часов; и даже потом
+# шаг снимается, только если админы об этом узнали.
+TRANSIENT_TRIES = 12
+RETRY_CAP = 30 * 60
 
 # Ветка ответа → её вопрос: day1_no → day1. Нужна, чтобы закрыть вопрос,
 # когда ветка «нет» пошла сама, по таймеру.
@@ -62,7 +71,8 @@ def _plan_next(user_id: int, chain: str, pos: int, step: funnel.Step,
     заранее ставится отложенное добивание. Ответ его снимет.
     """
     if step.kind == 'poll':
-        if config.POLL_FALLBACK_HOURS > 0:
+        # ответ пришёл, пока вопрос уходил, — ветка уже идёт, добивание лишнее
+        if config.POLL_FALLBACK_HOURS > 0 and not db.answered(user_id, step.ref):
             fallback = funnel.POLL_BRANCHES[step.ref]['no']
             schedule(user_id, fallback, 0, config.POLL_FALLBACK_HOURS * 3600)
         return
@@ -70,6 +80,34 @@ def _plan_next(user_id: int, chain: str, pos: int, step: funnel.Step,
     following = funnel.next_after(chain, pos)
     if following:
         schedule(user_id, following[0], following[1], following[2], base=base)
+
+
+def requeue_poll(user_id: int, poll: str) -> bool:
+    u"""Поставить заново вопрос «посмотрел?» — вернувшемуся к открытому вопросу.
+
+    Шаг-вопрос цепочки after_dayN уходит сразу; дальше всё как обычно: вопрос
+    снова открыт, ветка «нет» встаёт на таймер. False — такого вопроса нет.
+    """
+    chain = 'after_' + poll
+    steps = funnel.CHAINS[chain].steps if chain in funnel.CHAINS else ()
+    pos = next((i for i, step in enumerate(steps) if step.kind == 'poll'), None)
+    if pos is None:
+        return False
+    db.add_job(user_id, chain, pos, time.time())
+    return True
+
+
+def _plain(err: Exception) -> str:
+    u"""Текст ошибки для сообщения с разметкой: в нём бывает целая HTML-страница
+    шлюза — без экранирования Telegram отверг бы само предупреждение."""
+    return html.escape(str(err))[:1000]
+
+
+def _retry_pause(err: Exception, tries: int) -> float:
+    u"""Пауза перед повтором при сбое связи: 1, 2, 4… минуты, не длиннее
+    RETRY_CAP; назвал Telegram срок сам («подождите N секунд») — не меньше."""
+    pause = min(RETRY_PAUSE * 2 ** tries, RETRY_CAP)
+    return max(pause, getattr(err, 'retry_after', 0) or 0)
 
 
 def _close_poll(job: dict) -> str | None:
@@ -105,6 +143,14 @@ async def run_job(bot: Bot, job: dict) -> None:
         db.drop_job(job['id'])
         return
 
+    if step.kind == 'poll' and db.answered(job['user_id'], step.ref):
+        # На вопрос уже ответили — старой кнопкой, пока вопрос ждал в очереди
+        # (/start после блокировки ставит его заново). Второй раз не спрашиваем:
+        # иначе пошли бы две ветки разом (ревью 11.09.2026).
+        log.info(u'%s уже ответил на %s — повторный вопрос снят', job['user_id'], step.ref)
+        db.drop_job(job['id'])
+        return
+
     closed = _close_poll(job)
 
     try:
@@ -120,17 +166,26 @@ async def run_job(bot: Bot, job: dict) -> None:
         return
     except Exception as err:
         _reopen_poll(job, closed)
-        if job['tries'] + 1 >= MAX_TRIES:
+        transient = delivery.is_transient(err)
+        if job['tries'] + 1 >= (TRANSIENT_TRIES if transient else MAX_TRIES):
+            told = await delivery.alert_admins(
+                bot, u'⚠️ Не отправили шаг %s#%s человеку %s: %s'
+                     % (job['chain'], job['pos'], job['user_id'], _plain(err)))
+            if transient and not told:
+                # Telegram всё ещё лежит, и админам не сказать: снять шаг сейчас
+                # значит потерять человека молча. Ждём дальше (ревью 11.09.2026).
+                log.warning(u'шаг %s#%s для %s: связи нет и после %d попыток — ждём',
+                            job['chain'], job['pos'], job['user_id'], job['tries'] + 1)
+                db.retry_job(job['id'], time.time() + RETRY_CAP)
+                return
             log.exception(u'шаг %s#%s для %s провален окончательно: %s',
                           job['chain'], job['pos'], job['user_id'], err)
             db.drop_job(job['id'])
-            await delivery.alert_admins(
-                bot, u'⚠️ Не отправили шаг %s#%s человеку %s: %s'
-                     % (job['chain'], job['pos'], job['user_id'], err))
             return
-        log.warning(u'шаг %s#%s не ушёл (%s), повторим через минуту',
-                    job['chain'], job['pos'], err)
-        db.retry_job(job['id'], time.time() + RETRY_PAUSE)
+        pause = _retry_pause(err, job['tries']) if transient else RETRY_PAUSE
+        log.warning(u'шаг %s#%s не ушёл (%s), повторим через %d с',
+                    job['chain'], job['pos'], err, pause)
+        db.retry_job(job['id'], time.time() + pause)
         return
 
     db.drop_job(job['id'])

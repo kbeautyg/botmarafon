@@ -72,7 +72,7 @@ def test_где_люди_сейчас():
 
     места = {uid: p['position'] for uid, p in insights.model()['people'].items()}
     assert места == {30: 'launch', 31: 'a1', 32: 'd2', 33: 'blocked', 34: 'not_launched'}
-    assert u'закрыли бота — <b>1</b>' in insights.render('now', '7', now=NOW)
+    assert u'заблокировали бота — <b>1</b>' in insights.render('now', '7', now=NOW)
 
 
 def test_написал_боту_после_закрытия_значит_вернулся():

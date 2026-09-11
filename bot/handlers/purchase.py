@@ -52,4 +52,4 @@ async def on_buy(call: CallbackQuery):
         await delivery.alert_admins(
             bot=call.bot,
             text=u'⚠️ Заявка №%s не дошла до чата покупок: %s\n\n%s'
-                 % (number, err, note))
+                 % (number, html.escape(str(err))[:1000], note))

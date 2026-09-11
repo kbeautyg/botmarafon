@@ -61,22 +61,22 @@ WEEKDAYS = (u'пн', u'вт', u'ср', u'чт', u'пт', u'сб', u'вс')
 POSITIONS = (
     ('launch', u'смотрят приветствие и отзывы, ждут 1-й день'),
     ('q1', u'получили 1-й день, ждут вопроса'),
-    ('a1', u'не ответили на вопрос после 1-го дня'),
+    ('a1', u'не ответили на «посмотрел?» после 1-го дня'),
     ('d2', u'ждут 2-й день'),
     ('q2', u'получили 2-й день, ждут вопроса'),
-    ('a2', u'не ответили на вопрос после 2-го дня'),
+    ('a2', u'не ответили на «посмотрел?» после 2-го дня'),
     ('d3', u'ждут 3-й день'),
     ('q3', u'получили 3-й день, ждут вопроса'),
-    ('a3', u'не ответили на вопрос после 3-го дня'),
+    ('a3', u'не ответили на «посмотрел?» после 3-го дня'),
     ('d4', u'ждут 4-й день'),
     ('offer_wait', u'получили 4-й день, ждут кнопок покупки'),
     ('offer_got', u'получили кнопки покупки'),
-    ('done', u'прошли весь марафон'),
+    ('done', u'прошли весь марафон, «купить» не нажали'),
     ('bought', u'нажали «купить»'),
-    ('blocked', u'закрыли бота'),
+    ('blocked', u'заблокировали бота'),
     ('lead', u'пришли по заявке с сайта — ждут менеджера'),
     ('not_launched', u'зашли, но не запустили марафон'),
-    ('idle', u'без шагов в очереди — запускали до учёта шагов'),
+    ('idle', u'марафон прервался или пройден молча до 11.09 — бот больше не пишет'),
 )
 
 
@@ -101,12 +101,15 @@ def _reached(p: dict) -> int:
     days.add(_day_of(u.get('poll')))
     # Ответ на вопрос N запускает ветку, которая через секунды шлёт день N+1.
     # Ветки в очереди больше нет — значит, день N+1 уже ушёл (ревью 11.09).
+    # Но так судим, только если вопрос не записан: при учёте шагов ушедший
+    # день N+1 записался бы тоже — нет записи, значит, ветка сорвалась и
+    # день не ушёл (второе ревью 11.09).
     for poll in p['answers']:
         n = _day_of(poll)
         if n:
             days.add(n)
             branches = set(funnel.POLL_BRANCHES.get(poll, {}).values())
-            if not branches & p['pending']:
+            if not branches & p['pending'] and poll not in p['polls']:
                 days.add(n + 1)
     if p['pending']:
         days |= {n for n in (1, 2, 3, 4) if funnel.day_delivered(p['pending'], n)}
@@ -115,8 +118,11 @@ def _reached(p: dict) -> int:
     if days:
         reached = max(reached, 1 + min(max(days), 4))
     # Очередь пуста после 4-го дня — единственным продолжением были кнопки
-    # покупки (after_day4). У начавших до учёта шагов это и есть «дошёл».
-    if 4 in days and not p['pending'] and u.get('launched_at') and not u.get('blocked_at'):
+    # покупки (after_day4). Так судим только о тех, у кого шаги не записаны:
+    # при учёте ушедшие кнопки записались бы (p['offer']), и 4-й день без них
+    # значит, что марафон оборвался перед кнопками (второе ревью 11.09).
+    if (4 in days and not p['pending'] and u.get('launched_at') and not u.get('blocked_at')
+            and not (p['days'] or p['polls'])):
         reached = max(reached, OFFER)
     if p['offer']:
         reached = max(reached, OFFER)
@@ -149,7 +155,7 @@ def _position(p: dict) -> str:
             return 'd%d' % (_day_of(chain.split('_')[0]) + 1)
     if p['buys']:
         return 'bought'
-    if p['reached'] >= 5:
+    if p['reached'] >= OFFER:
         return 'done'
     if not u.get('launched_at'):
         return 'lead' if u.get('source') == 'zayavka' else 'not_launched'
@@ -559,6 +565,10 @@ def section_now(m: dict, period: str, now: float) -> str:
     for key, title in POSITIONS:
         if counts.get(key):
             lines.append(u'%s — <b>%d</b>' % (title, counts[key]))
+    silent = sum(n for key, n in counts.items() if key in ('a1', 'a2', 'a3'))
+    if silent and config.POLL_FALLBACK_HOURS > 0:
+        lines.append(u'<i>Не ответившим на «посмотрел?» следующий день бот пришлёт сам '
+                     u'через %d ч после вопроса.</i>' % config.POLL_FALLBACK_HOURS)
     if not people:
         lines.append(u'В боте пока никого.')
     lines += [u'', u'Поимённо — /кто, всех сразу — выгрузка таблицей.']
@@ -583,7 +593,7 @@ def render(section: str, period: str, snap: dict | None = None, now: float | Non
 
 CSV_HEADER = (u'id', u'ник', u'имя', u'пришёл (МСК)', u'источник', u'запустил (МСК)',
               u'дошёл до', u'ответ после дня 1', u'ответ после дня 2', u'ответ после дня 3',
-              u'купил', u'закрыл бота (МСК)', u'сейчас', u'писал в заботу')
+              u'купил', u'бот заметил блок (МСК)', u'сейчас', u'писал в заботу')
 ANSWER_NAMES = {'yes': u'да', 'no': u'нет'}
 FORMULA_START = (u'=', u'+', u'-', u'@', u'\t', u'\r')
 

@@ -6,11 +6,14 @@ u"""Отправка шагов воронки.
 отправки возвращает file_id, дальше файл уходит по нему мгновенно, и
 хранить этот id надо в базе, иначе он теряется на перезапуске.
 """
+import asyncio
 import json
 import logging
 import os
 
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import (ClientDecodeError, TelegramBadRequest, TelegramEntityTooLarge,
+                                TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter,
+                                TelegramServerError)
 from aiogram import Bot
 from aiogram.types import FSInputFile, Message
 
@@ -23,12 +26,46 @@ class Gone(Exception):
     u"""Человек закрыл бота — вести его дальше некуда."""
 
 
+# Сбой связи с Telegram (сеть, 5xx, «подождите N секунд», HTML-страница шлюза
+# вместо ответа) — не вина шага: такой шаг ждут, а не снимают (ревью 11.09.2026).
+TRANSIENT = (TelegramNetworkError, TelegramServerError, TelegramRetryAfter, asyncio.TimeoutError)
+# 413 aiogram числит сетевой ошибкой, но файл больше лимита не пролезет и завтра.
+PERMANENT = (TelegramEntityTooLarge,)
+
+
+def is_transient(err: Exception) -> bool:
+    u"""Сбой связи, который пройдёт сам, — а не ошибка самого шага."""
+    if isinstance(err, PERMANENT):
+        return False
+    if isinstance(err, TRANSIENT):
+        return True
+    # Шлюз (nginx 502/504) отдал HTML вместо JSON. «Failed to deserialize» с
+    # разобранным JSON сюда не попадает: там сообщение могло и дойти.
+    return isinstance(err, ClientDecodeError) and isinstance(getattr(err, 'data', None), str)
+
+
+class VoiceForbidden(Exception):
+    u"""Человек закрыл себе кружки и голосовые в настройках приватности."""
+
+
+VOICE_FORBIDDEN = 'VOICE_MESSAGES_FORBIDDEN'
+
+# Кто отказался от кружков: до перезапуска бота им сразу обычное видео, без
+# загрузки, которую Telegram заведомо отвергнет. Только в памяти — разрешит
+# человек кружки снова, после ближайшей выкладки получит их (ревью 11.09.2026).
+_NO_VIDEO_NOTES: set[int] = set()
+
+
 async def _guard(coro):
-    u"""Отправить и отличить «закрыл бота» от прочих бед."""
+    u"""Отправить и отличить «закрыл бота» и «не принимает кружки» от прочих бед."""
     try:
         return await coro
     except TelegramForbiddenError:
         raise Gone()
+    except TelegramBadRequest as err:
+        if VOICE_FORBIDDEN in str(err).upper():
+            raise VoiceForbidden(str(err))
+        raise
 
 
 async def send_circle(bot: Bot, user_id: int, name: str) -> Message | None:
@@ -38,22 +75,53 @@ async def send_circle(bot: Bot, user_id: int, name: str) -> Message | None:
     без него опросник должен уйти текстом, а не падать.
     """
     key = 'circle:%s' % name
+    path = os.path.join(config.CIRCLES_DIR, name + '.mp4')
+    if user_id in _NO_VIDEO_NOTES:
+        return await _as_video(bot, user_id, 'circlevideo:%s' % name, path)
+    try:
+        known = db.get_content(key)
+        if known:
+            try:
+                return await _guard(bot.send_video_note(user_id, known[1]))
+            except TelegramBadRequest:
+                # file_id мог протухнуть (редко, но бывает) — зальём заново.
+                log.warning(u'file_id кружка %s не принят, шлём файлом', name)
+
+        if not os.path.exists(path):
+            log.warning(u'нет кружка %s — шаг пропущен', name)
+            return None
+
+        msg = await _guard(bot.send_video_note(user_id, FSInputFile(path)))
+    except VoiceForbidden:
+        _NO_VIDEO_NOTES.add(user_id)
+        return await _as_video(bot, user_id, 'circlevideo:%s' % name, path)
+    if msg and msg.video_note:
+        db.put_content(key, 'circle', msg.video_note.file_id)
+    return msg
+
+
+async def _as_video(bot: Bot, user_id: int, key: str, path: str) -> Message | None:
+    u"""Кружок обычным видео — тому, кто закрыл себе видеосообщения.
+
+    Такой человек в настройках приватности Telegram запретил кружки и
+    голосовые, Telegram отвечает VOICE_MESSAGES_FORBIDDEN — и раньше три
+    попытки роняли ему воронку на первом же кружке (ревью 11.09.2026).
+    Обычное видео до него доходит; его file_id храним отдельно от кружка.
+    """
+    if not os.path.exists(path):
+        log.warning(u'нет файла %s — шаг пропущен', path)
+        return None
+    log.info(u'%s не принимает кружки — %s уходит обычным видео',
+             user_id, os.path.basename(path))
     known = db.get_content(key)
     if known:
         try:
-            return await _guard(bot.send_video_note(user_id, known[1]))
+            return await _guard(bot.send_video(user_id, known[1]))
         except TelegramBadRequest:
-            # file_id мог протухнуть (редко, но бывает) — зальём заново.
-            log.warning(u'file_id кружка %s не принят, шлём файлом', name)
-
-    path = os.path.join(config.CIRCLES_DIR, name + '.mp4')
-    if not os.path.exists(path):
-        log.warning(u'нет кружка %s — шаг пропущен', name)
-        return None
-
-    msg = await _guard(bot.send_video_note(user_id, FSInputFile(path)))
-    if msg and msg.video_note:
-        db.put_content(key, 'circle', msg.video_note.file_id)
+            log.warning(u'file_id видео %s не принят, шлём файлом', key)
+    msg = await _guard(bot.send_video(user_id, FSInputFile(path)))
+    if msg and getattr(msg, 'video', None):
+        db.put_content(key, 'video', msg.video.file_id)
     return msg
 
 
@@ -130,7 +198,13 @@ async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
     index = funnel.REVIEW_SEQUENCE.index(name) + 1
     override = db.get_content('review%d' % index)
     if override:
-        return await _send_media(bot, user_id, override[0], override[1])
+        try:
+            return await _send_media(bot, user_id, override[0], override[1])
+        except VoiceForbidden:
+            # подмена админа — кружок по file_id, файла под рукой нет
+            _NO_VIDEO_NOTES.add(user_id)
+            log.warning(u'%s не принимает кружки — отзыв %s пропущен', user_id, name)
+            return None
 
     found = review_file(name)
     if not found:
@@ -140,15 +214,22 @@ async def send_review(bot: Bot, user_id: int, name: str) -> Message | None:
 
     # Кэш file_id привязан к размеру файла: подменили картинку в репозитории —
     # ключ сменился, и людям уходит новая, а не запомненный старый file_id.
-    cache_key = 'review:%s:%d' % (name, os.path.getsize(path))
+    size = os.path.getsize(path)
+    cache_key = 'review:%s:%d' % (name, size)
     cached = db.get_content(cache_key)
-    if cached:
-        try:
-            return await _send_media(bot, user_id, cached[0], cached[1])
-        except TelegramBadRequest:
-            log.warning(u'file_id отзыва %s не принят, шлём файлом', name)
+    if kind == 'circle' and user_id in _NO_VIDEO_NOTES:
+        return await _as_video(bot, user_id, 'reviewvideo:%s:%d' % (name, size), path)
+    try:
+        if cached:
+            try:
+                return await _send_media(bot, user_id, cached[0], cached[1])
+            except TelegramBadRequest:
+                log.warning(u'file_id отзыва %s не принят, шлём файлом', name)
 
-    msg = await _send_media(bot, user_id, kind, FSInputFile(path), review_meta(path))
+        msg = await _send_media(bot, user_id, kind, FSInputFile(path), review_meta(path))
+    except VoiceForbidden:
+        _NO_VIDEO_NOTES.add(user_id)
+        return await _as_video(bot, user_id, 'reviewvideo:%s:%d' % (name, size), path)
     file_id = _file_id(msg, kind)
     if file_id:
         db.put_content(cache_key, kind, file_id)
@@ -227,12 +308,28 @@ async def send_offer(bot: Bot, user_id: int) -> Message | None:
                                          reply_markup=keyboards.offer()))
 
 
-async def alert_admins(bot: Bot, text: str) -> None:
+async def alert_admins(bot: Bot, text: str) -> bool:
+    u"""Предупредить админов.
+
+    False — только когда никто из них сообщение не получил из-за сбоя связи
+    с Telegram: решение, о котором админы должны знать, тогда откладывают
+    (планировщик не снимает шаг молча). Админ, не начавший чат с ботом,
+    сбоем не считается.
+    """
+    delivered, outage = False, False
     for admin in config.ADMIN_IDS:
         try:
-            await bot.send_message(admin, text)
+            try:
+                await bot.send_message(admin, text)
+            except TelegramBadRequest:
+                # Разметка не разобралась или текст длинный — то же простым
+                # текстом, иначе админ не узнал бы ничего (ревью 11.09.2026).
+                await bot.send_message(admin, text[:4000], parse_mode=None)
+            delivered = True
         except Exception as err:                      # админ мог не начать чат
+            outage = outage or is_transient(err)
             log.warning(u'не доставили админу %s: %s', admin, err)
+    return delivered or not outage
 
 
 HANDLERS = {

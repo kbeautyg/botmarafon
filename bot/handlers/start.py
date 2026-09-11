@@ -67,6 +67,28 @@ async def _lead_arrived(message: Message, number: str) -> None:
     db.link_care(config.SUPPORT_CHAT_ID, head.message_id, message.from_user.id)
 
 
+# Кому приветствие ещё уходит, а марафон не встал в очередь: второй /start
+# из той же пачки обновлений (после выкладки) иначе увидел бы пустую очередь
+# и сказал бы новичку «новых дней нет» (ревью 11.09.2026).
+_launching: set[int] = set()
+
+
+def _repeat_start_text(user_id: int) -> str:
+    u"""Ответ на повторный /start — по правде о том, что человеку предстоит.
+
+    Очередь не пуста или приветствие ещё уходит — марафон идёт. Очереди нет,
+    но открыт вопрос «посмотрел?» (закрывал бота на вопросе и вернулся) —
+    вопрос приходит заново: ответ продолжит марафон с того же места, а
+    «пройти заново» стёрло бы весь путь. Иначе честно: новых дней нет.
+    """
+    if user_id in _launching or db.pending_chains(user_id):
+        return texts.ALREADY_RUNNING
+    poll = (db.get_user(user_id) or {}).get('poll')
+    if poll and scheduler.requeue_poll(user_id, poll):
+        return texts.ALREADY_RUNNING
+    return texts.NOTHING_SCHEDULED
+
+
 @router.message(CommandStart())
 async def on_start(message: Message, command: CommandObject | None = None):
     user_id = message.from_user.id
@@ -82,12 +104,20 @@ async def on_start(message: Message, command: CommandObject | None = None):
 
     # Повторный /start воронку не удваивает: mark_launched проходит один раз.
     if not db.mark_launched(user_id):
-        await message.answer(texts.ALREADY_RUNNING, reply_markup=keyboards.restart())
+        await message.answer(_repeat_start_text(user_id), reply_markup=keyboards.restart())
         return
 
-    await message.answer(texts.START_TEXT, reply_markup=keyboards.care())
-    scheduler.start_chain(user_id, 'launch')
-    log.info(u'воронка запущена для %s', user_id)
+    _launching.add(user_id)
+    try:
+        await message.answer(texts.START_TEXT, reply_markup=keyboards.care())
+    finally:
+        # Марафон встаёт в очередь в любом случае: сбой этого сообщения
+        # оставлял человека «запущенным» без единого шага (ревью 11.09.2026).
+        # Отметку снимаем первой: упадёт постановка — повторный /start скажет
+        # правду, а не «придёт по расписанию».
+        _launching.discard(user_id)
+        scheduler.start_chain(user_id, 'launch')
+        log.info(u'воронка запущена для %s', user_id)
 
 
 @router.callback_query(F.data == 'restart')
