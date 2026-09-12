@@ -263,7 +263,9 @@ def links_report(username: str) -> str:
         (u'Telegram — рассылка №1', 'tg_1'),
         (u'Telegram — рассылка №2', 'tg_2'),
         (u'Telegram — свой канал', 'tg_kanal'),
-        (u'Instagram', 'ig'),
+        (u'Instagram — автоответ в директ по слову «Марафон»', 'ig_direct'),
+        (u'Instagram — ссылка в шапке профиля', 'ig_bio'),
+        (u'Instagram — прочее', 'ig'),
         (u'Facebook', 'fb'),
         (u'Сайт', 'site'),
     ]
