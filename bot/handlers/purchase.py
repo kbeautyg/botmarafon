@@ -2,10 +2,20 @@
 u"""Кнопки покупки и заявка менеджеру.
 
 Пункт «Важные моменты 1» из ТЗ: как только человек купил, заявка должна
-упасть в отдельный чат покупок, чтобы менеджер связался сразу.
+упасть менеджеру, чтобы с человеком связались сразу.
+
+Кому уходит заявка — config.purchase_recipients(): чат PURCHASE_CHAT_ID и
+лично Павлу и AleX (Sharp 13.09.2026: «прикрепи Павла и Алекса» — до этого
+заявки видела только личка Sharp).
+
+Одна кнопка, нажатая несколько раз подряд, — одна заявка (AleX 13.09.2026:
+«Наталья четыре раза ткнула одно и то же, а в отчёте четыре человека»).
+Каждое нажатие по-прежнему пишется в базу — так видно, сколько раз
+человек жал, — но менеджерам повтор за сутки второй раз не уходит.
 """
 import html
 import logging
+import time
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
@@ -20,12 +30,52 @@ PRODUCTS = {
     'course': texts.OFFER_COURSE,
 }
 
+# Та же кнопка ещё раз в течение суток — та же заявка. Позже — человек
+# вернулся к покупке, и это снова сигнал менеджеру.
+REPEAT_WINDOW = 24 * 3600
+
 
 def _who(user):
     u"""Как показать человека менеджеру: имя, ник и id для поиска."""
     name = html.escape(user.full_name or u'без имени')
     handle = u'@%s' % user.username if user.username else u'без ника'
     return u'<b>%s</b> · %s · <code>%s</code>' % (name, handle, user.id)
+
+
+async def _deliver(bot, number, note: str) -> None:
+    u"""Заявка — всем получателям. Не дошла ни до кого — шуметь админам.
+
+    Заявка уже в базе и не пропадёт, но если её не увидел ни один человек,
+    менеджер не позвонит — значит, молчать нельзя. Дошла хотя бы до одного
+    из получателей — человек о покупке знает, это не авария.
+    """
+    got, failed = [], []
+    for chat in config.purchase_recipients():
+        try:
+            await bot.send_message(chat, note)
+            got.append(chat)
+        except Exception as err:
+            failed.append(u'%s: %s' % (chat, err))
+            log.warning(u'заявка %s не ушла в %s: %s', number, chat, err)
+    if failed and not got:
+        await delivery.alert_admins(
+            bot=bot,
+            text=u'⚠️ Заявка №%s не дошла ни до кого: %s\n\n%s'
+                 % (number, html.escape(u'; '.join(failed))[:1000], note))
+
+
+async def _reply(call: CallbackQuery, toast: str, text: str) -> None:
+    u"""Ответ человеку. Его сбой — не повод терять заявку: нажатие,
+    обработанное с опозданием (бот перезапускался на выкладке), Telegram
+    уже не даёт подтвердить — «query is too old»."""
+    try:
+        await call.answer(toast)
+    except Exception as err:
+        log.debug(u'нажатие покупки у %s не подтвердили: %s', call.from_user.id, err)
+    try:
+        await call.message.answer(text)
+    except Exception as err:
+        log.warning(u'не ответили %s на покупку: %s', call.from_user.id, err)
 
 
 @router.callback_query(F.data.startswith('buy:'))
@@ -36,20 +86,22 @@ async def on_buy(call: CallbackQuery):
         await call.answer()
         return
 
-    number = db.add_purchase(call.from_user.id, product)
-    db.unblock(call.from_user.id)              # нажал кнопку — бот у него открыт
-    await call.answer(u'Заявка принята')
-    await call.message.answer(texts.OFFER_DONE)
+    user_id = call.from_user.id
+    earlier = db.purchase_presses(user_id, product)
+    number = db.add_purchase(user_id, product)
+    db.unblock(user_id)                        # нажал кнопку — бот у него открыт
 
-    note = (u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>'
-            % (number, _who(call.from_user), title))
-    try:
-        await call.bot.send_message(config.PURCHASE_CHAT_ID, note)
-    except Exception as err:
-        # Заявка уже в базе, так что не пропадёт, но менеджер её не увидит —
-        # значит надо шуметь, а не глотать ошибку.
-        log.exception(u'заявка %s не ушла в чат покупок: %s', number, err)
-        await delivery.alert_admins(
-            bot=call.bot,
-            text=u'⚠️ Заявка №%s не дошла до чата покупок: %s\n\n%s'
-                 % (number, html.escape(str(err))[:1000], note))
+    if earlier and time.time() - earlier[-1]['at'] < REPEAT_WINDOW:
+        log.info(u'%s снова нажал «%s» (%d-й раз) — заявка та же, менеджерам не шлём',
+                 user_id, product, len(earlier) + 1)
+        await _reply(call, u'Заявка уже принята', texts.OFFER_ALREADY)
+        return
+
+    # Сначала заявка менеджерам, потом ответ человеку: сбой ответа не должен
+    # оставить заявку только в базе (ревью 13.09.2026).
+    again = (u'\n\nПовторная заявка: человек вернулся к кнопке, нажатие №%d' % (len(earlier) + 1)
+             if earlier else u'')
+    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s' % (
+        number, _who(call.from_user), title, again)
+    await _deliver(call.bot, number, note)
+    await _reply(call, u'Заявка принята', texts.OFFER_DONE)

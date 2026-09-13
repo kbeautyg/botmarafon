@@ -204,8 +204,8 @@ async def on_status(message: Message):
     lines.append(u'')
     lines.append(u'Людей в боте: %d, запустили марафон: %d'
                  % (counters['users'], counters['launched']))
-    lines.append(u'Шагов в очереди: %d · нажали «купить»: %d'
-                 % (counters['jobs'], counters['purchases']))
+    lines.append(u'Шагов в очереди: %d · нажали «купить»: %d (всего нажатий %d)'
+                 % (counters['jobs'], counters['purchases'], counters['presses']))
     # Кого бот реально видит в доступе: правка переменных в Railway не
     # действует, пока её не применили деплоем, — отсюда это видно сразу.
     listed = lambda ids: u', '.join(str(i) for i in ids) or u'—'

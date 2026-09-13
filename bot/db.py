@@ -353,6 +353,13 @@ def add_purchase(user_id: int, product: str) -> int:
                 (user_id, product, time.time())).lastrowid
 
 
+def purchase_presses(user_id: int, product: str) -> list[dict]:
+    u"""Все нажатия человека на эту кнопку покупки, старые первыми."""
+    rows = _conn.execute('SELECT id, at FROM purchases WHERE user_id=? AND product=? '
+                         'ORDER BY id', (user_id, product)).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ---------------------------------------------------------- служба заботы
 
 def link_care(chat_id: int, message_id: int, user_id: int) -> None:
@@ -430,5 +437,7 @@ def stats() -> dict[str, int]:
         'users': one('SELECT COUNT(*) FROM users'),
         'launched': one('SELECT COUNT(*) FROM users WHERE launched_at IS NOT NULL'),
         'jobs': one('SELECT COUNT(*) FROM jobs'),
-        'purchases': one('SELECT COUNT(*) FROM purchases'),
+        # заявка — человек и продукт: повторные нажатия той же кнопки — одна
+        'purchases': one('SELECT COUNT(*) FROM (SELECT DISTINCT user_id, product FROM purchases)'),
+        'presses': one('SELECT COUNT(*) FROM purchases'),
     }

@@ -355,7 +355,10 @@ def section_sum(m: dict, period: str, now: float) -> str:
              u'🛒 Нажали «купить»: <b>%d</b>%s' % (c[7], (u' — ' + bought_line) if bought_line else u''),
              u'🚪 Закрыли бота: %d' % sum(1 for p in g if p['u'].get('blocked_at')),
              u'🤝 Писали в службу заботы: %d' % sum(1 for p in g if p['care']),
-             u'📨 Пришли по заявке с сайта (ждут менеджера, в воронку не входят): %d'
+             # AleX 13.09.2026 спросил, что значит прежняя строка «пришли по
+             # заявке с сайта, ждут менеджера, в воронку не входят»
+             u'📨 Оставили заявку на сайте и перешли в бота: %d. Марафон им не '
+             u'запускается, с ними работает менеджер, поэтому в цифрах выше их нет'
              % len(cohort(m, lo, hi, leads=True)),
              u'',
              u'⏳ Сейчас идут марафон: <b>%d</b> · не ответили на вопрос: %d' % (running, waiting),
@@ -509,17 +512,62 @@ def section_time(m: dict, period: str, now: float) -> str:
     return _fit(lines)
 
 
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    u"""1 нажатие, 2 нажатия, 5 нажатий."""
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return many
+    n %= 10
+    return one if n == 1 else few if 2 <= n <= 4 else many
+
+
+def _times(n: int) -> str:
+    u"""« (4 нажатия)» — если жал больше одного раза, иначе пусто."""
+    return u' (%d %s)' % (n, _plural(n, u'нажатие', u'нажатия', u'нажатий')) if n > 1 else u''
+
+
+def _requests(people: list, lo: float, hi: float) -> list[dict]:
+    u"""Заявки на покупку за срок. Заявка — человек и продукт: повторные
+    нажатия той же кнопки — одна заявка с их числом. AleX 13.09.2026:
+    «Наталья четыре раза ткнула одно и то же, а у нас в отчёте четыре
+    отдельных человека — пусть будет одно обращение, в скобках количество».
+    Мария, нажавшая «спортзал» и «обучение», — две заявки: хотела обоих."""
+    out = {}
+    for p in people:
+        for b in p['buys']:
+            if not lo <= b['at'] < hi:
+                continue
+            r = out.setdefault((p['u']['user_id'], b['product']), {
+                'p': p, 'product': b['product'], 'first': b['at'], 'last': b['at'], 'n': 0})
+            r['n'] += 1
+            r['first'] = min(r['first'], b['at'])
+            r['last'] = max(r['last'], b['at'])
+    return list(out.values())
+
+
+def _bought_cell(buys: list, full: str) -> str:
+    u"""Ячейка «купил» в таблице: по каждому продукту одна запись — время
+    первого нажатия и, если жал несколько раз, их число."""
+    groups = {}
+    for b in sorted(buys, key=lambda b: b['at']):
+        groups.setdefault(b['product'], {'at': b['at'], 'n': 0})['n'] += 1
+    return u', '.join(u'%s %s%s' % (PRODUCT_NAMES.get(k, k), _when(g['at'], full), _times(g['n']))
+                      for k, g in groups.items())
+
+
 def section_buy(m: dict, period: str, now: float) -> str:
     lo, hi, _ = bounds(period, now)
     people = list(m['people'].values())
-    buys = [(b, p) for p in people for b in p['buys'] if lo <= b['at'] < hi]
-    buyers = {p['u']['user_id'] for _, p in buys}
+    requests = _requests(people, lo, hi)
+    buyers = {r['p']['u']['user_id'] for r in requests}
     c = reach_counts(cohort(m, lo, hi))
     lines = [_head(u'Покупки', period), u'',
-             u'🛒 Нажали «купить»: <b>%d</b> человек, нажатий %d' % (len(buyers), len(buys))]
+             u'🛒 Нажали «купить»: <b>%d</b> %s · заявок %d · всего нажатий %d' % (
+                 len(buyers), _plural(len(buyers), u'человек', u'человека', u'человек'),
+                 len(requests), sum(r['n'] for r in requests))]
     products = {}
-    for b, _ in buys:
-        products[b['product']] = products.get(b['product'], 0) + 1
+    for r in requests:
+        products[r['product']] = products.get(r['product'], 0) + 1
     for key, n in sorted(products.items(), key=lambda kv: -kv[1]):
         lines.append(u'   — %s: %d' % (PRODUCT_NAMES.get(key, _esc(key)), n))
     if c[6]:
@@ -533,22 +581,22 @@ def section_buy(m: dict, period: str, now: float) -> str:
     if paths:
         lines.append(u'От запуска до покупки обычно: %s' % _span(statistics.median(paths)))
     by_source = {}
-    for _, p in buys:
-        key = stats.label(p['u'].get('source') or '')
+    for r in requests:
+        key = stats.label(r['p']['u'].get('source') or '')
         by_source[key] = by_source.get(key, 0) + 1
     if by_source:
         ranked = sorted(by_source.items(), key=lambda kv: -kv[1])
         lines.append(u'По источникам: ' + u' · '.join(
             u'%s %d' % (_esc(k), n) for k, n in ranked[:10]) + (u' · …' if len(ranked) > 10 else u''))
-    if buys:
-        lines += [u'', u'<b>Последние:</b>']
-        for b, p in sorted(buys, key=lambda bp: -bp[0]['at'])[:12]:
-            u = p['u']
+    if requests:
+        lines += [u'', u'<b>Последние:</b> <i>человек и продукт, в скобках — сколько раз нажал</i>']
+        for r in sorted(requests, key=lambda r: -r['last'])[:12]:
+            u = r['p']['u']
             handle = u'@%s' % u['username'] if u.get('username') else u'без ника'
-            lines.append(u'%s · %s · %s · %s · %s' % (
-                _when(b['at']), _esc(u.get('first_name') or u'без имени'), _esc(handle),
-                PRODUCT_NAMES.get(b['product'], _esc(b['product'])),
-                _esc(stats.label(u.get('source') or ''))))
+            lines.append(u'%s · %s · %s · %s · %s%s' % (
+                _when(r['first']), _esc(u.get('first_name') or u'без имени'), _esc(handle),
+                PRODUCT_NAMES.get(r['product'], _esc(r['product'])),
+                _esc(stats.label(u.get('source') or '')), _times(r['n'])))
     elif not products:
         lines.append(u'За этот срок покупок не было.')
     return _fit(lines)
@@ -630,8 +678,7 @@ def csv_bytes(snap: dict | None = None) -> bytes:
             ANSWER_NAMES.get(p['answers'].get('day1', ('', 0))[0], u''),
             ANSWER_NAMES.get(p['answers'].get('day2', ('', 0))[0], u''),
             ANSWER_NAMES.get(p['answers'].get('day3', ('', 0))[0], u''),
-            _cell(u', '.join(u'%s %s' % (PRODUCT_NAMES.get(b['product'], b['product']),
-                                         _when(b['at'], full)) for b in p['buys'])),
+            _cell(_bought_cell(p['buys'], full)),
             _when(u.get('blocked_at'), full),
             titles.get(p['position'], u''),
             p['care'] or u''))

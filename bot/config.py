@@ -84,6 +84,24 @@ TEAM_STATS_IDS = (
 )
 STATS_IDS = tuple(dict.fromkeys(_ids(os.getenv('STATS_IDS', '')) + TEAM_STATS_IDS))
 
+# Кому, кроме чата PURCHASE_CHAT_ID, сразу уходит заявка на покупку: Павлу и
+# AleX лично. Sharp 13.09.2026: «куда заявки падают — прикрепи Павла и
+# Алекса»; до этого в PURCHASE_CHAT_ID стояла личка Sharp, и заявки видел
+# только он. В коде, а не в переменных Railway, — по той же причине, что и
+# TEAM_STATS_IDS. Ещё получателей можно дописать в PURCHASE_TO через запятую.
+TEAM_PURCHASE_IDS = (
+    312701042,   # Павел Андреев
+    350631550,   # AleX K.E.N.T.
+)
+
+
+def purchase_recipients() -> tuple:
+    u"""Все, кому уходит заявка на покупку, без повторов. Читается при каждой
+    заявке, а не при запуске: так правка PURCHASE_TO видна без перезапуска."""
+    chats = (((PURCHASE_CHAT_ID,) if PURCHASE_CHAT_ID else ())
+             + _ids(os.getenv('PURCHASE_TO', '')) + TEAM_PURCHASE_IDS)
+    return tuple(dict.fromkeys(chats))
+
 
 def can_stats(user_id: int, chat_id: int | None = None) -> bool:
     u"""Статистику видят админы, STATS_IDS и любой, кто пишет из
