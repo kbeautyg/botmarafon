@@ -30,6 +30,10 @@ def база(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'STATS_IDS', ())
     monkeypatch.setattr(config, 'ENTRY_CHAT_ID', ENTRY)
     monkeypatch.setattr(config, 'SUPPORT_CHAT_ID', SUPPORT)
+    # команду выключаем: здесь проверяется чат уведомлений, команда — ниже
+    monkeypatch.setattr(config, 'TEAM_PURCHASE_IDS', ())
+    monkeypatch.setattr(config, 'PURCHASE_CHAT_ID', 0)
+    monkeypatch.delenv('PURCHASE_TO', raising=False)
     start._launching.clear()
     yield
 
@@ -42,10 +46,10 @@ async def test_первый_старт_уходит_в_чат_уведомлен
     сообщение = FakeMessage(text='/start ig', user=FakeUser(1, 'anna', u'Анна'))
     await start.on_start(сообщение)
     (текст,) = _в_чат(сообщение.bot, ENTRY)
-    assert u'Вход в бота марафона' in текст
+    assert u'Новый запуск марафона' in текст
     assert u'Анна' in текст and u'@anna' in текст and u'<code>1</code>' in текст
     assert u'откуда: Instagram' in текст
-    assert u'Запустил марафон (в первый раз)' in текст
+    assert u'Запуск: в первый раз' in текст
     assert 'launch' in db.pending_chains(1)
 
 
@@ -59,7 +63,7 @@ async def test_повторный_старт_не_уведомляет_а_пер
     call = FakeCall('restart', user=FakeUser(2), bot=первый.bot)
     await start.on_restart(call)
     тексты = _в_чат(первый.bot, ENTRY)
-    assert len(тексты) == 2 and u'Запустил марафон (2-й раз)' in тексты[-1]
+    assert len(тексты) == 2 and u'Запуск: 2-й раз' in тексты[-1]
     assert db.get_user(2)['launches'] == 2
 
 
@@ -77,7 +81,7 @@ async def test_чат_уведомлений_совпадает_с_забото�
     сообщение = FakeMessage(text='/start zayavka66', user=FakeUser(4))
     await start.on_start(сообщение)
     (единственное,) = _в_чат(сообщение.bot, SUPPORT)
-    assert u'Заявка с сайта' in единственное and u'Вход в бота' not in единственное
+    assert u'Заявка с сайта' in единственное and u'перешла в бота' not in единственное
 
 
 async def test_без_чата_уведомлений_ничего_не_шлём(monkeypatch):
@@ -118,7 +122,7 @@ async def test_сбой_приветствия_не_отменяет_уведо�
     with pytest.raises(RuntimeError):
         await start.on_start(сообщение)
     (текст,) = _в_чат(сообщение.bot, ENTRY)
-    assert u'Запустил марафон (в первый раз)' in текст
+    assert u'Запуск: в первый раз' in текст
     assert 'launch' in db.pending_chains(8)
 
 
@@ -136,3 +140,47 @@ def test_старая_база_получает_колонки_и_счётчик
     assert db.get_user(1)['launches'] == 1 and db.get_user(2)['launches'] == 0
     assert db.get_user(1)['lead_no'] is None
     assert db.count_launch(2) == 1
+
+
+# ------------------------------------------------ 14.09.2026: лично команде
+
+SHARP, PAVEL, ALEX = 7874595355, 312701042, 350631550
+
+
+async def test_новый_запуск_уходит_лично_команде(monkeypatch):
+    u"""AleX 13.09.2026 не видел ни одного уведомления: чат не был задан."""
+    monkeypatch.setattr(config, 'ENTRY_CHAT_ID', 0)
+    monkeypatch.setattr(config, 'PURCHASE_CHAT_ID', SHARP)
+    monkeypatch.setattr(config, 'TEAM_PURCHASE_IDS', (PAVEL, ALEX))
+    сообщение = FakeMessage(text='/start tg_storis5', user=FakeUser(10, 'vera', u'Вера'))
+    await start.on_start(сообщение)
+    for chat in (SHARP, PAVEL, ALEX):
+        (текст,) = _в_чат(сообщение.bot, chat)
+        assert u'Новый запуск марафона' in текст and u'Telegram ← storis5' in текст
+
+
+async def test_заявка_с_сайта_команде_со_своим_заголовком(monkeypatch):
+    monkeypatch.setattr(config, 'TEAM_PURCHASE_IDS', (PAVEL,))
+    сообщение = FakeMessage(text='/start zayavka71', user=FakeUser(14, 'inna', u'Inna'))
+    await start.on_start(сообщение)
+    (текст,) = _в_чат(сообщение.bot, PAVEL)
+    assert u'Заявка с сайта перешла в бота' in текст and u'Новый запуск' not in текст
+    assert u'Заявка с сайта №71' in текст
+
+
+async def test_имя_ссылкой_на_профиль_даже_без_ника():
+    сообщение = FakeMessage(text='/start', user=FakeUser(11, None, u'Ivan'))
+    await start.on_start(сообщение)
+    (текст,) = _в_чат(сообщение.bot, ENTRY)
+    assert u'<a href="tg://user?id=11">Ivan</a>' in текст and u'без ника' in текст
+
+
+async def test_в_кто_имя_ссылкой_на_профиль():
+    await start.on_start(FakeMessage(text='/start', user=FakeUser(12, None, u'Ольга')))
+    assert u'tg://user?id=12' in u'\n'.join(stats.who_messages(30))
+
+
+def test_имя_с_разметкой_не_ломает_сообщение():
+    from bot import contact
+    строка = contact.line(13, u'<b>злой</b> & ко', None)
+    assert u'<b>злой</b>' not in строка and u'&lt;b&gt;злой&lt;/b&gt; &amp; ко' in строка

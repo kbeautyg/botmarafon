@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from . import config, db
+from . import config, contact, db
 
 log = logging.getLogger(__name__)
 
@@ -184,7 +184,8 @@ def source_label(u: dict) -> str:
 def _who_entry(r: dict, p: dict | None) -> str:
     u"""Две строки на человека: кто и откуда; докуда дошёл и где сейчас."""
     when = datetime.fromtimestamp(r['started_at'], MSK).strftime('%d.%m %H:%M')
-    who = html.escape(r['first_name'] or u'без имени')
+    # имя ссылкой на профиль: у многих нет ника, а написать надо (AleX 13.09)
+    who = contact.link(r['user_id'], r['first_name'])
     handle = u'@%s' % r['username'] if r['username'] else u'без ника'
     head = u'%s · %s · %s · %s' % (when, who, handle, source_label(r))
     if p is None:

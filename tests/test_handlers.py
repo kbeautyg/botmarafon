@@ -143,7 +143,9 @@ async def test_ответ_менеджера_на_заявку_возвраща�
     message = FakeMessage(text='/start zayavka57')
     await start.on_start(message)
 
-    голова = message.bot.by_id[max(message.bot.by_id)]
+    # Сообщение менеджеру ищем в чате заботы, а не «последнее отправленное»:
+    # следом бот шлёт уведомление о входе команде (14.09.2026).
+    голова = next(m for _, m in sorted(message.bot.by_id.items()) if m.chat.id == CARE_CHAT)
     assert db.care_target(CARE_CHAT, голова.message_id) == 1
 
 

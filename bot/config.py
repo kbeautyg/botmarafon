@@ -103,6 +103,19 @@ def purchase_recipients() -> tuple:
     return tuple(dict.fromkeys(chats))
 
 
+def entry_recipients() -> tuple:
+    u"""Кому уходит уведомление о новом запуске марафона: чат ENTRY_CHAT_ID
+    (не задан — чат сводок STATS_CHAT_ID) и те же люди, что получают заявки
+    на покупку.
+
+    AleX 13.09.2026 так и не увидел ни одного уведомления: с 12.09 они шли
+    только в ENTRY_CHAT_ID, а там пусто — ни этой переменной, ни чата сводок
+    в настройках бота нет, и бот молча слал в никуда. Поэтому, как и заявки
+    на покупку, — лично команде, без переменных Railway."""
+    chats = ((ENTRY_CHAT_ID,) if ENTRY_CHAT_ID else ()) + purchase_recipients()
+    return tuple(dict.fromkeys(chats))
+
+
 def can_stats(user_id: int, chat_id: int | None = None) -> bool:
     u"""Статистику видят админы, STATS_IDS и любой, кто пишет из
     командного чата — сводки, поддержки или заявок: там только свои,

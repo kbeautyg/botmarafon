@@ -169,3 +169,10 @@ def test_склонение_нажатий():
     assert insights._times(5) == u' (5 нажатий)'
     assert insights._times(11) == u' (11 нажатий)'
     assert insights._times(21) == u' (21 нажатие)'
+
+
+async def test_в_заявке_имя_ссылкой_на_профиль_даже_без_ника():
+    bot = FakeBot()
+    await purchase.on_buy(_кнопка(bot, uid=21, nick=None, name=u'Ivan'))
+    текст = _заявки(bot)[0][1]
+    assert u'tg://user?id=21' in текст and u'без ника' in текст

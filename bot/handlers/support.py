@@ -16,16 +16,14 @@ import logging
 from aiogram import F, Router
 from aiogram.types import Message
 
-from .. import config, db, keyboards, texts
+from .. import config, contact, db, keyboards, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='support')
 
 
 def _who(user):
-    name = html.escape(user.full_name or u'без имени')
-    handle = u'@%s' % user.username if user.username else u'без ника'
-    return u'%s · %s · <code>%s</code>' % (name, handle, user.id)
+    return contact.line(user.id, user.full_name, user.username)
 
 
 @router.message(F.chat.type == 'private', F.text == texts.CARE_BUTTON)

@@ -20,7 +20,7 @@ import time
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from .. import config, db, delivery, texts
+from .. import config, contact, db, delivery, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='purchase')
@@ -36,10 +36,8 @@ REPEAT_WINDOW = 24 * 3600
 
 
 def _who(user):
-    u"""Как показать человека менеджеру: имя, ник и id для поиска."""
-    name = html.escape(user.full_name or u'без имени')
-    handle = u'@%s' % user.username if user.username else u'без ника'
-    return u'<b>%s</b> · %s · <code>%s</code>' % (name, handle, user.id)
+    u"""Как показать человека менеджеру: имя ссылкой на профиль, ник и id."""
+    return contact.line(user.id, user.full_name, user.username, bold=True)
 
 
 async def _deliver(bot, number, note: str) -> None:

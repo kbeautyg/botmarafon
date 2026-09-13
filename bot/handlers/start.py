@@ -30,7 +30,7 @@ from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from .. import config, db, keyboards, scheduler, stats, texts
+from .. import config, contact, db, keyboards, scheduler, stats, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='start')
@@ -49,9 +49,7 @@ def _payload(message: Message, command: CommandObject | None) -> str:
 
 
 def _who(user) -> str:
-    name = html.escape(user.full_name or u'без имени')
-    handle = u'@%s' % user.username if user.username else u'без ника'
-    return u'%s · %s · <code>%s</code>' % (name, handle, user.id)
+    return contact.line(user.id, user.full_name, user.username)
 
 
 def _nth(n: int) -> str:
@@ -65,14 +63,16 @@ def _entry_text(user, template: str, **extra) -> str:
                            source=stats.source_label(known), **extra)
 
 
-async def _announce(bot, user, text: str) -> None:
-    u"""Сообщение о входе — в чат уведомлений. Его сбой человека не касается."""
-    if not config.ENTRY_CHAT_ID:
-        return
-    try:
-        await bot.send_message(config.ENTRY_CHAT_ID, text)
-    except Exception as err:
-        log.warning(u'уведомление о входе %s не ушло: %s', user.id, err)
+async def _announce(bot, user, text: str, skip: tuple = ()) -> None:
+    u"""Уведомление о входе — всем из config.entry_recipients(). Сбой одного
+    получателя не мешает остальным и человека в боте не касается."""
+    for chat in config.entry_recipients():
+        if not chat or chat in skip:
+            continue
+        try:
+            await bot.send_message(chat, text)
+        except Exception as err:
+            log.warning(u'уведомление о входе %s не ушло в %s: %s', user.id, chat, err)
 
 
 async def _lead_arrived(message: Message, number: str) -> None:
@@ -125,10 +125,10 @@ async def on_start(message: Message, command: CommandObject | None = None):
             db.set_lead_no(user_id, int(lead.group(1)))
         await _lead_arrived(message, lead.group(1))
         log.info(u'заявка с сайта: человек %s открыл бота', user_id)
-        # в чат заботы заявка уже упала — туда же второй раз не шлём
-        if config.ENTRY_CHAT_ID != config.SUPPORT_CHAT_ID:
-            await _announce(message.bot, message.from_user,
-                            _entry_text(message.from_user, texts.ENTRY_LEAD))
+        # в чат заботы заявка уже упала — туда второй раз не шлём
+        await _announce(message.bot, message.from_user,
+                        _entry_text(message.from_user, texts.ENTRY_LEAD),
+                        skip=(config.SUPPORT_CHAT_ID,))
         return
 
     # Повторный /start воронку не удваивает: mark_launched проходит один раз.
