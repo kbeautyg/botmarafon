@@ -156,3 +156,13 @@ def test_готовые_ссылки_содержат_имя_бота_и_мет�
     текст = stats.links_report('finish_marafon_bot')
     assert 'https://t.me/finish_marafon_bot?start=tg_1' in текст
     assert 'start=ig' in текст
+
+def test_короткие_метки_alex_понятны_в_статистике():
+    u"""AleX 14.09.2026 раздаёт ссылки ?start=az, ls, nc, tg_ads1."""
+    понятно = {'az': u'Автообзвон', 'ls': u'Рассылка в ЛС', 'nc': u'Нейрокомментинг',
+               'tg_ads1': u'Telegram ← ads1', 'nc_2': u'Нейрокомментинг ← 2'}
+    for метка, подпись in понятно.items():
+        assert stats.label(stats.parse_source(метка)) == подпись
+    ссылки = stats.links_report('finish_marafon_bot')
+    for метка in ('az', 'ls', 'nc', 'tg_ads1'):
+        assert u'?start=%s</code>' % метка in ссылки
