@@ -71,7 +71,7 @@ async def test_заявка_с_сайта_уведомляет_с_номером
     сообщение = FakeMessage(text='/start zayavka65', user=FakeUser(3, 'irina', u'Ирина'))
     await start.on_start(сообщение)
     (текст,) = _в_чат(сообщение.bot, ENTRY)
-    assert u'Заявка с сайта №65' in текст and u'ждёт менеджера' in текст
+    assert u'Заявка с сайта №65' in текст and u'Марафон запущен (в первый раз)' in текст
     assert db.get_user(3)['lead_no'] == 65
     assert len(_в_чат(сообщение.bot, SUPPORT)) == 1           # заявка менеджеру, как и была
 

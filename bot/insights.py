@@ -241,7 +241,14 @@ def cohort(m: dict, lo: float, hi: float, leads: bool = False) -> list[dict]:
     """
     return [p for p in m['people'].values()
             if lo <= (p['u'].get('started_at') or 0) < hi
-            and (p['u'].get('source') == LEAD_SOURCE) == leads]
+            and _waiting_lead(p) == leads]
+
+
+def _waiting_lead(p: dict) -> bool:
+    u"""Пришёл по заявке с сайта, а марафон ему не запускался. С 14.09.2026
+    марафон запускается и людям с заявки — запустившие считаются в воронке
+    как все, отдельно только те, кому он тогда не запускался."""
+    return p['u'].get('source') == LEAD_SOURCE and not p['u'].get('launched_at')
 
 
 def reach_counts(group: list[dict]) -> list[int]:
@@ -326,6 +333,11 @@ NOTE = (u'<i>Команда проекта не считается. Шаги в�
 
 # ------------------------------------------------------------ разделы
 
+def _leads_line(n: int) -> str | None:
+    u"""Строка сводки про людей с заявки без марафона; нет таких — строки нет."""
+    return u'📨 Пришли по заявке с сайта, марафон не получали: %d' % n if n else None
+
+
 def section_sum(m: dict, period: str, now: float) -> str:
     lo, hi, prev_lo = bounds(period, now)
     g = cohort(m, lo, hi)
@@ -355,15 +367,14 @@ def section_sum(m: dict, period: str, now: float) -> str:
              u'🛒 Нажали «купить»: <b>%d</b>%s' % (c[7], (u' — ' + bought_line) if bought_line else u''),
              u'🚪 Закрыли бота: %d' % sum(1 for p in g if p['u'].get('blocked_at')),
              u'🤝 Писали в службу заботы: %d' % sum(1 for p in g if p['care']),
-             # AleX 13.09.2026 спросил, что значит прежняя строка «пришли по
-             # заявке с сайта, ждут менеджера, в воронку не входят»
-             u'📨 Оставили заявку на сайте и перешли в бота: %d. Марафон им не '
-             u'запускается, с ними работает менеджер, поэтому в цифрах выше их нет'
-             % len(cohort(m, lo, hi, leads=True)),
+             # С 14.09.2026 марафон запускается и людям с заявки — они в цифрах
+             # выше. Отдельно только те, кому он тогда не запускался (bot/leads.py).
+             _leads_line(len(cohort(m, lo, hi, leads=True))),
              u'',
              u'⏳ Сейчас идут марафон: <b>%d</b> · не ответили на вопрос: %d' % (running, waiting),
              u'🗂 <b>Всё время:</b> %d человек, запустили %d'
              % (len(everyone), sum(1 for p in everyone if p['u'].get('launched_at')))]
+    lines = [line for line in lines if line is not None]
 
     by_source = {}
     for p in g:
@@ -475,7 +486,7 @@ def section_days(m: dict, period: str, now: float) -> str:
 
 def section_time(m: dict, period: str, now: float) -> str:
     # заявки с сайта марафон не запускают — как и в воронке, считаем без них
-    people = [p for p in m['people'].values() if p['u'].get('source') != LEAD_SOURCE]
+    people = [p for p in m['people'].values() if not _waiting_lead(p)]
     today = datetime.fromtimestamp(now, MSK).replace(hour=0, minute=0, second=0, microsecond=0)
     lines = [_head(u'По времени', None),
              u'Последние 14 дней, время московское, без заявок с сайта:', u'<pre>',

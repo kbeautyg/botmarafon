@@ -223,6 +223,15 @@ def set_lead_no(user_id: int, number: int) -> None:
     _run('UPDATE users SET lead_no=? WHERE user_id=? AND lead_no IS NULL', (number, user_id))
 
 
+def waiting_leads() -> list[dict]:
+    u"""Пришли по заявке с сайта, марафон не запускали, бота не закрывали."""
+    rows = _conn.execute(
+        "SELECT user_id, username, first_name, started_at, lead_no FROM users "
+        "WHERE source = 'zayavka' AND launched_at IS NULL AND blocked_at IS NULL "
+        "ORDER BY started_at").fetchall()
+    return [dict(r) for r in rows]
+
+
 def set_poll(user_id: int, poll: str | None) -> None:
     _run('UPDATE users SET poll=? WHERE user_id=?', (poll, user_id))
 

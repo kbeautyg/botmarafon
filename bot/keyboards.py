@@ -52,6 +52,12 @@ def stats_menu(section: str, period: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def leads_launch(count: int) -> InlineKeyboardMarkup:
+    u"""Кнопка админу: отправить марафон людям с заявки, пришедшим до 14.09.2026."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.LEADS_BUTTON % count, callback_data='leads:launch')]])
+
+
 def restart() -> InlineKeyboardMarkup:
     u"""Кнопка «пройти заново» под ответом на повторный /start.
 

@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import backup, config, db, delivery, handlers, scheduler, stats, texts
+from . import backup, config, db, delivery, handlers, leads, scheduler, stats, texts
 
 log = logging.getLogger('marathon')
 
@@ -65,6 +65,12 @@ async def run():
         # Молчать нельзя: узнаем о потере базы от заказчика, как 2 сентября.
         log.warning(u'база %s не на диске — пропадёт при деплое', config.DB_PATH)
         await delivery.alert_admins(bot, texts.DB_EPHEMERAL_ADMIN)
+    # Разово после выкладки 14.09.2026: список людей с заявки без марафона —
+    # админам, с кнопкой отправить (bot/leads.py). Сбой не мешает запуску.
+    try:
+        await leads.offer_backfill(bot)
+    except Exception as err:
+        log.warning(u'список людей с заявки админам не ушёл: %s', err)
 
     # Планировщик живёт рядом с опросом обновлений: пауза в два с половиной
     # часа никого не держит, состояние очереди целиком в базе.

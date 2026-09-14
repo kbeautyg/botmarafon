@@ -124,14 +124,14 @@ async def test_из_командного_чата_статистика_дост�
 async def test_заявка_с_сайта_не_запускает_марафон_а_зовёт_менеджера():
     u"""Павел 09.09.2026: люди не пишут сами, менеджер пишет первым — и его
     аккаунт ограничивают. Ссылка из заявки ведёт в бота: «Запустить» и есть
-    первое сообщение человека. Марафон при этом не начинается — человек
-    оставил заявку на спортзал и ждёт менеджера."""
+    первое сообщение человека. С 14.09.2026 (AleX, Sharp) вместе с этим
+    сразу запускается марафон — подарком, пока менеджер готовит ответ."""
     message = FakeMessage(text='/start zayavka57')
     await start.on_start(message)
 
-    assert db.get_user(1)['launched_at'] is None
-    assert db.user_jobs(1) == []
-    assert u'№57' in message.answers[0]
+    assert db.get_user(1)['launched_at'] is not None
+    assert [j['chain'] for j in db.user_jobs(1)] == ['launch']
+    assert u'№57' in message.answers[0] and u'марафон' in message.answers[0]
 
     ушло = [s for s in message.bot.sent if s[1] == CARE_CHAT]
     assert len(ушло) == 1

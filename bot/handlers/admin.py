@@ -17,8 +17,8 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import (backup, config, db, delivery, funnel, insights, keyboards, scheduler,
-                stats, texts)
+from .. import (backup, config, db, delivery, funnel, insights, keyboards, leads,
+                scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -275,6 +275,39 @@ async def on_who(message: Message, command: CommandObject):
     limit = int(asked) if asked.isdigit() and 0 < int(asked) <= 100 else 30
     for chunk in stats.who_messages(limit):
         await message.answer(chunk)
+
+
+@router.message(Command('zayavki', 'заявки'))
+async def on_leads(message: Message):
+    u"""Кто пришёл по заявке с сайта и марафон не получал — и кнопка отправить
+    (AleX 14.09.2026, подтвердил Sharp; см. bot/leads.py)."""
+    if not _is_admin(message.from_user.id):
+        return
+    people = leads.pending()
+    await message.answer(leads.report(people),
+                         reply_markup=keyboards.leads_launch(len(people)) if people else None)
+
+
+@router.callback_query(F.data == 'leads:launch')
+async def on_leads_launch(call: CallbackQuery):
+    u"""Отправка марафона прежним людям с заявки — только админ и только по кнопке."""
+    if not _is_admin(call.from_user.id):
+        try:
+            await call.answer(u'Кнопка только для админа')
+        except Exception:
+            pass
+        return
+    try:
+        await call.answer(u'Отправляю…')
+    except Exception as err:                       # нажатие могло устареть
+        log.debug(u'нажатие leads:launch не подтвердили: %s', err)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)   # второй раз не нажать
+    except Exception as err:
+        log.debug(u'кнопку списка людей с заявки не убрали: %s', err)
+    result = await leads.launch_all(call.bot)
+    log.info(u'марафон людям с заявки: %s', result)
+    await call.message.answer(texts.LEADS_DONE.format(**result))
 
 
 @router.message(Command('links', 'ссылки'))

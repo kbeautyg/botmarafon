@@ -14,8 +14,9 @@ u"""Старт — и сразу воронка.
    человек, очистивший переписку, оставался ни с чем (AleX 09.09.2026).
    Даём кнопку «пройти заново».
 
-2. Ссылка из заявки с сайта — ?start=zayavka57. Марафон такому человеку
-   не запускаем: он ждёт менеджера по спортзалу. Смысл ссылки в том, что
+2. Ссылка из заявки с сайта — ?start=zayavka57. С 14.09.2026 марафон
+   запускается и такому человеку (AleX, Sharp); до этого он только ждал
+   менеджера по спортзалу. Смысл ссылки в том, что
    ПЕРВЫМ пишет человек — нажатие «Запустить» и есть его первое
    сообщение. Менеджеру больше не надо писать незнакомому аккаунту, за
    что телеграм ограничивал аккаунт (Павел 09.09.2026).
@@ -75,10 +76,12 @@ async def _announce(bot, user, text: str, skip: tuple = ()) -> None:
             log.warning(u'уведомление о входе %s не ушло в %s: %s', user.id, chat, err)
 
 
-async def _lead_arrived(message: Message, number: str) -> None:
-    u"""Человек с заявкой открыл бота: поздороваться и позвать менеджера."""
+async def _lead_arrived(message: Message, number: str, gift: bool = True) -> None:
+    u"""Человек с заявкой открыл бота: поздороваться, позвать менеджера и —
+    если марафон только что запущен — сказать про подарок."""
     no = u' №%s' % number if number else u''
-    await message.answer(texts.LEAD_HELLO.format(no=no), reply_markup=keyboards.care())
+    hello = texts.LEAD_HELLO if gift else texts.LEAD_HELLO_AGAIN
+    await message.answer(hello.format(no=no), reply_markup=keyboards.care())
     if not config.SUPPORT_CHAT_ID:
         log.warning(u'заявка%s пришла в бота, а SUPPORT_CHAT_ID не задан', no)
         return
@@ -123,12 +126,25 @@ async def on_start(message: Message, command: CommandObject | None = None):
     if lead:
         if lead.group(1):
             db.set_lead_no(user_id, int(lead.group(1)))
-        await _lead_arrived(message, lead.group(1))
-        log.info(u'заявка с сайта: человек %s открыл бота', user_id)
-        # в чат заботы заявка уже упала — туда второй раз не шлём
-        await _announce(message.bot, message.from_user,
-                        _entry_text(message.from_user, texts.ENTRY_LEAD),
-                        skip=(config.SUPPORT_CHAT_ID,))
+        # С 14.09.2026 марафон запускается и людям с заявки (AleX, Sharp): до
+        # этого они только ждали менеджера. В очередь — до любого обращения к
+        # Telegram: сбой приветствия не должен отменить марафон.
+        launched = db.mark_launched(user_id)
+        nth = 0
+        if launched:
+            scheduler.start_chain(user_id, 'launch')
+            nth = db.count_launch(user_id)
+        try:
+            await _lead_arrived(message, lead.group(1), gift=launched)
+        finally:
+            log.info(u'заявка с сайта: человек %s открыл бота, марафон %s',
+                     user_id, u'запущен' if launched else u'уже шёл')
+            # в чат заботы заявка уже упала — туда второй раз не шлём
+            await _announce(message.bot, message.from_user,
+                            _entry_text(message.from_user,
+                                        texts.ENTRY_LEAD if launched else texts.ENTRY_LEAD_AGAIN,
+                                        nth=_nth(nth)),
+                            skip=(config.SUPPORT_CHAT_ID,))
         return
 
     # Повторный /start воронку не удваивает: mark_launched проходит один раз.
