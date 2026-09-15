@@ -71,9 +71,13 @@ async def _announce(bot, user, text: str, skip: tuple = ()) -> None:
         if not chat or chat in skip:
             continue
         try:
-            await bot.send_message(chat, text)
+            sent = await bot.send_message(chat, text)
         except Exception as err:
             log.warning(u'уведомление о входе %s не ушло в %s: %s', user.id, chat, err)
+            continue
+        # реплай на уведомление — сообщение этому человеку (handlers/support.py)
+        if sent is not None:
+            db.link_care(chat, sent.message_id, user.id)
 
 
 async def _lead_arrived(message: Message, number: str, gift: bool = True) -> None:

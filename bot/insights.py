@@ -218,15 +218,21 @@ def model(snap: dict | None = None) -> dict:
 # ------------------------------------------------------------ расчёты
 
 def bounds(period: str, now: float) -> tuple[float, float, float | None]:
-    u"""(от, до, от прошлого такого же периода) — для сравнения."""
+    u"""(от, до, от прошлого такого же периода) — для сравнения.
+
+    Верхняя граница — на секунду позже «сейчас»: граница строгая, и событие
+    в ту же долю секунды, что и отчёт, выпадало бы (часы Windows грубые —
+    так в отчёте терялась последняя покупка, 15.09.2026).
+    """
+    end = now + 1.0
     if period == 'd':
         start = datetime.fromtimestamp(now, MSK).replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp()
-        return start, now, None           # полдня с сутками не сравнить
+        return start, end, None           # полдня с сутками не сравнить
     if period in ('7', '30'):
         span = int(period) * DAY
-        return now - span, now, now - 2 * span
-    return 0.0, now, None
+        return now - span, end, now - 2 * span
+    return 0.0, end, None
 
 
 LEAD_SOURCE = 'zayavka'

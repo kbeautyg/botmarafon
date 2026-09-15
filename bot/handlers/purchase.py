@@ -40,7 +40,7 @@ def _who(user):
     return contact.line(user.id, user.full_name, user.username, bold=True)
 
 
-async def _deliver(bot, number, note: str) -> None:
+async def _deliver(bot, number, note: str, user_id: int) -> None:
     u"""Заявка — всем получателям. Не дошла ни до кого — шуметь админам.
 
     Заявка уже в базе и не пропадёт, но если её не увидел ни один человек,
@@ -50,8 +50,11 @@ async def _deliver(bot, number, note: str) -> None:
     got, failed = [], []
     for chat in config.purchase_recipients():
         try:
-            await bot.send_message(chat, note)
+            sent = await bot.send_message(chat, note)
             got.append(chat)
+            # реплай на заявку — сообщение покупателю (handlers/support.py)
+            if sent is not None:
+                db.link_care(chat, sent.message_id, user_id)
         except Exception as err:
             failed.append(u'%s: %s' % (chat, err))
             log.warning(u'заявка %s не ушла в %s: %s', number, chat, err)
@@ -99,7 +102,7 @@ async def on_buy(call: CallbackQuery):
     # оставить заявку только в базе (ревью 13.09.2026).
     again = (u'\n\nПовторная заявка: человек вернулся к кнопке, нажатие №%d' % (len(earlier) + 1)
              if earlier else u'')
-    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s' % (
-        number, _who(call.from_user), title, again)
-    await _deliver(call.bot, number, note)
+    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s\n\n%s' % (
+        number, _who(call.from_user), title, again, texts.REPLY_HINT)
+    await _deliver(call.bot, number, note, user_id)
     await _reply(call, u'Заявка принята', texts.OFFER_DONE)

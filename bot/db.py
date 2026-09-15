@@ -123,6 +123,9 @@ def connect(path: str) -> sqlite3.Connection:
     if 'launches' not in columns:
         _conn.execute('ALTER TABLE users ADD COLUMN launches INTEGER NOT NULL DEFAULT 0')
         _conn.execute('UPDATE users SET launches=1 WHERE launched_at IS NOT NULL')
+    # 15.09.2026: когда ушёл дожим «заходи на марафон» (bot/nudge.py)
+    if 'nudged_at' not in columns:
+        _conn.execute('ALTER TABLE users ADD COLUMN nudged_at REAL')
     _conn.commit()
     return _conn
 
@@ -252,7 +255,26 @@ def reset_funnel(user_id: int) -> None:
     # и записанные шаги прошлого прогона: иначе статистика считала бы
     # прошлые вопросы безответными и мерила время ответа через прогоны
     _run('DELETE FROM events WHERE user_id=?', (user_id,))
-    _run('UPDATE users SET launched_at=NULL, poll=NULL WHERE user_id=?', (user_id,))
+    _run('UPDATE users SET launched_at=NULL, poll=NULL, nudged_at=NULL WHERE user_id=?', (user_id,))
+
+
+def nudge_candidates(since: float, launched_before: float) -> list[int]:
+    u"""Кому пора дожим: запустил марафон между since и launched_before,
+    первый день получил, на вопрос после него не ответил, бота не закрывал,
+    дожима ещё не было (bot/nudge.py)."""
+    rows = _conn.execute(
+        "SELECT u.user_id FROM users u WHERE u.launched_at IS NOT NULL "
+        "AND u.launched_at >= ? AND u.launched_at <= ? "
+        "AND u.nudged_at IS NULL AND u.blocked_at IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.user_id = u.user_id AND a.poll = 'day1') "
+        "AND EXISTS (SELECT 1 FROM events e WHERE e.user_id = u.user_id "
+        "            AND e.kind = 'day' AND e.ref = '1') "
+        "ORDER BY u.launched_at", (since, launched_before)).fetchall()
+    return [r[0] for r in rows]
+
+
+def mark_nudged(user_id: int) -> None:
+    _run('UPDATE users SET nudged_at=? WHERE user_id=?', (time.time(), user_id))
 
 
 def set_care_open(user_id: int, is_open: bool) -> None:

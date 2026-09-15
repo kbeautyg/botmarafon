@@ -103,6 +103,11 @@ def purchase_recipients() -> tuple:
     return tuple(dict.fromkeys(chats))
 
 
+def is_team(user_id: int) -> bool:
+    u"""Человек из команды проекта: админ, статистика или получатель заявок."""
+    return user_id in set(ADMIN_IDS) | set(STATS_IDS) | set(purchase_recipients())
+
+
 def entry_recipients() -> tuple:
     u"""Кому уходит уведомление о новом запуске марафона: чат ENTRY_CHAT_ID
     (не задан — чат сводок STATS_CHAT_ID) и те же люди, что получают заявки

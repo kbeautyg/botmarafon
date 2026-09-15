@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import backup, config, db, delivery, handlers, leads, scheduler, stats, texts
+from . import backup, config, db, delivery, handlers, leads, nudge, scheduler, stats, texts
 
 log = logging.getLogger('marathon')
 
@@ -76,11 +76,13 @@ async def run():
     # часа никого не держит, состояние очереди целиком в базе.
     worker = asyncio.create_task(scheduler.loop(bot))
     reporter = asyncio.create_task(stats.loop(bot))
+    nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
         worker.cancel()
         reporter.cancel()
+        nudger.cancel()
         await bot.session.close()
 
 

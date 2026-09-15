@@ -219,6 +219,9 @@ async def test_без_чата_поддержки_человек_получае�
     u"""Заказчик дал живой аккаунт заботы: ботом туда не напишешь."""
     monkeypatch.setattr(config, 'SUPPORT_CHAT_ID', 0)
     monkeypatch.setattr(config, 'CARE_CONTACT', 'Metod_Finish_Official')
+    # и лично команде переслать некому (с 15.09.2026 пересылается и туда)
+    monkeypatch.setattr(config, 'PURCHASE_CHAT_ID', 0)
+    monkeypatch.setattr(config, 'TEAM_PURCHASE_IDS', ())
 
     вопрос = FakeMessage(text=u'Когда второй день?')
     await support.to_support(вопрос)
@@ -244,7 +247,8 @@ async def test_вопрос_уходит_в_чат_заботы_и_возвра�
 
     в_заботу = [chat for _, chat, _ in bot.sent if chat == CARE_CHAT]
     assert len(в_заботу) == 2, u'шапка с именем и сам вопрос'
-    assert texts.CARE_SENT in вопрос.answers
+    # дошло до команды — человеку «ответим здесь» (с 15.09.2026)
+    assert texts.CARE_SENT_HERE in вопрос.answers
 
     # менеджер отвечает реплаем на шапку
     шапка_id = 101
