@@ -183,3 +183,112 @@ async def test_пройти_заново_снова_разрешает_дожи�
     await nudge.run_once(FakeBot(), now=NOW)
     db.reset_funnel(1)
     assert db.get_user(1)['nudged_at'] is None
+
+
+# ------------------------------------------------------------ /написать по ID или нику
+
+from aiogram.exceptions import TelegramForbiddenError                     # noqa: E402
+from aiogram.methods import SendMessage                                   # noqa: E402
+from aiogram.types import MessageEntity                                   # noqa: E402
+
+
+class ПочтаБот(FakeBot):
+    u"""Запоминает, с какими параметрами ушло сообщение; closed — закрыли бота."""
+
+    def __init__(self, closed=()):
+        super().__init__()
+        self.closed = set(closed)
+        self.kw = {}
+
+    async def send_message(self, chat_id, text, **kw):
+        if chat_id in self.closed:
+            raise TelegramForbiddenError(method=SendMessage(chat_id=chat_id, text=text),
+                                         message='Forbidden: bot was blocked by the user')
+        self.kw[chat_id] = kw
+        return await self._record('text', chat_id, text)
+
+
+def _команда(text, bot, user=ALEX, entities=None):
+    m = FakeMessage(text=text, user=FakeUser(user), bot=bot)
+    m.entities = entities
+    return m
+
+
+async def test_написать_по_id_уходит_человеку_и_дальше_можно_реплаем():
+    db.remember_user(5, 'Aidyn2381', u'Айдын')
+    bot = ПочтаБот()
+    cmd = _команда(u'/написать 5 Посмотрели разборы?', bot)
+    assert support._team_private(cmd)
+    await support.on_write(cmd)
+    assert _в(bot, 5) == [('text', u'Посмотрели разборы?')]
+    assert bot.kw[5]['parse_mode'] is None                     # «<» в тексте не ломает отправку
+    подтверждение = _последнее_в(bot, ALEX)
+    assert u'Отправлено ✅' in подтверждение.text and 'Aidyn2381' in подтверждение.text
+    ещё = FakeMessage(text=u'И вот ещё', user=FakeUser(ALEX), bot=bot, reply_to=подтверждение)
+    await support.from_team(ещё)
+    assert _в(bot, 5, 'copy')
+
+
+async def test_написать_по_нику_без_учёта_регистра_и_по_ссылке():
+    db.remember_user(6, 'Elena_Reiki28', u'Елена')
+    bot = ПочтаБот()
+    await support.on_write(_команда(u'/написать @elena_reiki28 Здравствуйте', bot))
+    await support.on_write(_команда(u'/написать t.me/Elena_Reiki28\nВторое\nв две строки', bot))
+    assert _в(bot, 6) == [('text', u'Здравствуйте'), ('text', u'Второе\nв две строки')]
+
+
+async def test_оформление_текста_сохраняется_со_сдвигом_в_utf16():
+    db.remember_user(7, 'olga', u'Ольга')
+    bot = ПочтаБот()
+    head = u'/написать 7 '
+    body = u'👋 Привет, это важно'
+    важно = body.index(u'важно')
+    utf16 = lambda s: len(s.encode('utf-16-le')) // 2          # noqa: E731
+    entities = [
+        MessageEntity(type='bot_command', offset=0, length=utf16(u'/написать')),
+        MessageEntity(type='bold', offset=utf16(head + body[:важно]), length=5),
+    ]
+    await support.on_write(_команда(head + body, bot, entities=entities))
+    [bold] = bot.kw[7]['entities']
+    assert (bold.type, bold.offset, bold.length) == ('bold', utf16(body[:важно]), 5)
+
+
+async def test_без_текста_бот_спрашивает_и_реплаем_уходит_фото():
+    db.remember_user(8, None, u'Oksana')
+    bot = ПочтаБот()
+    await support.on_write(_команда(u'/написать 8', bot))
+    вопрос = _последнее_в(bot, ALEX)
+    assert u'Кому:' in вопрос.text and u'без ника' in вопрос.text
+    assert _в(bot, 8) == []
+    фото = FakeMessage(user=FakeUser(ALEX), bot=bot, reply_to=вопрос, photo=['file'])
+    await support.from_team(фото)
+    assert _в(bot, 8, 'copy')
+
+
+async def test_кого_нет_в_боте_не_пишем_и_объясняем():
+    bot = ПочтаБот()
+    for ref in (u'999', u'@nobody_here', u'кто-то'):
+        cmd = _команда(u'/написать %s привет' % ref, bot)
+        await support.on_write(cmd)
+        assert u'Не нашёл в боте' in cmd.answers[-1]
+    assert [c for k, c, p in bot.sent if c != ALEX] == []
+
+
+async def test_без_адресата_подсказка_как_писать():
+    cmd = _команда(u'/написать', ПочтаБот())
+    await support.on_write(cmd)
+    assert cmd.answers[-1] == texts.WRITE_USAGE
+
+
+async def test_закрывший_бота_отмечен_и_команде_сказано():
+    db.remember_user(9, 'gone', u'Aliya')
+    bot = ПочтаБот(closed=[9])
+    cmd = _команда(u'/написать 9 Здравствуйте', bot)
+    await support.on_write(cmd)
+    assert u'закрыл(а) бота' in cmd.answers[-1]
+    assert db.get_user(9)['blocked_at'] is not None
+
+
+def test_написать_могут_только_свои():
+    assert not support._team_private(FakeMessage(text=u'/написать 5 привет', user=FakeUser(12345)))
+    assert support._team_private(FakeMessage(text=u'/написать 5 привет', user=FakeUser(PAVEL)))

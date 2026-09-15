@@ -207,6 +207,14 @@ def get_user(user_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def find_by_username(username: str) -> dict | None:
+    u"""Человек по нику без @, без учёта регистра. Ник в Telegram можно
+    сменить — в базе последний, под которым человек заходил в бота."""
+    row = _conn.execute('SELECT * FROM users WHERE lower(username)=lower(?) '
+                        'ORDER BY started_at DESC LIMIT 1', (username,)).fetchone()
+    return dict(row) if row else None
+
+
 def mark_launched(user_id: int) -> bool:
     u"""Отметить запуск. False — если человек уже запускал воронку раньше."""
     cur = _run('UPDATE users SET launched_at=? WHERE user_id=? AND launched_at IS NULL',
