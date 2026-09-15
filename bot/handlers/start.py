@@ -31,7 +31,7 @@ from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from .. import config, contact, db, keyboards, scheduler, stats, texts
+from .. import config, contact, db, keyboards, launch_report, scheduler, stats, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='start')
@@ -122,7 +122,8 @@ def _repeat_start_text(user_id: int) -> str:
 @router.message(CommandStart())
 async def on_start(message: Message, command: CommandObject | None = None):
     user_id = message.from_user.id
-    raw = _payload(message, command).strip().lower()
+    # site_fb--k3v9x0a1b2c4: хвост — код клика на сайте, источник — до него
+    raw, click = launch_report.split(_payload(message, command).strip().lower())
     lead = LEAD_PAYLOAD.match(raw)
     source = LEAD_SOURCE if lead else stats.parse_source(raw)
     db.remember_user(user_id, message.from_user.username, message.from_user.first_name, source)
@@ -168,6 +169,9 @@ async def on_start(message: Message, command: CommandObject | None = None):
         scheduler.start_chain(user_id, 'launch')
         nth = db.count_launch(user_id)
         log.info(u'воронка запущена для %s', user_id)
+        # Первый запуск по ссылке с сайта — сайту, для рекламы Meta. Повторный
+        # /start сюда не доходит: запуск считается один раз на человека.
+        launch_report.report(click)
         # Уведомление тоже здесь: даже если приветствие не ушло, вход был и
         # марафон запущен — команда должна это видеть (AleX 11.09.2026).
         await _announce(message.bot, message.from_user,

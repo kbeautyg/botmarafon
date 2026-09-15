@@ -135,6 +135,11 @@ def can_stats(user_id: int, chat_id: int | None = None) -> bool:
 # туда ботом нельзя, только приводить человека за руку.
 CARE_CONTACT = os.getenv('CARE_CONTACT', '').strip().lstrip('@')
 
+# Куда сообщать о запуске бота по ссылке с сайта спортзала: сайт отдаёт его
+# в рекламу Meta (bot/launch_report.py). Пустое значение выключает.
+SITE_BOT_START_URL = os.getenv('SITE_BOT_START_URL',
+                               'https://energy-sport-gum.ru/api/bot-start').strip()
+
 def _db_path():
     u"""Где держать базу.
 
