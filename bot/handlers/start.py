@@ -71,7 +71,8 @@ async def _announce(bot, user, text: str, skip: tuple = ()) -> None:
         if not chat or chat in skip:
             continue
         try:
-            sent = await bot.send_message(chat, text)
+            # под уведомлением — «в чёрный список» в одно касание (AleX 16.09.2026)
+            sent = await bot.send_message(chat, text, reply_markup=keyboards.ban_ask(user.id))
         except Exception as err:
             log.warning(u'уведомление о входе %s не ушло в %s: %s', user.id, chat, err)
             continue

@@ -86,3 +86,27 @@ def offer() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=texts.OFFER_GYM, callback_data='buy:gym')],
         [InlineKeyboardButton(text=texts.OFFER_COURSE, callback_data='buy:course')]])
+
+
+# ---------------------------------------------------------- чёрный список
+#
+# Под уведомлениями команде (AleX 16.09.2026): «в одно касание в чёрный
+# список». Меню долгого нажатия Telegram ботам не открывает, поэтому
+# кнопка — под самим уведомлением. Бан в каналах Павла не отменить до
+# конца (человеку придётся вернуться самому), поэтому второе касание —
+# подтверждение: промахнуться мимо «Ответить» слишком легко.
+
+def ban_ask(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.BAN_BUTTON, callback_data='bl:ask:%d' % user_id)]])
+
+
+def ban_confirm(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.BAN_YES, callback_data='bl:yes:%d' % user_id),
+        InlineKeyboardButton(text=texts.BAN_NO, callback_data='bl:no:%d' % user_id)]])
+
+
+def ban_undo(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.UNBAN_BUTTON, callback_data='bl:undo:%d' % user_id)]])

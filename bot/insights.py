@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import config, db, funnel, stats
+from . import config, contact, db, funnel, stats
 
 MSK = ZoneInfo('Europe/Moscow')
 DAY = 86400
@@ -38,6 +38,7 @@ SECTIONS = {
     'time': u'По времени',
     'buy': u'Покупки',
     'now': u'Где люди сейчас',
+    'bl': u'Чёрный список',
 }
 PERIODS = {'d': u'сегодня', '7': u'за 7 дней', '30': u'за 30 дней', 'all': u'за всё время'}
 PERIOD_BUTTONS = (('d', u'Сегодня'), ('7', u'7 дней'), ('30', u'30 дней'), ('all', u'Всё время'))
@@ -73,6 +74,7 @@ POSITIONS = (
     ('offer_got', u'получили кнопки покупки'),
     ('done', u'прошли весь марафон, «купить» не нажали'),
     ('bought', u'нажали «купить»'),
+    ('banned', u'в чёрном списке — бот их не слушает'),
     ('blocked', u'заблокировали бота'),
     ('lead', u'пришли по заявке с сайта — ждут менеджера'),
     ('not_launched', u'зашли, но не запустили марафон'),
@@ -134,6 +136,8 @@ def _reached(p: dict) -> int:
 def _position(p: dict) -> str:
     u"""Где человек сейчас — ключ из POSITIONS."""
     u = p['u']
+    if p.get('ban') and p['ban'].get('removed_at') is None:
+        return 'banned'
     if u.get('blocked_at'):
         return 'blocked'
     # Вопрос живой, только пока в очереди ждёт ветка «нет»: без неё он
@@ -174,7 +178,7 @@ def model(snap: dict | None = None) -> dict:
         people[u['user_id']] = {
             'u': u, 'days': set(), 'day_at': {}, 'polls': set(), 'poll_at': {},
             'offer': False, 'offer_at': None, 'answers': {}, 'buys': [],
-            'pending': set(), 'next': None, 'care': 0, 'missed': set()}
+            'pending': set(), 'next': None, 'care': 0, 'missed': set(), 'ban': None}
 
     for e in snap['events']:
         p = people.get(e['user_id'])
@@ -205,6 +209,9 @@ def model(snap: dict | None = None) -> dict:
     for c in snap['care']:
         if c['user_id'] in people:
             people[c['user_id']]['care'] = c['n']
+    for b in snap.get('blacklist', ()):
+        if b['user_id'] in people:
+            people[b['user_id']]['ban'] = b
     for m in snap['missed']:
         if m['user_id'] in people:
             people[m['user_id']]['missed'].add(m['day'])
@@ -212,7 +219,7 @@ def model(snap: dict | None = None) -> dict:
     for p in people.values():
         p['reached'] = _reached(p)
         p['position'] = _position(p)
-    return {'people': people, 'team': skipped}
+    return {'people': people, 'team': skipped, 'blacklist': list(snap.get('blacklist', ()))}
 
 
 # ------------------------------------------------------------ расчёты
@@ -640,9 +647,47 @@ def section_now(m: dict, period: str, now: float) -> str:
     return _fit(lines)
 
 
+def section_bl(m: dict, period: str, now: float) -> str:
+    u"""Чёрный список с историей (AleX 16.09.2026): кто, когда и кем внесён,
+    когда и кем убран. Период не важен — список целиком."""
+    rows = sorted(m.get('blacklist') or (), key=lambda b: -(b.get('removed_at') or b['added_at']))
+    active = [b for b in rows if b.get('removed_at') is None]
+    gone = [b for b in rows if b.get('removed_at') is not None]
+    full = '%d.%m.%Y %H:%M'
+    lines = [_head(u'Чёрный список', None),
+             u'Сейчас в списке: <b>%d</b>. Бот им ничего не шлёт и их не слушает; '
+             u'в каналах и чатах Павла, где бот админ, — бан.' % len(active), u'']
+    for b in active:
+        lines.append(u'🚫 %s\n   ↳ с %s · добавил(а) %s' % (
+            contact.line(b['user_id'], b.get('first_name'), b.get('username')),
+            _when(b['added_at'], full), _esc(b.get('added_by') or u'—')))
+    if gone:
+        lines += [u'', u'<b>Убраны из списка</b>']
+        for b in gone:
+            lines.append(u'↩️ %s\n   ↳ был с %s по %s · убрал(а) %s' % (
+                contact.line(b['user_id'], b.get('first_name'), b.get('username')),
+                _when(b['added_at'], full), _when(b['removed_at'], full),
+                _esc(b.get('removed_by') or u'—')))
+    if not rows:
+        lines.append(u'Список пуст.')
+    chats = db.known_chats()
+    banning = [c for c in chats if c.get('can_restrict')]
+    lines.append(u'')
+    if banning:
+        lines.append(u'Банит в чатах Павла: ' + u', '.join(u'«%s»' % _esc(c.get('title') or c['chat_id'])
+                                                    for c in banning))
+    else:
+        lines.append(u'<i>Бот пока не админ ни в одном канале или чате Павла — банит только в самом боте.</i>')
+    idle = [c for c in chats if not c.get('can_restrict')]
+    if idle:
+        lines.append(u'Нет права «Блокировка пользователей»: ' + u', '.join(
+            u'«%s»' % _esc(c.get('title') or c['chat_id']) for c in idle))
+    return _fit(lines)
+
+
 RENDERERS = {
     'sum': section_sum, 'fun': section_fun, 'src': section_src, 'days': section_days,
-    'time': section_time, 'buy': section_buy, 'now': section_now,
+    'time': section_time, 'buy': section_buy, 'now': section_now, 'bl': section_bl,
 }
 
 
@@ -658,7 +703,8 @@ def render(section: str, period: str, snap: dict | None = None, now: float | Non
 
 CSV_HEADER = (u'id', u'ник', u'имя', u'пришёл (МСК)', u'источник', u'запустил (МСК)',
               u'дошёл до', u'ответ после дня 1', u'ответ после дня 2', u'ответ после дня 3',
-              u'купил', u'бот заметил блок (МСК)', u'сейчас', u'писал в заботу')
+              u'купил', u'бот заметил блок (МСК)', u'сейчас', u'писал в заботу',
+              u'чёрный список')
 ANSWER_NAMES = {'yes': u'да', 'no': u'нет'}
 FORMULA_START = (u'=', u'+', u'-', u'@', u'\t', u'\r')
 
@@ -673,6 +719,16 @@ def _cell(value) -> str:
     """
     text = u'' if value is None else str(value)
     return u"'" + text if text.startswith(FORMULA_START) else text
+
+
+def _ban_cell(ban: dict | None, full: str) -> str:
+    u"""«с 16.09.2026 12:20 (AleX)» или «был с … по … (убрал Павел)»."""
+    if not ban:
+        return u''
+    if ban.get('removed_at') is None:
+        return u'с %s (%s)' % (_when(ban['added_at'], full), ban.get('added_by') or u'—')
+    return u'был с %s по %s (убрал(а) %s)' % (_when(ban['added_at'], full),
+                                           _when(ban['removed_at'], full), ban.get('removed_by') or u'—')
 
 
 def csv_bytes(snap: dict | None = None) -> bytes:
@@ -698,5 +754,6 @@ def csv_bytes(snap: dict | None = None) -> bytes:
             _cell(_bought_cell(p['buys'], full)),
             _when(u.get('blocked_at'), full),
             titles.get(p['position'], u''),
-            p['care'] or u''))
+            p['care'] or u'',
+            _cell(_ban_cell(p.get('ban'), full))))
     return buf.getvalue().encode('utf-8-sig')

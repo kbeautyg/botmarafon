@@ -156,7 +156,8 @@ async def _mirror(message: Message) -> int:
             continue
         try:
             head = await message.bot.send_message(
-                chat, u'💬 <b>Написали в бота</b>\n%s\n%s' % (_who(message.from_user), texts.REPLY_HINT))
+                chat, u'💬 <b>Написали в бота</b>\n%s\n%s' % (_who(message.from_user), texts.REPLY_HINT),
+                reply_markup=keyboards.ban_ask(message.from_user.id))
             db.link_care(chat, head.message_id, message.from_user.id)
             copy = await message.bot.copy_message(chat, message.chat.id, message.message_id)
             db.link_care(chat, copy.message_id, message.from_user.id)

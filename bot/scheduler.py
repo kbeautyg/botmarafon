@@ -137,6 +137,11 @@ def _reopen_poll(job: dict, poll: str | None) -> None:
 
 async def run_job(bot: Bot, job: dict) -> None:
     u"""Один шаг: отправить и запланировать следующий."""
+    if db.is_banned(job['user_id']):
+        # В чёрный список внесли, пока шаг ждал своей очереди (bot/blacklist.py).
+        db.drop_job(job['id'])
+        return
+
     step = funnel.step_at(job['chain'], job['pos'])
     if step is None:
         log.error(u'шаг %s#%s пропал из сценария', job['chain'], job['pos'])

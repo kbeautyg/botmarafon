@@ -37,8 +37,7 @@ async def run():
     bot = Bot(config.BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
-    for router in handlers.ROUTERS:
-        dispatcher.include_router(router)
+    handlers.setup(dispatcher)
 
     me = await bot.get_me()
     log.info(u'бот @%s запущен, база %s', me.username, config.DB_PATH)

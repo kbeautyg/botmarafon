@@ -92,7 +92,37 @@ CREATE TABLE IF NOT EXISTS events (
   at      REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_user ON events(user_id);
+
+-- Чёрный список (AleX 16.09.2026): одна строка на человека. Убрали из
+-- списка — строка остаётся с removed_at: статистике нужна история, а не
+-- только кто в списке сейчас. Имя и ник — на момент добавления: человек
+-- мог ни разу не писать боту, а банят его и в чатах Павла.
+CREATE TABLE IF NOT EXISTS blacklist (
+  user_id    INTEGER PRIMARY KEY,
+  username   TEXT,
+  first_name TEXT,
+  added_at   REAL NOT NULL,
+  added_by   TEXT,
+  removed_at REAL,
+  removed_by TEXT,
+  chats_note TEXT             -- чем кончились баны в чатах Павла
+);
+
+-- Каналы и чаты, где бот — админ: там чёрный список банит. Бот узнаёт о
+-- них сам, когда его назначают админом (handlers/blacklist.py).
+CREATE TABLE IF NOT EXISTS chats (
+  chat_id      INTEGER PRIMARY KEY,
+  title        TEXT,
+  kind         TEXT,
+  can_restrict INTEGER NOT NULL DEFAULT 0,
+  updated_at   REAL NOT NULL,
+  left_at      REAL
+);
 '''
+
+# Человек сейчас в чёрном списке — условие для запросов по users (алиас u).
+ACTIVE_BAN = ('EXISTS (SELECT 1 FROM blacklist b WHERE b.user_id = u.user_id '
+              'AND b.removed_at IS NULL)')
 
 _conn = None
 
@@ -237,9 +267,9 @@ def set_lead_no(user_id: int, number: int) -> None:
 def waiting_leads() -> list[dict]:
     u"""Пришли по заявке с сайта, марафон не запускали, бота не закрывали."""
     rows = _conn.execute(
-        "SELECT user_id, username, first_name, started_at, lead_no FROM users "
+        "SELECT user_id, username, first_name, started_at, lead_no FROM users u "
         "WHERE source = 'zayavka' AND launched_at IS NULL AND blocked_at IS NULL "
-        "ORDER BY started_at").fetchall()
+        "AND NOT " + ACTIVE_BAN + " ORDER BY started_at").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -273,7 +303,7 @@ def nudge_candidates(since: float, launched_before: float) -> list[int]:
     rows = _conn.execute(
         "SELECT u.user_id FROM users u WHERE u.launched_at IS NOT NULL "
         "AND u.launched_at >= ? AND u.launched_at <= ? "
-        "AND u.nudged_at IS NULL AND u.blocked_at IS NULL "
+        "AND u.nudged_at IS NULL AND u.blocked_at IS NULL AND NOT " + ACTIVE_BAN + " "
         "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.user_id = u.user_id AND a.poll = 'day1') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.user_id = u.user_id "
         "            AND e.kind = 'day' AND e.ref = '1') "
@@ -426,6 +456,83 @@ def mark_blocked(user_id: int) -> None:
          (time.time(), user_id))
 
 
+# ------------------------------------------------------- чёрный список
+
+def is_banned(user_id: int) -> bool:
+    u"""Сейчас в чёрном списке. Спрашивается на каждое сообщение — поиск по ключу."""
+    return _conn.execute('SELECT 1 FROM blacklist WHERE user_id=? AND removed_at IS NULL',
+                         (user_id,)).fetchone() is not None
+
+
+def ban_entry(user_id: int) -> dict | None:
+    row = _conn.execute('SELECT * FROM blacklist WHERE user_id=?', (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def ban_add(user_id: int, username: str | None, first_name: str | None, by: str) -> bool:
+    u"""Внести в список. False — уже там (ничего не меняется)."""
+    if is_banned(user_id):
+        return False
+    _run('INSERT INTO blacklist (user_id, username, first_name, added_at, added_by) '
+         'VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET '
+         'username=COALESCE(excluded.username, blacklist.username), '
+         'first_name=COALESCE(excluded.first_name, blacklist.first_name), '
+         'added_at=excluded.added_at, added_by=excluded.added_by, '
+         'removed_at=NULL, removed_by=NULL, chats_note=NULL',
+         (user_id, username, first_name, time.time(), by))
+    return True
+
+
+def ban_remove(user_id: int, by: str) -> bool:
+    u"""Убрать из списка. False — его там и не было."""
+    cur = _run('UPDATE blacklist SET removed_at=?, removed_by=? '
+               'WHERE user_id=? AND removed_at IS NULL', (time.time(), by, user_id))
+    return cur.rowcount > 0
+
+
+def ban_note(user_id: int, note: str) -> None:
+    _run('UPDATE blacklist SET chats_note=? WHERE user_id=?', (note, user_id))
+
+
+def blacklist() -> list[dict]:
+    u"""Весь список с историей: сейчас в списке — сверху, свежие — выше."""
+    rows = _conn.execute('SELECT * FROM blacklist ORDER BY removed_at IS NOT NULL, '
+                         'COALESCE(removed_at, added_at) DESC').fetchall()
+    return [dict(r) for r in rows]
+
+
+def stop_funnel(user_id: int) -> None:
+    u"""Снять человеку все шаги марафона. Ответы и шаги прошлого — остаются:
+    это статистика, а не очередь."""
+    _run('DELETE FROM jobs WHERE user_id=?', (user_id,))
+    _run('UPDATE users SET poll=NULL WHERE user_id=?', (user_id,))
+
+
+def chat_seen(chat_id: int, title: str | None, kind: str, can_restrict: bool) -> None:
+    _run('INSERT INTO chats (chat_id, title, kind, can_restrict, updated_at) '
+         'VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET '
+         'title=excluded.title, kind=excluded.kind, can_restrict=excluded.can_restrict, '
+         'updated_at=excluded.updated_at, left_at=NULL',
+         (chat_id, title, kind, 1 if can_restrict else 0, time.time()))
+
+
+def chat_left(chat_id: int) -> None:
+    _run('UPDATE chats SET left_at=?, can_restrict=0 WHERE chat_id=?', (time.time(), chat_id))
+
+
+def ban_chats() -> list[dict]:
+    u"""Где бот сейчас админ с правом блокировать — там и банит."""
+    rows = _conn.execute('SELECT * FROM chats WHERE left_at IS NULL AND can_restrict=1 '
+                         'ORDER BY title').fetchall()
+    return [dict(r) for r in rows]
+
+
+def known_chats() -> list[dict]:
+    u"""Все чаты, где бот сейчас есть, — и с правами, и без."""
+    rows = _conn.execute('SELECT * FROM chats WHERE left_at IS NULL ORDER BY title').fetchall()
+    return [dict(r) for r in rows]
+
+
 def unblock(user_id: int) -> None:
     u"""Бот у человека снова открыт: дошло сообщение или он нажал кнопку."""
     _run('UPDATE users SET blocked_at=NULL WHERE user_id=? AND blocked_at IS NOT NULL',
@@ -466,6 +573,8 @@ def snapshot() -> dict[str, list[dict]]:
         'jobs': rows('SELECT user_id, chain, pos, run_at FROM jobs'),
         'care': rows('SELECT user_id, COUNT(*) AS n FROM care_links GROUP BY user_id'),
         'missed': rows('SELECT user_id, day FROM missed'),
+        'blacklist': rows('SELECT user_id, username, first_name, added_at, added_by, '
+                          'removed_at, removed_by, chats_note FROM blacklist'),
     }
 
 

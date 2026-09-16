@@ -65,6 +65,15 @@ class FakeBot(object):
     async def copy_message(self, chat_id, from_chat_id, message_id, **kw):
         return await self._record('copy', chat_id, (from_chat_id, message_id))
 
+    # Чёрный список банит в каналах и чатах Павла (bot/blacklist.py).
+    async def ban_chat_member(self, chat_id, user_id, **kw):
+        self.sent.append(('ban', chat_id, user_id))
+        return True
+
+    async def unban_chat_member(self, chat_id, user_id, **kw):
+        self.sent.append(('unban', chat_id, (user_id, kw.get('only_if_banned'))))
+        return True
+
     # Закреп у админа — хранилище записей дней (bot/backup.py).
     async def get_chat(self, chat_id):
         return SimpleNamespace(pinned_message=self.pinned.get(chat_id))
@@ -138,3 +147,38 @@ class FakePhoto(object):
 class FakeVideo(object):
     def __init__(self, file_id):
         self.file_id = file_id
+
+
+# ---------------------------------------------- настоящий разбор aiogram
+
+from datetime import datetime                                   # noqa: E402
+
+from aiogram.client.session.base import BaseSession             # noqa: E402
+from aiogram.methods import CopyMessage, SendMessage            # noqa: E402
+from aiogram.types import Chat, Message, MessageId              # noqa: E402
+
+
+class ЗаписьСессия(BaseSession):
+    u"""Сессия бота без сети: записывает вызовы API и отвечает правдоподобно —
+    для проверок через dispatcher.feed_raw_update."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+        self.next_id = 1000
+
+    async def make_request(self, bot, method, timeout=None):
+        self.calls.append(method)
+        self.next_id += 1
+        if isinstance(method, CopyMessage):
+            return MessageId(message_id=self.next_id)
+        if isinstance(method, SendMessage):
+            return Message(message_id=self.next_id, date=datetime.now(),
+                           chat=Chat(id=method.chat_id, type='private'), text=method.text)
+        return True
+
+    async def stream_content(self, *a, **kw):                  # pragma: no cover
+        yield b''
+
+    async def close(self):
+        pass

@@ -8,50 +8,16 @@ u"""/написать проходит настоящий разбор aiogram, 
 """
 import os
 import sys
-from datetime import datetime
 
 import pytest
-from aiogram import Bot, Dispatcher
-from aiogram.client.session.base import BaseSession
-from aiogram.methods import CopyMessage, SendMessage
-from aiogram.types import Chat, Message, MessageId
+from aiogram import Bot
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bot import config, db, handlers, texts                               # noqa: E402
+from bot import config, db, texts                               # noqa: E402
+from tests.fakes import ЗаписьСессия                            # noqa: E402
 
 SHARP, PAVEL, ALEX, PERSON, STRANGER = 7874595355, 312701042, 350631550, 5, 777
-
-
-class ЗаписьСессия(BaseSession):
-    def __init__(self):
-        super().__init__()
-        self.calls = []
-        self.next_id = 1000
-
-    async def make_request(self, bot, method, timeout=None):
-        self.calls.append(method)
-        self.next_id += 1
-        if isinstance(method, CopyMessage):
-            return MessageId(message_id=self.next_id)
-        if isinstance(method, SendMessage):
-            return Message(message_id=self.next_id, date=datetime.now(),
-                           chat=Chat(id=method.chat_id, type='private'), text=method.text)
-        return True
-
-    async def stream_content(self, *a, **kw):                  # pragma: no cover
-        yield b''
-
-    async def close(self):
-        pass
-
-
-@pytest.fixture(scope='module')
-def dispatcher():
-    dp = Dispatcher()
-    for router in handlers.ROUTERS:
-        dp.include_router(router)
-    return dp
 
 
 @pytest.fixture(autouse=True)

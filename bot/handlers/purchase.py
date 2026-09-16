@@ -20,7 +20,7 @@ import time
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from .. import config, contact, db, delivery, texts
+from .. import config, contact, db, delivery, keyboards, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='purchase')
@@ -50,7 +50,7 @@ async def _deliver(bot, number, note: str, user_id: int) -> None:
     got, failed = [], []
     for chat in config.purchase_recipients():
         try:
-            sent = await bot.send_message(chat, note)
+            sent = await bot.send_message(chat, note, reply_markup=keyboards.ban_ask(user_id))
             got.append(chat)
             # реплай на заявку — сообщение покупателю (handlers/support.py)
             if sent is not None:
