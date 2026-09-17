@@ -143,7 +143,9 @@ def _position(p: dict) -> str:
     # Вопрос живой, только пока в очереди ждёт ветка «нет»: без неё он
     # устарел — бот уже повёл человека дальше сам (ревью 11.09).
     fallback = funnel.POLL_BRANCHES.get(u.get('poll') or '', {}).get('no')
-    if u.get('poll') and (config.POLL_FALLBACK_HOURS <= 0 or fallback in p['pending']):
+    later_day = _day_of(u.get('poll') or '') + 1 in p['days']
+    if u.get('poll') and not later_day and (config.POLL_FALLBACK_HOURS <= 0
+                                            or fallback in p['pending']):
         return 'a%d' % _day_of(u['poll'])
     nxt = p['next']
     if nxt:
@@ -493,7 +495,10 @@ def section_days(m: dict, period: str, now: float) -> str:
                   + u', '.join(u'день %d — %d' % (n, k) for n, k in missed)
                   + u'. Дослать — /resend.']
     lines += [u'', u'<i>«Молчат» — не нажали ни «да», ни «нет»; через %d ч бот сам '
-                   u'ведёт их дальше по ветке «нет».</i>' % config.POLL_FALLBACK_HOURS]
+                   u'ведёт их дальше по ветке «нет».</i>' % config.POLL_FALLBACK_HOURS
+              if config.POLL_FALLBACK_HOURS > 0 else
+              u'<i>«Молчат» — не нажали ни «да», ни «нет»; следующий день им не придёт, '
+              u'пока не ответят (Павел 17.09.2026).</i>']
     return _fit(lines)
 
 

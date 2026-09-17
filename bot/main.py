@@ -33,6 +33,11 @@ async def run():
         stale = db.clear_stale_polls()
         if stale:
             log.info(u'закрыто устаревших вопросов «посмотрел?»: %d', stale)
+    else:
+        # без ответа дальше не идём (Павел 17.09.2026) — снять уже стоящие таймеры
+        dropped = db.drop_poll_fallbacks()
+        if dropped:
+            log.info(u'снято веток «нет» по таймеру у ждущих ответа: %d', dropped)
 
     bot = Bot(config.BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))

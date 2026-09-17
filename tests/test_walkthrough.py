@@ -93,8 +93,20 @@ async def test_полный_путь_отвечающего_нет():
 
 
 @pytest.mark.asyncio
-async def test_молчун_доезжает_до_конца_по_ветке_нет():
-    u"""Никто не нажал ни одной кнопки — добивание доводит до продажи."""
+async def test_молчун_стоит_на_первом_дне():
+    u"""Павел 17.09.2026: не нажал «Да»/«Нет» — второй день не приходит."""
+    bot = FakeBot()
+    scheduler.start_chain(ME, 'launch')
+    await прогнать(bot, ())
+    видео = [body for kind, _, body in bot.sent if kind == 'video' and isinstance(body, str)]
+    assert видео == ['DAY1']
+    assert db.get_user(ME)['poll'] == 'day1'
+
+
+@pytest.mark.asyncio
+async def test_молчун_доезжает_до_конца_по_ветке_нет(monkeypatch):
+    u"""С включённым добиванием никто не нажал ни одной кнопки — доходит до продажи."""
+    monkeypatch.setattr(config, 'POLL_FALLBACK_HOURS', 12)
     bot = FakeBot()
     scheduler.start_chain(ME, 'launch')
     await прогнать(bot, ())

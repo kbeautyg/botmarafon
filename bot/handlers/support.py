@@ -99,6 +99,11 @@ def _body(message: Message, start: int) -> tuple[str, list | None]:
     return text[start:], entities or None
 
 
+# AleX 17.09.2026 написал боту «@nataliya_famme : Добрый день!…» — без команды.
+# Так и пишут: ник в начале, дальше текст (двоеточие или тире — по желанию).
+NICK_HEAD = re.compile(r'\s*(@[A-Za-z][A-Za-z0-9_]{3,31})\s*[:：,—–-]?\s*')
+
+
 @router.message(Command(*WRITE_COMMANDS), _team_private)
 async def on_write(message: Message):
     u"""/написать 391182739 текст — сообщение человеку от имени бота."""
@@ -107,6 +112,24 @@ async def on_write(message: Message):
     if not ref:
         await message.answer(texts.WRITE_USAGE)
         return
+    await _write(message, ref, head.end())
+
+
+def _nick_message(message: Message) -> bool:
+    u"""Команда пишет боту «@ник текст» — это сообщение человеку, а не вопрос."""
+    head = NICK_HEAD.match(message.text or '')
+    return (_team_private(message) and head is not None
+            and bool((message.text or '')[head.end():].strip()))
+
+
+@router.message(_nick_message)
+async def on_nick_message(message: Message):
+    head = NICK_HEAD.match(message.text)
+    await _write(message, head.group(1), head.end())
+
+
+async def _write(message: Message, ref: str, start: int) -> None:
+    u"""Найти человека по ref и отправить ему текст с позиции start."""
     person = _find(ref)
     if not person:
         await message.answer(texts.WRITE_NOT_FOUND.format(ref=html.escape(ref)))
@@ -114,7 +137,7 @@ async def on_write(message: Message):
 
     user_id = person['user_id']
     who = contact.line(user_id, person.get('first_name'), person.get('username'))
-    body, entities = _body(message, head.end())
+    body, entities = _body(message, start)
     if not body.strip():
         # Без текста — спросить, что отправить: реплаем пройдёт и фото, и голосовое.
         ask = await message.answer(texts.WRITE_ASK.format(who=who))

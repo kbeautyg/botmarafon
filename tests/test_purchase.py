@@ -31,6 +31,8 @@ def база(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'STATS_IDS', ())
     monkeypatch.setattr(config, 'PURCHASE_CHAT_ID', BUY_CHAT)
     monkeypatch.delenv('PURCHASE_TO', raising=False)
+    # без ссылок на оплату — прежний путь «менеджер свяжется»; ссылки — ниже
+    monkeypatch.setattr(config, 'PAY_URLS', {'gym': '', 'course': ''})
     yield
 
 
@@ -176,3 +178,46 @@ async def test_в_заявке_имя_ссылкой_на_профиль_даж�
     await purchase.on_buy(_кнопка(bot, uid=21, nick=None, name=u'Ivan'))
     текст = _заявки(bot)[0][1]
     assert u'tg://user?id=21' in текст and u'без ника' in текст
+
+
+# ------------------------------------------------ ссылка на оплату (Павел 17.09.2026)
+
+PAY = 'https://tochkaplace.com/ia/test'
+
+
+def _url_кнопки(markup):
+    return [b.url for row in markup.inline_keyboard for b in row] if markup else []
+
+
+async def test_спортзал_ведёт_на_оплату_и_заявка_команде_всё_равно(monkeypatch):
+    monkeypatch.setattr(config, 'PAY_URLS', {'gym': PAY, 'course': ''})
+    bot = FakeBot()
+    call = _кнопка(bot)
+    await purchase.on_buy(call)
+    assert {chat for chat, _ in _заявки(bot)} == {BUY_CHAT, PAVEL, ALEX}
+    assert all(texts.PAY_NOTE in text for _, text in _заявки(bot))
+    assert call.message.answers[-1] == texts.OFFER_PAY
+    assert _url_кнопки(call.message.markups[-1]) == [PAY]
+
+
+async def test_повторное_нажатие_снова_даёт_оплату_без_новой_заявки(monkeypatch):
+    monkeypatch.setattr(config, 'PAY_URLS', {'gym': PAY, 'course': ''})
+    bot = FakeBot()
+    await purchase.on_buy(_кнопка(bot))
+    ещё = _кнопка(bot)
+    await purchase.on_buy(ещё)
+    assert len(_заявки(bot)) == 3
+    assert _url_кнопки(ещё.message.markups[-1]) == [PAY]
+
+
+async def test_обучение_без_ссылки_как_раньше(monkeypatch):
+    monkeypatch.setattr(config, 'PAY_URLS', {'gym': PAY, 'course': ''})
+    call = _кнопка(FakeBot(), 'course')
+    await purchase.on_buy(call)
+    assert call.message.answers[-1] == texts.OFFER_DONE
+    assert call.message.markups[-1] is None
+
+
+def test_боевая_ссылка_спортзала_точка_банк():
+    u"""Ссылка, которую прислал Павел; обучению ссылку пока не ставили."""
+    assert config.GYM_PAY_URL == 'https://tochkaplace.com/ia/df12d7ce-070a-4243-8ba4-34ae84e86e94'

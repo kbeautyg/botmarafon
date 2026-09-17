@@ -555,6 +555,19 @@ def clear_stale_polls() -> int:
     return cur.rowcount
 
 
+def drop_poll_fallbacks() -> int:
+    u"""Снять отложенные ветки «нет» по вопросам, которые ещё ждут ответа.
+
+    Павел 17.09.2026: без ответа следующий день не приходит. У тех, кого
+    спросили до выкладки, ветка «нет» уже стоит на таймере — её и снимаем.
+    Ответивший «нет» сюда не попадает: ответ закрывает вопрос (poll = NULL).
+    """
+    cur = _run("DELETE FROM jobs WHERE pos = 0 AND EXISTS (SELECT 1 FROM users u "
+               "WHERE u.user_id = jobs.user_id AND u.poll IS NOT NULL "
+               "AND jobs.chain = u.poll || '_no')")
+    return cur.rowcount
+
+
 def snapshot() -> dict[str, list[dict]]:
     u"""Всё, из чего считается подробная статистика (bot/insights.py).
 

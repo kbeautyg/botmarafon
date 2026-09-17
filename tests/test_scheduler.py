@@ -40,8 +40,31 @@ async def test_шаг_ставит_следующий():
 
 
 @pytest.mark.asyncio
-async def test_опросник_ставит_отложенное_добивание():
-    u"""Не ответил — через POLL_FALLBACK_HOURS уходит ветка «нет»."""
+async def test_без_ответа_следующий_день_не_ставится():
+    u"""Павел 17.09.2026: пока не нажал «Да» или «Нет», дальше не идём."""
+    assert config.POLL_FALLBACK_HOURS == 0
+    scheduler.start_chain(1, 'after_day1')
+    bot = FakeBot()
+    for _ in range(3):
+        сдвинуть_время(1)
+        await scheduler.tick(bot)
+    assert db.user_jobs(1) == []
+    assert db.get_user(1)['poll'] == 'day1'
+
+
+def test_при_выкладке_снимаются_таймеры_только_у_ждущих_ответа():
+    db.remember_user(2, 'a', u'Ждёт'); db.set_poll(2, 'day1')
+    db.add_job(2, 'day1_no', 0, time.time() + 43200)
+    db.remember_user(3, 'b', u'Ответил нет')                  # вопрос закрыт ответом
+    db.add_job(3, 'day1_no', 0, time.time() + 5)
+    assert db.drop_poll_fallbacks() == 1
+    assert db.user_jobs(2) == [] and len(db.user_jobs(3)) == 1
+
+
+@pytest.mark.asyncio
+async def test_опросник_ставит_отложенное_добивание(monkeypatch):
+    u"""Механика добивания цела: включённое, через POLL_FALLBACK_HOURS уходит «нет»."""
+    monkeypatch.setattr(config, 'POLL_FALLBACK_HOURS', 12)
     scheduler.start_chain(1, 'after_day1')
     bot = FakeBot()
     for _ in range(2):                                   # кружок, вопрос

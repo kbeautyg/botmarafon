@@ -65,3 +65,12 @@ async def test_чужому_команда_не_открыта_и_людям_н�
     assert [c for c in calls if c[1] == PERSON] == []
     assert calls[-1][1] == STRANGER
     assert calls[-1][2] == texts.NOT_ALLOWED_COMMAND.format(id=STRANGER)
+
+
+async def test_ник_с_двоеточием_без_команды_доходит(dispatcher):
+    session = ЗаписьСессия()
+    upd = _update(ALEX, u'@Aidyn2381 : Добрый день!')
+    del upd['message']['entities']
+    await dispatcher.feed_raw_update(Bot('42:TEST', session=session), upd)
+    calls = [(type(c).__name__, c.chat_id, getattr(c, 'text', None)) for c in session.calls]
+    assert ('SendMessage', PERSON, u'Добрый день!') in calls

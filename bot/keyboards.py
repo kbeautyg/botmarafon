@@ -82,6 +82,12 @@ def care_link() -> InlineKeyboardMarkup | None:
                              url='https://t.me/%s' % config.CARE_CONTACT)]])
 
 
+def pay(url: str) -> InlineKeyboardMarkup:
+    u"""Кнопка на оплату под ответом на «купить» (Павел 17.09.2026)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.PAY_BUTTON, url=url)]])
+
+
 def offer() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=texts.OFFER_GYM, callback_data='buy:gym')],

@@ -65,7 +65,7 @@ async def _deliver(bot, number, note: str, user_id: int) -> None:
                  % (number, html.escape(u'; '.join(failed))[:1000], note))
 
 
-async def _reply(call: CallbackQuery, toast: str, text: str) -> None:
+async def _reply(call: CallbackQuery, toast: str, text: str, markup=None) -> None:
     u"""Ответ человеку. Его сбой — не повод терять заявку: нажатие,
     обработанное с опозданием (бот перезапускался на выкладке), Telegram
     уже не даёт подтвердить — «query is too old»."""
@@ -74,7 +74,7 @@ async def _reply(call: CallbackQuery, toast: str, text: str) -> None:
     except Exception as err:
         log.debug(u'нажатие покупки у %s не подтвердили: %s', call.from_user.id, err)
     try:
-        await call.message.answer(text)
+        await call.message.answer(text, reply_markup=markup)
     except Exception as err:
         log.warning(u'не ответили %s на покупку: %s', call.from_user.id, err)
 
@@ -88,6 +88,10 @@ async def on_buy(call: CallbackQuery):
         return
 
     user_id = call.from_user.id
+    # Есть ссылка на оплату — человек уходит туда сразу, заявка команде всё равно
+    # (Павел 17.09.2026). Нет — как раньше: «менеджер свяжется».
+    pay_url = config.PAY_URLS.get(product) or ''
+    answer = (texts.OFFER_PAY, keyboards.pay(pay_url)) if pay_url else None
     earlier = db.purchase_presses(user_id, product)
     number = db.add_purchase(user_id, product)
     db.unblock(user_id)                        # нажал кнопку — бот у него открыт
@@ -95,14 +99,21 @@ async def on_buy(call: CallbackQuery):
     if earlier and time.time() - earlier[-1]['at'] < REPEAT_WINDOW:
         log.info(u'%s снова нажал «%s» (%d-й раз) — заявка та же, менеджерам не шлём',
                  user_id, product, len(earlier) + 1)
-        await _reply(call, u'Заявка уже принята', texts.OFFER_ALREADY)
+        if answer:
+            await _reply(call, u'Открываю оплату', *answer)
+        else:
+            await _reply(call, u'Заявка уже принята', texts.OFFER_ALREADY)
         return
 
     # Сначала заявка менеджерам, потом ответ человеку: сбой ответа не должен
     # оставить заявку только в базе (ревью 13.09.2026).
     again = (u'\n\nПовторная заявка: человек вернулся к кнопке, нажатие №%d' % (len(earlier) + 1)
              if earlier else u'')
-    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s\n\n%s' % (
-        number, _who(call.from_user), title, again, texts.REPLY_HINT)
+    paid = u'\n%s' % texts.PAY_NOTE if pay_url else u''
+    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s%s\n\n%s' % (
+        number, _who(call.from_user), title, paid, again, texts.REPLY_HINT)
     await _deliver(call.bot, number, note, user_id)
-    await _reply(call, u'Заявка принята', texts.OFFER_DONE)
+    if answer:
+        await _reply(call, u'Открываю оплату', *answer)
+    else:
+        await _reply(call, u'Заявка принята', texts.OFFER_DONE)

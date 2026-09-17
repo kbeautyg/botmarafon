@@ -292,3 +292,25 @@ async def test_закрывший_бота_отмечен_и_команде_ск
 def test_написать_могут_только_свои():
     assert not support._team_private(FakeMessage(text=u'/написать 5 привет', user=FakeUser(12345)))
     assert support._team_private(FakeMessage(text=u'/написать 5 привет', user=FakeUser(PAVEL)))
+
+
+# ------------------------------------------------------------ «@ник текст» без команды
+
+async def test_ник_в_начале_сообщения_команды_уходит_человеку():
+    u"""AleX 17.09.2026 написал боту «@nataliya_famme : Добрый день!…»."""
+    db.remember_user(11, 'nataliya_famme', u'Наталья')
+    bot = ПочтаБот()
+    msg = _команда(u'@nataliya_famme : Добрый день! Как удобнее оплатить?', bot)
+    assert support._nick_message(msg)
+    await support.on_nick_message(msg)
+    assert _в(bot, 11) == [('text', u'Добрый день! Как удобнее оплатить?')]
+    assert u'Отправлено ✅' in msg.answers[-1]
+
+
+async def test_ник_без_текста_и_чужой_ник_не_отправляют():
+    bot = ПочтаБот()
+    assert not support._nick_message(_команда(u'@nataliya_famme', bot))
+    assert not support._nick_message(FakeMessage(text=u'@nataliya_famme привет', user=FakeUser(12345)))
+    незнакомый = _команда(u'@nobody_here привет', bot)
+    await support.on_nick_message(незнакомый)
+    assert u'Не нашёл в боте' in незнакомый.answers[-1]
