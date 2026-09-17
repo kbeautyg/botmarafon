@@ -315,6 +315,37 @@ def mark_nudged(user_id: int) -> None:
     _run('UPDATE users SET nudged_at=? WHERE user_id=?', (time.time(), user_id))
 
 
+def poll_nudge_candidates(poll: str, since: float, asked_before: float) -> list[int]:
+    u"""Кому пора дожим после второго или третьего дня: вопрос ему ушёл между
+    since и asked_before, ответа на него нет, дожима по этому вопросу ещё не
+    было, бота не закрывал (bot/nudge.py).
+
+    Считаем от первой отправки вопроса: человек мог вернуться и получить его
+    заново, но часы молчания идут с того раза, когда его спросили впервые.
+    Отметка о дожиме — тоже шаг (events, kind='nudge'), и «пройти заново»
+    стирает её вместе с остальными шагами прогона.
+
+    u.poll = ? — человек и правда стоит сейчас на этом вопросе. Пока
+    автопереход выключен (POLL_FALLBACK_HOURS = 0), это то же самое, что
+    «не ответил»; включат обратно — дожим не уйдёт тому, кого воронка уже
+    увела дальше сама.
+    """
+    rows = _conn.execute(
+        'SELECT u.user_id, MIN(e.at) AS asked FROM users u '
+        "JOIN events e ON e.user_id = u.user_id AND e.kind = 'poll' AND e.ref = ? "
+        'WHERE u.poll = ? AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' '
+        'AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.user_id = u.user_id AND a.poll = ?) '
+        'AND NOT EXISTS (SELECT 1 FROM events n WHERE n.user_id = u.user_id '
+        "                AND n.kind = 'nudge' AND n.ref = ?) "
+        'GROUP BY u.user_id HAVING asked >= ? AND asked <= ? '
+        'ORDER BY asked', (poll, poll, poll, poll, since, asked_before)).fetchall()
+    return [r[0] for r in rows]
+
+
+def mark_poll_nudged(user_id: int, poll: str) -> None:
+    log_event(user_id, 'nudge', poll)
+
+
 def set_care_open(user_id: int, is_open: bool) -> None:
     _run('UPDATE users SET care_open=? WHERE user_id=?', (1 if is_open else 0, user_id))
 

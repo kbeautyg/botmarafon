@@ -185,6 +185,90 @@ async def test_пройти_заново_снова_разрешает_дожи�
     assert db.get_user(1)['nudged_at'] is None
 
 
+# --------------------------------------------- дожим после 2-го и 3-го дня
+
+def _спросили(uid, poll, hours_ago, answered=False):
+    u"""Человек в марафоне, вопрос после дня ему ушёл hours_ago часов назад."""
+    db.remember_user(uid, 'u%d' % uid, u'Человек')
+    db.mark_launched(uid)
+    db.log_event(uid, 'poll', poll)
+    db._run("UPDATE events SET at=? WHERE user_id=? AND kind='poll' AND ref=?",
+            (NOW - hours_ago * 3600, uid, poll))
+    db.set_poll(uid, poll)
+    if answered:
+        db.save_answer(uid, poll, 'yes')
+        db.set_poll(uid, None)
+
+
+def _дожимы_по(bot, poll):
+    return [c for k, c, p in bot.sent if p == texts.NUDGE_POLL[poll]]
+
+
+async def test_молчуна_после_второго_дня_тоже_дожимаем_один_раз():
+    nudge.since_poll('day2', NOW - 10 * 3600)
+    _спросили(1, 'day2', hours_ago=6)
+    bot = FakeBot()
+    assert await nudge.run_once(bot, now=NOW) == 1
+    assert await nudge.run_once(bot, now=NOW + 60) == 0
+    assert _дожимы_по(bot, 'day2') == [1]
+
+
+async def test_после_третьего_дня_свой_текст():
+    nudge.since_poll('day3', NOW - 10 * 3600)
+    _спросили(1, 'day3', hours_ago=6)
+    bot = FakeBot()
+    await nudge.run_once(bot, now=NOW)
+    assert _дожимы_по(bot, 'day3') == [1]
+
+
+async def test_кто_ответил_или_ждёт_меньше_пяти_часов_дожим_не_получает():
+    for poll in ('day2', 'day3'):
+        nudge.since_poll(poll, NOW - 10 * 3600)
+    _спросили(1, 'day2', hours_ago=6, answered=True)            # ответил
+    _спросили(2, 'day2', hours_ago=4)                           # 5 часов не прошло
+    _спросили(3, 'day3', hours_ago=6, answered=True)
+    bot = FakeBot()
+    assert await nudge.run_once(bot, now=NOW) == 0
+
+
+async def test_задним_числом_по_второму_дню_прежним_молчунам_не_пишем():
+    _спросили(1, 'day2', hours_ago=30)                          # вопрос ушёл давно
+    _спросили(2, 'day2', hours_ago=4)                           # незадолго до выкладки
+    bot = FakeBot()
+    await nudge.run_once(bot, now=NOW)                          # первый запуск ставит отметку
+    assert _дожимы_по(bot, 'day2') == []
+    await nudge.run_once(bot, now=NOW + 1.5 * 3600)
+    assert _дожимы_по(bot, 'day2') == [2]                       # давний так и не получит
+
+
+async def test_закрывший_бота_на_втором_дне_отмечен_и_больше_не_трогаем():
+    nudge.since_poll('day2', NOW - 10 * 3600)
+    _спросили(1, 'day2', hours_ago=6)
+    bot = FakeBot(forbidden=True)
+    assert await nudge.run_once(bot, now=NOW) == 0
+    assert db.get_user(1)['blocked_at'] is not None
+    assert db.poll_nudge_candidates('day2', NOW - 10 * 3600, NOW) == []
+
+
+async def test_кого_воронка_увела_дальше_сама_дожим_не_получает():
+    u"""Автопереход сейчас выключен; включат обратно — дожим не должен догонять."""
+    nudge.since_poll('day2', NOW - 10 * 3600)
+    _спросили(1, 'day2', hours_ago=6)
+    db.set_poll(1, None)                                        # ветка «нет» ушла сама
+    bot = FakeBot()
+    assert await nudge.run_once(bot, now=NOW) == 0
+
+
+async def test_пройти_заново_снова_разрешает_дожим_после_второго_дня():
+    nudge.since_poll('day2', NOW - 10 * 3600)
+    _спросили(1, 'day2', hours_ago=6)
+    await nudge.run_once(FakeBot(), now=NOW)
+    assert db.poll_nudge_candidates('day2', NOW - 10 * 3600, NOW) == []
+    db.reset_funnel(1)
+    _спросили(1, 'day2', hours_ago=6)
+    assert db.poll_nudge_candidates('day2', NOW - 10 * 3600, NOW) == [1]
+
+
 # ------------------------------------------------------------ /написать по ID или нику
 
 from aiogram.exceptions import TelegramForbiddenError                     # noqa: E402
