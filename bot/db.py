@@ -814,7 +814,13 @@ def snapshot() -> dict[str, list[dict]]:
         'answers': rows('SELECT user_id, poll, answer, answered FROM answers'),
         'purchases': rows('SELECT id, user_id, product, at FROM purchases ORDER BY at'),
         'jobs': rows('SELECT user_id, chain, pos, run_at FROM jobs'),
-        'care': rows('SELECT user_id, COUNT(*) AS n FROM care_links GROUP BY user_id'),
+        # Сколько человек написал боту. Раньше считалось по care_links, а
+        # это мост для реплаев: туда попадает каждое уведомление команде —
+        # о запуске, о заявке, — да ещё по записи на каждого получателя.
+        # AleX 18.09.2026: «в отчёте больше сотни писавших, а по факту
+        # меньше десятка». Настоящие сообщения людей — в messages.
+        'care': rows("SELECT user_id, COUNT(*) AS n FROM messages "
+                     "WHERE side='in' GROUP BY user_id"),
         'missed': rows('SELECT user_id, day FROM missed'),
         'blacklist': rows('SELECT user_id, username, first_name, added_at, added_by, '
                           'removed_at, removed_by, chats_note FROM blacklist'),

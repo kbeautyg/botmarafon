@@ -29,6 +29,11 @@ DAY = 86400
 LIMIT = 3900                      # запас до 4096 — предела сообщения Telegram
 TRACK_SINCE = u'11.09.2026'
 TRACK_TS = datetime(2026, 9, 11, tzinfo=ZoneInfo('Europe/Moscow')).timestamp()
+# С этого дня бот сохраняет сами сообщения людей (таблица messages). До него
+# переписка нигде не оставалась, поэтому «писали в бота» за более ранние дни
+# посчитать не из чего — и обещать цифру там нельзя.
+CHAT_SINCE = u'18.09.2026'
+CHAT_TS = datetime(2026, 9, 18, tzinfo=ZoneInfo('Europe/Moscow')).timestamp()
 
 SECTIONS = {
     'sum': u'Сводка',
@@ -353,6 +358,22 @@ def _leads_line(n: int) -> str | None:
     return u'📨 Пришли по заявке с сайта, марафон не получали: %d' % n if n else None
 
 
+def _wrote_line(g: list, lo: float) -> str:
+    u"""Сколько человек написали боту.
+
+    AleX 18.09.2026: «в отчёте больше сотни писавших в заботу, а по факту
+    меньше десятка». Считалось по мосту для реплаев, куда попадало каждое
+    уведомление команде, да ещё по разу на получателя. Теперь считаем сами
+    сообщения людей — но они сохраняются только с CHAT_SINCE, и за более
+    ранние дни цифру выдавать за полную нельзя.
+    """
+    wrote = sum(1 for p in g if p['care'])
+    line = u'✉️ Писали в бота: %d' % wrote
+    if lo < CHAT_TS:
+        line += u' (переписка считается с %s)' % CHAT_SINCE
+    return line
+
+
 def section_sum(m: dict, period: str, now: float) -> str:
     lo, hi, prev_lo = bounds(period, now)
     g = cohort(m, lo, hi)
@@ -381,7 +402,7 @@ def section_sum(m: dict, period: str, now: float) -> str:
              u'🎯 Получили кнопки покупки: <b>%d</b>' % c[6],
              u'🛒 Нажали «купить»: <b>%d</b>%s' % (c[7], (u' — ' + bought_line) if bought_line else u''),
              u'🚪 Закрыли бота: %d' % sum(1 for p in g if p['u'].get('blocked_at')),
-             u'🤝 Писали в службу заботы: %d' % sum(1 for p in g if p['care']),
+             _wrote_line(g, lo),
              # С 14.09.2026 марафон запускается и людям с заявки — они в цифрах
              # выше. Отдельно только те, кому он тогда не запускался (bot/leads.py).
              _leads_line(len(cohort(m, lo, hi, leads=True))),
@@ -708,7 +729,7 @@ def render(section: str, period: str, snap: dict | None = None, now: float | Non
 
 CSV_HEADER = (u'id', u'ник', u'имя', u'пришёл (МСК)', u'источник', u'запустил (МСК)',
               u'дошёл до', u'ответ после дня 1', u'ответ после дня 2', u'ответ после дня 3',
-              u'купил', u'бот заметил блок (МСК)', u'сейчас', u'писал в заботу',
+              u'купил', u'бот заметил блок (МСК)', u'сейчас', u'писал в бота',
               u'чёрный список')
 ANSWER_NAMES = {'yes': u'да', 'no': u'нет'}
 FORMULA_START = (u'=', u'+', u'-', u'@', u'\t', u'\r')
