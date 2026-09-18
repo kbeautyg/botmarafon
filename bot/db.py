@@ -381,6 +381,21 @@ def answered(user_id: int, poll: str) -> bool:
                          (user_id, poll)).fetchone() is not None
 
 
+def answers_of(user_id: int) -> dict:
+    u"""Все ответы человека: {'day1': ('yes', когда)} — для карточки в пульте."""
+    rows = _conn.execute('SELECT poll, answer, answered FROM answers WHERE user_id=?',
+                         (user_id,)).fetchall()
+    return {r['poll']: (r['answer'], r['answered']) for r in rows}
+
+
+def days_of(user_id: int) -> dict:
+    u"""Какие дни человек получил и когда: {1: время} (AleX 18.09.2026 —
+    «проваливаясь в карточку, видно: что он ответил 1д/2д/3д/4д»)."""
+    rows = _conn.execute("SELECT ref, MIN(at) AS at FROM events "
+                         "WHERE user_id=? AND kind='day' GROUP BY ref", (user_id,)).fetchall()
+    return {int(r['ref']): r['at'] for r in rows if str(r['ref']).isdigit()}
+
+
 # --------------------------------------------------------------- очередь
 
 def add_job(user_id: int, chain: str, pos: int, run_at: float) -> None:

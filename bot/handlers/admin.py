@@ -322,11 +322,21 @@ async def on_leads_launch(call: CallbackQuery):
 
 
 @router.message(Command('links', 'ссылки'))
-async def on_links(message: Message):
-    u"""Готовые ссылки с метками — вставить в рассылку."""
+async def on_links(message: Message, command: CommandObject | None = None):
+    u"""Готовые ссылки с метками — вставить в рассылку.
+
+    «/ссылки чаты» (можно с числом) — отдельный список под кнопки в рабочих
+    чатах: своя ссылка на каждый чат (AleX 18.09.2026).
+    """
     if not _can_stats(message):
         return
     me = await message.bot.get_me()
+    args = ((command.args if command else None) or '').strip().lower()
+    if args.startswith(('чат', 'chat')):
+        number = re.search(r'\d+', args)
+        count = min(int(number.group()), 50) if number else 20
+        await message.answer(stats.chat_links_report(me.username, count))
+        return
     await message.answer(stats.links_report(me.username))
 
 

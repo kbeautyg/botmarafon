@@ -36,6 +36,9 @@ PAGE_SIZE = 60
 # Предел сообщения у Telegram — 4096 знаков; режем чуть раньше, чтобы
 # человеку в пульте пришёл понятный отказ, а не ошибка от Telegram.
 MAX_TEXT = 4000
+# Сколько чатов Павла опрашивать для карточки: каждый — отдельный
+# запрос к Telegram, а карточка должна открываться сразу.
+CHATS_IN_CARD = 8
 
 
 class Denied(Exception):
@@ -168,6 +171,45 @@ def _messages(user_id: int) -> list[dict]:
              'mine': m['side'] == 'out'} for m in db.chat_history(user_id)]
 
 
+async def _chats_of(bot, user_id: int) -> list[dict]:
+    u"""В каких чатах Павла человек состоит.
+
+    AleX 18.09.2026: «подписчик ли он ФИНИШ (канала/чата №?)». Telegram
+    отвечает на это только поимённо по каждому чату, поэтому спрашиваем
+    лишь там, где бот сам состоит, и не больше нескольких чатов: карточка
+    должна открываться быстро.
+    """
+    out = []
+    for chat in db.known_chats()[:CHATS_IN_CARD]:
+        try:
+            member = await bot.get_chat_member(chat['chat_id'], user_id)
+        except Exception:
+            continue                       # бота выгнали или чат недоступен
+        status = getattr(member, 'status', '')
+        status = getattr(status, 'value', status)
+        if status in ('left', 'kicked'):
+            continue
+        out.append({'title': chat.get('title') or str(chat['chat_id']),
+                    'status': u'забанен' if status == 'kicked' else u'состоит'})
+    return out
+
+
+def _card(person: dict) -> dict:
+    u"""Путь человека по марафону: когда начал, что получил, что ответил."""
+    answers = db.answers_of(person['user_id'])
+    days = db.days_of(person['user_id'])
+    return {
+        'started_at': person.get('started_at'),
+        'launched_at': person.get('launched_at'),
+        'launches': person.get('launches') or 0,
+        'lead_no': person.get('lead_no'),
+        'days': [{'day': day,
+                  'at': days.get(day),
+                  'answer': (answers.get('day%d' % day) or (None,))[0]}
+                 for day in (1, 2, 3, 4)],
+    }
+
+
 @route
 async def api_chat(request, user):
     body = await _body(request)
@@ -177,6 +219,8 @@ async def api_chat(request, user):
     return web.json_response({
         'person': _person(dict(person, waiting=0, banned=db.is_banned(person['user_id']),
                                last_at=None)),
+        'card': _card(person),
+        'chats': await _chats_of(request.app['bot'], person['user_id']),
         'messages': _messages(person['user_id']),
     })
 

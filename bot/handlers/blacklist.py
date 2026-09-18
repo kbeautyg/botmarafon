@@ -10,6 +10,7 @@ u"""Чёрный список: кнопка под уведомлением, к�
   список банит там; тех, кто уже в списке, банит сразу.
 """
 import html
+import re
 import logging
 
 from aiogram import F, Router
@@ -98,15 +99,83 @@ def _list_text() -> str:
     return insights.render('bl', 'all') + u'\n\n' + texts.BAN_USAGE
 
 
+# Номер телефона: с плюсом или с пробелами и скобками. Голые цифры — это
+# ID человека в Telegram, и банить по ним можно (так вносят тех, кто в бота
+# не заходил), поэтому за телефон их не принимаем.
+PHONE = re.compile(r'^\+\d[\d\s()-]{6,}$|^\d[\d()-]*[\s()-][\d\s()-]*$')
+
+
+def _refs(raw: str) -> list:
+    u"""Разобрать присланный список: ники, ID и номера телефонов.
+
+    AleX 18.09.2026 присылает их одним сообщением, по одному на строку.
+    Номер в строке остаётся целым («+7 925 585 4559»), а строка с
+    несколькими никами разбивается по пробелам.
+    """
+    out = []
+    for line in (raw or u'').splitlines():
+        line = line.strip().strip('"\'')
+        if not line:
+            continue
+        if PHONE.match(line):
+            out.append(line)
+            continue
+        for piece in re.split(r'[\s,;]+', line):
+            piece = piece.strip().strip('"\'')
+            if piece:
+                out.append(piece)
+    return out
+
+
+async def _ban_many(message: Message, refs: list) -> None:
+    u"""Внести пачку. Итог — одним отчётом: кого внесли, кого не нашли.
+
+    AleX 18.09.2026 прислал семь строк одним сообщением и попросил «сразу,
+    чтобы удобно и быстро». По одному это семь команд и семь отчётов.
+    """
+    added, already, unknown, phones = [], [], [], []
+    await message.answer(u'Вношу в чёрный список: %d…' % len(refs))
+    for ref in refs:
+        if PHONE.match(ref):
+            phones.append(ref)
+            continue
+        user_id = _resolve(ref)
+        if user_id is None:
+            unknown.append(ref)
+            continue
+        was_new, _ = await blacklist.add(message.bot, user_id, message.from_user)
+        (added if was_new else already).append(blacklist.who(user_id))
+
+    text = texts.BAN_BATCH_HEAD.format(count=len(refs))
+    if added:
+        text += texts.BAN_BATCH_DONE.format(n=len(added), who=u'\n'.join(added))
+    if already:
+        text += texts.BAN_BATCH_ALREADY.format(n=len(already), who=u'\n'.join(already))
+    if unknown:
+        text += texts.BAN_BATCH_UNKNOWN.format(
+            n=len(unknown), who=u'\n'.join(html.escape(r) for r in unknown))
+    if phones:
+        text += texts.BAN_BATCH_PHONES.format(
+            n=len(phones), who=u'\n'.join(html.escape(r) for r in phones))
+    await message.answer(text)
+
+
 @router.message(Command(*BAN_COMMANDS), _team_message)
 async def on_ban_command(message: Message, command: CommandObject):
-    ref = (command.args or u'').split()
-    if not ref:
+    refs = _refs(command.args or u'')
+    if not refs:
         await message.answer(_list_text())
         return
-    user_id = _resolve(ref[0])
+    if len(refs) > 1:
+        await _ban_many(message, refs)
+        return
+    if PHONE.match(refs[0]):
+        await message.answer(texts.BAN_BATCH_PHONES.format(
+            n=1, who=html.escape(refs[0])).strip())
+        return
+    user_id = _resolve(refs[0])
     if user_id is None:
-        await message.answer(texts.WRITE_NOT_FOUND.format(ref=html.escape(ref[0])))
+        await message.answer(texts.WRITE_NOT_FOUND.format(ref=html.escape(refs[0])))
         return
     await message.answer(u'Вношу в чёрный список…')
     _, report = await blacklist.add(message.bot, user_id, message.from_user)
@@ -116,16 +185,17 @@ async def on_ban_command(message: Message, command: CommandObject):
 
 @router.message(Command(*UNBAN_COMMANDS), _team_message)
 async def on_unban_command(message: Message, command: CommandObject):
-    ref = (command.args or u'').split()
-    if not ref:
+    refs = _refs(command.args or u'')
+    if not refs:
         await message.answer(texts.BAN_USAGE)
         return
-    user_id = _resolve(ref[0])
-    if user_id is None:
-        await message.answer(texts.WRITE_NOT_FOUND.format(ref=html.escape(ref[0])))
-        return
-    _, report = await blacklist.remove(message.bot, user_id, message.from_user)
-    await message.answer(report)
+    for ref in refs:
+        user_id = _resolve(ref)
+        if user_id is None:
+            await message.answer(texts.WRITE_NOT_FOUND.format(ref=html.escape(ref)))
+            continue
+        _, report = await blacklist.remove(message.bot, user_id, message.from_user)
+        await message.answer(report)
 
 
 # ------------------------------------------------------------ чаты Павла

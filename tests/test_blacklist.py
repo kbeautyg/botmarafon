@@ -338,3 +338,40 @@ async def test_бота_убрали_из_чата(dispatcher):
     await _через_диспетчер(dispatcher, _бот_в_чате('administrator'))
     await _через_диспетчер(dispatcher, _бот_в_чате('left'))
     assert db.ban_chats() == [] and db.known_chats() == []
+
+
+# ------------------------------------------------- пачкой (AleX 18.09.2026)
+
+async def test_список_одним_сообщением_вносит_всех_сразу():
+    u"""AleX прислал семь строк и попросил «сразу, чтобы удобно и быстро»."""
+    _чаты()
+    db.remember_user(515152, 'olegkostiuc', u'Олег')
+    bot = FakeBot()
+    список = u'@Troll_Boy\n@olegkostiuc\n+7 925 585 4559\n@nikogo_takogo\n999000111'
+    сообщение = FakeMessage(text=u'/чс ' + список, user=FakeUser(ALEX), bot=bot)
+
+    await ban_handlers.on_ban_command(сообщение, _args(список))
+
+    assert db.is_banned(TROLL) and db.is_banned(515152) and db.is_banned(999000111)
+    отчёт = сообщение.answers[-1]
+    assert u'Внесены (3)' in отчёт
+    assert u'@nikogo_takogo' in отчёт and u'Не нашли в базе бота (1)' in отчёт
+    assert u'+7 925 585 4559' in отчёт and u'телефона внести нельзя' in отчёт
+
+
+async def test_номер_телефона_и_числовой_id_не_путаются():
+    from bot.handlers.blacklist import PHONE, _refs
+
+    разобрано = _refs(u'@nick\n+7 925 585 4559\n391182739')
+    assert разобрано == ['@nick', '+7 925 585 4559', '391182739']
+    assert [bool(PHONE.match(r)) for r in разобрано] == [False, True, False]
+
+
+async def test_повторный_список_не_задваивает_и_говорит_что_уже_были():
+    _чаты()
+    bot = FakeBot()
+    сообщение = FakeMessage(text=u'/чс', user=FakeUser(ALEX), bot=bot)
+    await ban_handlers.on_ban_command(сообщение, _args(u'@Troll_Boy 999000111'))
+    повтор = FakeMessage(text=u'/чс', user=FakeUser(ALEX), bot=bot)
+    await ban_handlers.on_ban_command(повтор, _args(u'@Troll_Boy 999000111'))
+    assert u'Уже были в списке (2)' in повтор.answers[-1]

@@ -190,6 +190,57 @@
     return row;
   }
 
+  // Карточка участника: когда пришёл, что получил и что ответил по каждому
+  // дню, откуда пришёл и в каких чатах Павла состоит (AleX 18.09.2026).
+  var ANSWERS = { yes: 'ответил «Да»', no: 'ответил «Нет»' };
+
+  function moment(ts) {
+    if (!ts) { return ''; }
+    var d = new Date(ts * 1000);
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+      + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function cardLine(title, value) {
+    var row = document.createElement('div');
+    row.className = 'card__row';
+    var left = document.createElement('span');
+    left.className = 'card__key';
+    left.textContent = title;
+    var right = document.createElement('span');
+    right.textContent = value;
+    row.appendChild(left);
+    row.appendChild(right);
+    return row;
+  }
+
+  function drawCard(data) {
+    var box = $('card');
+    box.textContent = '';
+    var card = data.card || {};
+    var person = data.person || {};
+
+    box.appendChild(cardLine('Зашёл в бота', moment(card.started_at) || 'неизвестно'));
+    box.appendChild(cardLine('Запустил марафон', card.launched_at
+      ? moment(card.launched_at) + (card.launches > 1 ? ' · запусков: ' + card.launches : '')
+      : 'не запускал'));
+    box.appendChild(cardLine('Откуда пришёл',
+      (SOURCES[person.source] || person.source || 'напрямую')
+      + (card.lead_no ? ' · заявка №' + card.lead_no : '')));
+
+    (card.days || []).forEach(function (item) {
+      var value = item.at ? 'получил ' + moment(item.at) : 'ещё не получил';
+      if (item.answer) { value += ' · ' + (ANSWERS[item.answer] || item.answer); }
+      else if (item.at && item.day < 4) { value += ' · без ответа'; }
+      box.appendChild(cardLine('День ' + item.day, value));
+    });
+
+    var chats = data.chats || [];
+    box.appendChild(cardLine('Чаты ФИНИШ', chats.length
+      ? chats.map(function (c) { return c.title + ' — ' + c.status; }).join('; ')
+      : 'бот не состоит ни в одном чате — добавьте его, и будет видно'));
+  }
+
   function drawChat(data) {
     state.person = data.person;
     var person = data.person;
@@ -203,6 +254,8 @@
     $('chat-sub').textContent = bits.join(' · ');
     $('ban').classList.toggle('is-on', !!person.banned);
     $('ban').textContent = person.banned ? '↩️' : '🚫';
+
+    drawCard(data);
 
     var log = $('log');
     log.textContent = '';
@@ -223,6 +276,8 @@
     listScreen.classList.add('is-behind');
     chatScreen.classList.add('is-open');
     $('log').textContent = '';
+    $('card').hidden = true;
+    $('info').classList.remove('is-on');
     if (tg && tg.BackButton) { tg.BackButton.show(); }
     api('chat', { id: id }).then(drawChat).catch(function (err) { toast(err.message); });
   }
@@ -276,6 +331,12 @@
   // -------------------------------------------------------------- связи
 
   $('back').addEventListener('click', closeChat);
+  $('info').addEventListener('click', function () {
+    var box = $('card');
+    box.hidden = !box.hidden;
+    this.classList.toggle('is-on', !box.hidden);
+  });
+
   $('ban').addEventListener('click', toggleBan);
   $('send').addEventListener('submit', send);
 
