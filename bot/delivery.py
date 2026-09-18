@@ -284,10 +284,17 @@ async def send_day(bot: Bot, user_id: int, day: int,
     stored = db.get_content('day%d' % day) or _day_from_env(day)
 
     if stored and stored[0] == 'video':
+        # supports_streaming: без него Telegram сначала выкачивает запись
+        # целиком, и человек видит «скачать» вместо кнопки «смотреть»
+        # (Павел 18.09.2026: «чтобы просмотреть им марафон, надо скачивать»).
         return await _guard(bot.send_video(user_id, stored[1], caption=text,
-                                           cover=day_cover(day)))
+                                           cover=day_cover(day),
+                                           supports_streaming=True))
     if stored and stored[0] == 'link':
-        return await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text)))
+        # Запись выложена в интернете: под текстом — кнопка в плеер, чтобы
+        # человек смотрел, а не искал ссылку глазами.
+        return await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text),
+                                             reply_markup=keyboards.watch(stored[1])))
 
     await _guard(bot.send_message(user_id, u'%s\n\n%s' % (text, texts.DAY_MISSING_USER)))
     db.mark_missed(user_id, day)
@@ -307,9 +314,11 @@ async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
         return False
     lead = texts.DAY_RESEND.format(day=day)
     if stored[0] == 'video':
-        await _guard(bot.send_video(user_id, stored[1], caption=lead, cover=day_cover(day)))
+        await _guard(bot.send_video(user_id, stored[1], caption=lead, cover=day_cover(day),
+                                    supports_streaming=True))
     else:
-        await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1])))
+        await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1]),
+                                      reply_markup=keyboards.watch(stored[1])))
     db.clear_missed(user_id, day)
     return True
 

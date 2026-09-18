@@ -88,6 +88,12 @@ def pay(url: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.PAY_BUTTON, url=url)]])
 
 
+def watch(url: str) -> InlineKeyboardMarkup:
+    u"""Кнопка «смотреть запись» под днём, выложенным ссылкой."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.WATCH_BUTTON, url=url)]])
+
+
 def offer() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=texts.OFFER_GYM, callback_data='buy:gym')],

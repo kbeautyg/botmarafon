@@ -183,3 +183,36 @@ def test_у_каждого_видеоотзыва_на_диске_есть_ра�
         found = delivery.review_file(name)
         if found and found[0] in ('video', 'circle'):
             assert delivery.review_meta(found[1]).get('width'), name
+
+
+@pytest.mark.asyncio
+async def test_запись_видео_уходит_с_потоковым_просмотром():
+    u"""Павел 18.09.2026: «чтобы просмотреть марафон, надо скачивать».
+    supports_streaming — то, что даёт смотреть, не выкачивая целиком."""
+    db.put_content('day2', 'video', 'FILEID42')
+    видел = {}
+
+    class Запоминалка(FakeBot):
+        async def send_video(self, chat_id, video, **kw):
+            видел.update(kw)
+            return await self._record('video', chat_id, video)
+
+    await delivery.send_day(Запоминалка(), 1, 2)
+    assert видел.get('supports_streaming') is True
+
+
+@pytest.mark.asyncio
+async def test_под_записью_ссылкой_есть_кнопка_смотреть():
+    db.put_content('day3', 'link', 'https://kinescope.io/xyz')
+    кнопки = {}
+
+    class Запоминалка(FakeBot):
+        async def send_message(self, chat_id, text, **kw):
+            кнопки.update(kw)
+            return await self._record('text', chat_id, text)
+
+    await delivery.send_day(Запоминалка(), 1, 3)
+    разметка = кнопки.get('reply_markup')
+    assert разметка is not None
+    кнопка = разметка.inline_keyboard[0][0]
+    assert кнопка.url == 'https://kinescope.io/xyz' and u'Смотреть' in кнопка.text
