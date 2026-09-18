@@ -311,3 +311,53 @@ async def test_уведомление_доходит_даже_если_теле�
     ушло = await delivery.note(bot, 999, u'🚀 Новый запуск марафона',
                                keyboards.ban_ask(1, 999), None)
     assert ушло is not None and bot.sent == [('text', 999, u'🚀 Новый запуск марафона')]
+
+
+# ------------------------------------- вложения ссылкой (AleX 18.09.2026)
+
+def test_вид_вложения_узнаём_по_ссылке():
+    assert web.media_kind('https://site.ru/pic.JPG') == 'photo'
+    assert web.media_kind('https://site.ru/video.mp4?x=1') == 'video'
+    assert web.media_kind('https://site.ru/podcast.mp3') == 'audio'
+    assert web.media_kind('https://youtube.com/watch?v=abc') == ''   # уйдёт ссылкой
+
+
+def test_негодная_ссылка_на_вложение_не_проходит(пульт):
+    assert web.check_media('javascript:alert(1)') == ''
+    assert web.check_media('не ссылка') == ''
+    assert web.check_media('https://site.ru/a.jpg') == 'https://site.ru/a.jpg'
+
+
+async def test_фото_ссылкой_уходит_фотографией_и_ложится_в_переписку(пульт):
+    _человек(31)
+    отправлено = []
+
+    class СМедиа(FakeBot):
+        async def send_photo(self, chat_id, photo, **kw):
+            отправлено.append(('photo', chat_id, photo, kw.get('caption')))
+            return await self._record('photo', chat_id, photo)
+
+    пульт.app['bot'] = СМедиа()
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(), 'id': 31, 'text': u'Смотрите',
+        'media': 'https://site.ru/pic.jpg'})
+
+    assert ответ.status == 200
+    assert отправлено == [('photo', 31, 'https://site.ru/pic.jpg', u'Смотрите')]
+    записано = db.chat_history(31)[-1]
+    assert записано['kind'] == 'photo' and записано['file_id'] == 'https://site.ru/pic.jpg'
+
+
+async def test_подкаст_без_текста_тоже_уходит(пульт):
+    _человек(32)
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(), 'id': 32, 'media': 'https://site.ru/podcast.mp3'})
+    assert ответ.status == 200
+
+
+async def test_кривая_ссылка_на_вложение_объясняет_что_не_так(пульт):
+    _человек(33)
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(), 'id': 33, 'text': u'вот', 'media': 'site.ru/pic.jpg'})
+    assert ответ.status == 400
+    assert u'http' in (await ответ.json())['error']

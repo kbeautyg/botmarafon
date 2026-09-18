@@ -225,14 +225,70 @@ async def api_chat(request, user):
     })
 
 
+# Что за вложение прислали ссылкой — по концу адреса. AleX 18.09.2026:
+# «отправить сообщение с креплением ссылки на видео, на фото, на любой
+# медиа или подкаст». Файл к Telegram идёт напрямую по этой ссылке, через
+# пульт он не проходит: пульт живёт в одном процессе с ботом, и качать
+# через него чужие гигабайты нельзя.
+MEDIA_KINDS = (
+    (('.jpg', '.jpeg', '.png', '.webp'), 'photo'),
+    (('.mp4', '.mov', '.m4v'), 'video'),
+    (('.mp3', '.m4a', '.ogg', '.oga', '.wav'), 'audio'),
+    (('.gif',), 'animation'),
+    (('.pdf', '.doc', '.docx', '.zip'), 'document'),
+)
+
+
+def media_kind(url: str) -> str:
+    u"""Вид вложения по ссылке. Неизвестное — ссылкой текстом."""
+    tail = urllib.parse.urlparse(url).path.lower()
+    for endings, kind in MEDIA_KINDS:
+        if tail.endswith(endings):
+            return kind
+    return ''
+
+
+def check_media(url: str) -> str:
+    u"""Ссылка, годная для отправки. Пустая строка — не годится."""
+    url = (url or '').strip()
+    if not url or len(url) > 1024:
+        return ''
+    parts = urllib.parse.urlparse(url)
+    return url if parts.scheme in ('http', 'https') and '.' in parts.netloc else ''
+
+
+async def send_media(bot, user_id: int, url: str, caption: str) -> str:
+    u"""Отправить вложение по ссылке. Возвращает вид отправленного."""
+    kind = media_kind(url)
+    senders = {
+        'photo': bot.send_photo,
+        'video': bot.send_video,
+        'audio': bot.send_audio,
+        'animation': bot.send_animation,
+        'document': bot.send_document,
+    }
+    if kind not in senders:
+        # Не узнали вложение — пусть уходит ссылкой: Telegram покажет превью.
+        body = (caption + u'\n' + url) if caption else url
+        await delivery._guard(bot.send_message(user_id, body, parse_mode=None))
+        return 'text'
+    await delivery._guard(senders[kind](user_id, url, caption=caption or None))
+    return kind
+
+
 @route
 async def api_send(request, user):
     u"""Отправить человеку сообщение от имени бота."""
     body = await _body(request)
     user_id = int(body.get('id') or 0)
     text = str(body.get('text') or '').strip()
-    if not text:
+    media = check_media(str(body.get('media') or ''))
+    if not text and not media:
         return web.json_response({'error': u'пустое сообщение'}, status=400)
+    if str(body.get('media') or '').strip() and not media:
+        return web.json_response(
+            {'error': u'ссылка на вложение должна начинаться с http:// или https://'},
+            status=400)
     if len(text) > MAX_TEXT:
         return web.json_response(
             {'error': u'слишком длинное: %d знаков, влезает %d' % (len(text), MAX_TEXT)},
@@ -243,11 +299,16 @@ async def api_send(request, user):
 
     bot = request.app['bot']
     try:
-        await delivery._guard(bot.send_message(user_id, text, parse_mode=None))
+        if media:
+            kind = await send_media(bot, user_id, media, text)
+        else:
+            kind = 'text'
+            await delivery._guard(bot.send_message(user_id, text, parse_mode=None))
     except delivery.Gone:
         db.mark_blocked(user_id)
         return web.json_response({'error': u'человек закрыл бота — писать ему нельзя'}, status=409)
-    db.save_message(user_id, 'out', 'text', text, author=int(user['id']))
+    db.save_message(user_id, 'out', kind, text or media, media or None,
+                    author=int(user['id']))
     log.info(u'пульт: %s написал(а) человеку %s', user['id'], user_id)
     return web.json_response({'messages': _messages(user_id)})
 

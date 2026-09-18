@@ -58,6 +58,15 @@ class FakeBot(object):
     async def send_photo(self, chat_id, photo, **kw):
         return await self._record('photo', chat_id, photo)
 
+    async def send_audio(self, chat_id, audio, **kw):
+        return await self._record('audio', chat_id, audio)
+
+    async def send_animation(self, chat_id, animation, **kw):
+        return await self._record('animation', chat_id, animation)
+
+    async def send_document(self, chat_id, document, **kw):
+        return await self._record('document', chat_id, document)
+
     async def send_document(self, chat_id, document, **kw):
         # выгрузка статистики уходит файлом — записываем его имя
         return await self._record('document', chat_id, getattr(document, 'filename', None))

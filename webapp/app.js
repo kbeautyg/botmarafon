@@ -293,13 +293,18 @@
   function send(event) {
     event.preventDefault();
     var field = $('text');
+    var link = $('media');
     var text = field.value.trim();
-    if (!text || state.busy || !state.id) { return; }
+    var media = link.value.trim();
+    if ((!text && !media) || state.busy || !state.id) { return; }
     state.busy = true;
     $('go').disabled = true;
-    api('send', { id: state.id, text: text })
+    api('send', { id: state.id, text: text, media: media })
       .then(function (data) {
         field.value = '';
+        link.value = '';
+        link.hidden = true;
+        $('clip').classList.remove('is-on');
         field.style.height = 'auto';
         drawChat({ person: state.person, messages: data.messages || [] });
         if (tg && tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred('success'); }
@@ -331,6 +336,14 @@
   // -------------------------------------------------------------- связи
 
   $('back').addEventListener('click', closeChat);
+  // Вложение — ссылкой: файл уходит от Telegram напрямую, минуя пульт.
+  $('clip').addEventListener('click', function () {
+    var link = $('media');
+    link.hidden = !link.hidden;
+    this.classList.toggle('is-on', !link.hidden);
+    if (!link.hidden) { link.focus(); }
+  });
+
   $('info').addEventListener('click', function () {
     var box = $('card');
     box.hidden = !box.hidden;

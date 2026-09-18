@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=4">
+<link rel="stylesheet" href="/static/app.css?v=5">
 </head>
 <body>
 
@@ -40,13 +40,18 @@
   <div id="card" class="card" hidden></div>
   <div id="log" class="log"></div>
   <form id="send" class="send">
-    <textarea id="text" class="send__text" rows="1" placeholder="Сообщение от имени бота"></textarea>
+    <div class="send__body">
+      <input id="media" class="send__media" type="url" inputmode="url" hidden
+             placeholder="Ссылка на фото, видео или подкаст" autocomplete="off">
+      <textarea id="text" class="send__text" rows="1" placeholder="Сообщение от имени бота"></textarea>
+    </div>
+    <button id="clip" class="send__clip" type="button" aria-label="Вложение по ссылке">📎</button>
     <button id="go" class="send__go" type="submit" aria-label="Отправить">➤</button>
   </form>
 </section>
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=4"></script>
+<script src="/static/app.js?v=5"></script>
 </body>
 </html>
