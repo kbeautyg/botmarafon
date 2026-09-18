@@ -247,8 +247,15 @@ html, body {
 .send__clip.is-on { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 
 .send__text {
-  flex: 1;
-  max-height: 140px;
+  /* Ширину задаёт колонка, а высоту — сам текст. flex здесь стоять не
+     должен: он растягивал поле по колонке, и высота, выставленная при
+     наборе, не работала — поле навсегда оставалось в три строки. */
+  width: 100%;
+  /* Три строки видно сразу, дальше поле растёт до шести: команда пишет
+     людям абзацами, и в одну строку текст было не прочитать
+     (AleX 18.09.2026). */
+  min-height: 5.1rem;
+  max-height: 10rem;
   padding: 9px 12px;
   border: 0;
   border-radius: var(--radius);

@@ -305,7 +305,7 @@
         link.value = '';
         link.hidden = true;
         $('clip').classList.remove('is-on');
-        field.style.height = 'auto';
+        grow(field);
         drawChat({ person: state.person, messages: data.messages || [] });
         if (tg && tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred('success'); }
       })
@@ -360,10 +360,16 @@
     }
   });
 
-  $('text').addEventListener('input', function () {
-    this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 140) + 'px';
-  });
+  // Высота поля: не меньше трёх строк и не больше шести — дальше прокрутка.
+  var MIN_ROWS_PX = 82;
+  var MAX_ROWS_PX = 160;
+
+  function grow(field) {
+    field.style.height = 'auto';
+    field.style.height = Math.min(Math.max(field.scrollHeight, MIN_ROWS_PX), MAX_ROWS_PX) + 'px';
+  }
+
+  $('text').addEventListener('input', function () { grow(this); });
 
   var typing;
   $('search').addEventListener('input', function () {
