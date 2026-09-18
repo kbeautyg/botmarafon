@@ -226,7 +226,35 @@ class _Caller:
 # --------------------------------------------------------------- сервер
 
 async def _index(request):
-    return web.FileResponse(os.path.join(STATIC, 'index.html'))
+    return web.FileResponse(os.path.join(STATIC, 'index.html'),
+                            headers={'Content-Type': TYPES['.html']})
+
+
+# Тип файла задаём сами, а не отдаём на откуп окружению: в контейнере
+# может не оказаться таблицы типов, тогда браузер получит «неизвестно
+# что» и — из-за nosniff — не применит ни стили, ни скрипт.
+TYPES = {
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+}
+
+
+async def _static(request):
+    u"""Отдать файл пульта из webapp/. Только имя файла, без путей вглубь."""
+    name = request.match_info.get('name', '')
+    if not name or '/' in name or '\\' in name or name.startswith('.'):
+        raise web.HTTPNotFound()
+    path = os.path.join(STATIC, name)
+    if not os.path.isfile(path):
+        raise web.HTTPNotFound()
+    kind = TYPES.get(os.path.splitext(name)[1].lower())
+    if not kind:
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={'Content-Type': kind})
 
 
 async def _health(request):
@@ -278,7 +306,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/send', api_send)
     app.router.add_post('/api/ban', api_ban)
-    app.router.add_static('/static/', STATIC)
+    app.router.add_get('/static/{name}', _static)
     return app
 
 

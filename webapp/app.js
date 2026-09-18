@@ -31,6 +31,21 @@
     });
   }
 
+  // Пульт открыли мимо Telegram (обычной ссылкой) — подписи нет, и ни один
+  // запрос не пройдёт. Показываем это прямо, а не тостом «нет подписи».
+  function fatal(title, hint) {
+    var box = document.createElement('div');
+    box.className = 'fatal';
+    var head = document.createElement('b');
+    head.textContent = title;
+    var text = document.createElement('p');
+    text.textContent = hint;
+    box.appendChild(head);
+    box.appendChild(text);
+    document.body.textContent = '';
+    document.body.appendChild(box);
+  }
+
   function toast(message) {
     var box = $('toast');
     box.textContent = message;
@@ -136,7 +151,17 @@
   function loadPeople() {
     return api('people', { query: state.query, onlyChats: state.onlyChats })
       .then(function (data) { drawPeople(data.people || []); })
-      .catch(function (err) { toast(err.message); });
+      .catch(function (err) {
+        if (!initData) { return noEntry(); }
+        toast(err.message);
+      });
+  }
+
+  function noEntry() {
+    fatal('Пульт открывается из бота',
+          'Откройте Telegram, напишите боту команду /пульт и нажмите кнопку — '
+          + 'по обычной ссылке пульт не пустит: Telegram подписывает вход, '
+          + 'и только по этой подписи бот понимает, что это свои.');
   }
 
   // ------------------------------------------------------------ диалог
@@ -282,6 +307,13 @@
     tg.expand();
     if (tg.BackButton) { tg.BackButton.onClick(closeChat); }
     if (tg.setHeaderColor) { try { tg.setHeaderColor('secondary_bg_color'); } catch (e) { /* старый клиент */ } }
+  }
+
+  // Пульт открыли обычной ссылкой, мимо бота: подписи нет, дёргать бота
+  // незачем — объясняем это и на этом заканчиваем.
+  if (!initData) {
+    noEntry();
+    return;
   }
 
   // Новое подтягиваем сами: человек мог ответить, пока пульт открыт.
