@@ -144,6 +144,13 @@ PAY_URLS = {
     'course': os.getenv('COURSE_PAY_URL', '').strip(),
 }
 
+# Пульт админа — мини-приложение внутри Telegram (bot/web.py).
+# WEBAPP_URL — публичный адрес сервиса на Railway (https://…): по нему
+# Telegram открывает пульт, и без него кнопка пульта не показывается —
+# мини-приложение работает только по https. PORT Railway задаёт сам.
+WEBAPP_URL = os.getenv('WEBAPP_URL', '').strip().rstrip('/')
+WEB_PORT = _int(os.getenv('PORT'), 0)
+
 # Куда сообщать о запуске бота по ссылке с сайта спортзала: сайт отдаёт его
 # в рекламу Meta (bot/launch_report.py). Пустое значение выключает.
 SITE_BOT_START_URL = os.getenv('SITE_BOT_START_URL',

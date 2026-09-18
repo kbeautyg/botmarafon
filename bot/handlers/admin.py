@@ -36,7 +36,8 @@ def _is_admin(user_id: int) -> bool:
     return user_id in config.ADMIN_IDS
 
 
-STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status')
+STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
+                  'panel', 'пульт')
 
 
 def _command(message: Message) -> str:
@@ -78,6 +79,16 @@ async def on_help(message: Message):
     if not _is_admin(message.from_user.id):
         return
     await message.answer(texts.ADMIN_HELP)
+
+
+@router.message(Command('panel', 'пульт'))
+async def on_panel(message: Message):
+    u"""Пульт: переписки со всеми в одном окне (AleX 17.09.2026)."""
+    keys = keyboards.panel()
+    if not keys:
+        await message.answer(texts.PANEL_OFF)
+        return
+    await message.answer(texts.PANEL_INTRO, reply_markup=keys)
 
 
 @router.message(Command('day1', 'day2', 'day3', 'day4'))

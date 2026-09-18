@@ -50,7 +50,7 @@ async def _deliver(bot, number, note: str, user_id: int) -> None:
     got, failed = [], []
     for chat in config.purchase_recipients():
         try:
-            sent = await bot.send_message(chat, note, reply_markup=keyboards.ban_ask(user_id))
+            sent = await bot.send_message(chat, note, reply_markup=keyboards.ban_ask(user_id, chat))
             got.append(chat)
             # реплай на заявку — сообщение покупателю (handlers/support.py)
             if sent is not None:

@@ -21,7 +21,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from .. import config, contact, db, delivery, keyboards, texts
+from .. import chatlog, config, contact, db, delivery, keyboards, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='support')
@@ -50,6 +50,7 @@ async def _relay(message: Message) -> None:
     except Exception as err:
         await message.reply(u'Не доставили: %s' % html.escape(str(err))[:300])
         return
+    chatlog.save(message, user_id, 'out', message.from_user.id)
     log.info(u'ответ команды %s ушёл человеку %s', message.from_user.id, user_id)
     await message.reply(u'Отправлено ✅')
 
@@ -154,6 +155,7 @@ async def _write(message: Message, ref: str, start: int) -> None:
     except Exception as err:
         await message.answer(texts.WRITE_FAILED.format(who=who, why=html.escape(str(err))[:300]))
         return
+    chatlog.save_text(user_id, body, message.from_user.id)
     log.info(u'команда %s написала человеку %s по /написать', message.from_user.id, user_id)
     sent = await message.answer(texts.WRITE_SENT.format(who=who))
     db.link_care(message.chat.id, sent.message_id, user_id)
@@ -180,7 +182,7 @@ async def _mirror(message: Message) -> int:
         try:
             head = await message.bot.send_message(
                 chat, u'💬 <b>Написали в бота</b>\n%s\n%s' % (_who(message.from_user), texts.REPLY_HINT),
-                reply_markup=keyboards.ban_ask(message.from_user.id))
+                reply_markup=keyboards.ban_ask(message.from_user.id, chat))
             db.link_care(chat, head.message_id, message.from_user.id)
             copy = await message.bot.copy_message(chat, message.chat.id, message.message_id)
             db.link_care(chat, copy.message_id, message.from_user.id)
@@ -215,6 +217,7 @@ async def to_support(message: Message):
 
     db.remember_user(message.from_user.id, message.from_user.username,
                      message.from_user.first_name)
+    chatlog.save(message, message.from_user.id, 'in')
     delivered = await _mirror(message)
     db.set_care_open(message.from_user.id, False)
     await message.answer(texts.CARE_SENT_HERE if delivered else texts.CARE_SENT,

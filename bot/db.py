@@ -93,6 +93,22 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_user ON events(user_id);
 
+-- Переписка команды с человеком: что он написал боту и что мы ответили.
+-- До 18.09.2026 переписка нигде не хранилась — сообщения просто
+-- пересылались команде в личку и терялись в ленте уведомлений. Пульту
+-- админа (bot/web.py) нужна история: открыл человека — видишь весь диалог.
+CREATE TABLE IF NOT EXISTS messages (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,      -- с кем переписка
+  side    TEXT NOT NULL,         -- in — от человека, out — от команды
+  author  INTEGER,               -- кто из команды отправил (для out)
+  kind    TEXT NOT NULL,         -- text | photo | video | voice | video_note | document | …
+  text    TEXT,                  -- текст или подпись под медиа
+  file_id TEXT,                  -- медиа, если было
+  at      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messages_user ON messages(user_id, at);
+
 -- Чёрный список (AleX 16.09.2026): одна строка на человека. Убрали из
 -- списка — строка остаётся с removed_at: статистике нужна история, а не
 -- только кто в списке сейчас. Имя и ник — на момент добавления: человек
@@ -138,6 +154,9 @@ def connect(path: str) -> sqlite3.Connection:
     # WAL: чтение не блокирует запись, а на нежданном выключении питания
     # база остаётся целой — бот стоит на сервере без ИБП.
     _conn.execute('PRAGMA journal_mode=WAL')
+    # Свой lower: встроенный в sqlite знает только латиницу, и поиск по
+    # пульту «ната» не находил Наталью. Питон умеет любой алфавит.
+    _conn.create_function('rulower', 1, lambda s: s.lower() if s else s)
     _conn.executescript(SCHEMA)
     # База, созданная до 07.09.2026, колонки source не знает — добавляем.
     columns = [row[1] for row in _conn.execute('PRAGMA table_info(users)')]
@@ -471,6 +490,68 @@ def care_target(chat_id: int, message_id: int) -> int | None:
     row = _conn.execute('SELECT user_id FROM care_links WHERE chat_id=? AND message_id=?',
                         (chat_id, message_id)).fetchone()
     return row['user_id'] if row else None
+
+
+# ------------------------------------------------------------- переписка
+
+def save_message(user_id: int, side: str, kind: str = 'text', text: str | None = None,
+                 file_id: str | None = None, author: int | None = None) -> int:
+    u"""Записать сообщение переписки: side — 'in' от человека, 'out' от команды."""
+    return _run('INSERT INTO messages (user_id, side, author, kind, text, file_id, at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (user_id, side, author, kind, text, file_id, time.time())).lastrowid
+
+
+def chat_history(user_id: int, limit: int = 200) -> list[dict]:
+    u"""Переписка с человеком, старые сверху — как в обычном чате."""
+    rows = _conn.execute(
+        'SELECT id, side, author, kind, text, file_id, at FROM messages '
+        'WHERE user_id=? ORDER BY at DESC, id DESC LIMIT ?', (user_id, limit)).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
+# Последнее сообщение переписки и сколько входящих ждут ответа: входящими
+# считаем те, что пришли после нашего последнего ответа.
+_LAST_MESSAGE = (
+    'SELECT id FROM messages x WHERE x.user_id = u.user_id ORDER BY x.at DESC, x.id DESC LIMIT 1')
+_WAITING = (
+    "SELECT COUNT(*) FROM messages i WHERE i.user_id = u.user_id AND i.side = 'in' "
+    "AND i.at > COALESCE((SELECT MAX(o.at) FROM messages o "
+    "                     WHERE o.user_id = u.user_id AND o.side = 'out'), 0)")
+
+
+def people(query: str = '', limit: int = 60, only_chats: bool = False) -> list[dict]:
+    u"""Люди для пульта админа: свежая переписка сверху.
+
+    Пустой поиск — те, с кем переписка уже есть (кому отвечать), иначе
+    последние пришедшие. Поиск ищет по всей базе: по нику, по имени и по
+    id, кусочком и без учёта регистра, — AleX 16.09.2026 просил не искать
+    id руками.
+    """
+    like = u'%%%s%%' % query.strip().lstrip('@').lower()
+    where = []
+    args: list = []
+    if query.strip():
+        where.append('(rulower(COALESCE(u.username, ' "''" ')) LIKE ? '
+                     'OR rulower(COALESCE(u.first_name, ' "''" ')) LIKE ? '
+                     'OR CAST(u.user_id AS TEXT) LIKE ?)')
+        args += [like, like, like]
+    elif only_chats:
+        where.append('m.id IS NOT NULL')
+    rows = _conn.execute(
+        'SELECT u.user_id, u.username, u.first_name, u.started_at, u.launched_at, '
+        "       u.poll, u.blocked_at, COALESCE(u.source, '') AS source, "
+        '       m.at AS last_at, m.side AS last_side, m.kind AS last_kind, m.text AS last_text, '
+        '       (' + _WAITING + ') AS waiting, '
+        '       (SELECT COUNT(*) FROM blacklist b WHERE b.user_id = u.user_id '
+        '        AND b.removed_at IS NULL) AS banned '
+        'FROM users u LEFT JOIN messages m ON m.id = (' + _LAST_MESSAGE + ') '
+        + ('WHERE ' + ' AND '.join(where) + ' ' if where else '') +
+        # Второй ключ — номер сообщения: два сообщения могут лечь в одну и ту
+        # же долю секунды, и без него порядок людей в списке плавал бы.
+        'ORDER BY COALESCE(m.at, u.started_at) DESC, m.id DESC, u.user_id DESC '
+        'LIMIT ?', tuple(args) + (limit,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ------------------------------------------------------- шаги и уходы

@@ -64,19 +64,19 @@ async def on_ban_button(call: CallbackQuery):
         await _markup(call, keyboards.ban_confirm(user_id))
         await call.answer(texts.BAN_CONFIRM_TOAST)
     elif action == 'no':
-        await _markup(call, keyboards.ban_ask(user_id))
+        await _markup(call, keyboards.ban_ask(user_id, call.message.chat.id))
         await call.answer(u'Отменено')
     elif action == 'yes':
         # Подтвердить нажатие сразу: баны по чатам идут дольше, чем Telegram ждёт ответа.
         await call.answer(u'Вношу в чёрный список…')
         _, report = await blacklist.add(call.bot, user_id, call.from_user)
         await _markup(call, keyboards.ban_undo(user_id) if db.is_banned(user_id)
-                      else keyboards.ban_ask(user_id))
+                      else keyboards.ban_ask(user_id, call.message.chat.id))
         await call.message.reply(report)
     elif action == 'undo':
         await call.answer(u'Убираю из чёрного списка…')
         _, report = await blacklist.remove(call.bot, user_id, call.from_user)
-        await _markup(call, keyboards.ban_ask(user_id))
+        await _markup(call, keyboards.ban_ask(user_id, call.message.chat.id))
         await call.message.reply(report)
     else:
         await call.answer()

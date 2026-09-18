@@ -6,7 +6,7 @@ u"""Клавиатуры.
 вверх с историей, reply остаётся под полем ввода на любом экране.
 """
 from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
-                           KeyboardButton, ReplyKeyboardMarkup)
+                           KeyboardButton, ReplyKeyboardMarkup, WebAppInfo)
 
 from . import config, texts
 
@@ -102,9 +102,39 @@ def offer() -> InlineKeyboardMarkup:
 # конца (человеку придётся вернуться самому), поэтому второе касание —
 # подтверждение: промахнуться мимо «Ответить» слишком легко.
 
-def ban_ask(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=texts.BAN_BUTTON, callback_data='bl:ask:%d' % user_id)]])
+def panel_button(user_id: int | None = None) -> InlineKeyboardButton | None:
+    u"""Кнопка «открыть пульт», при user_id — сразу на диалог с человеком.
+
+    Мини-приложение Telegram открывает только по https и только в личной
+    переписке: в группах такую кнопку телеграм не принимает вовсе. Поэтому
+    без адреса пульта (WEBAPP_URL) её просто нет.
+    """
+    if not config.WEBAPP_URL:
+        return None
+    url = config.WEBAPP_URL + ('/?id=%d' % user_id if user_id else '/')
+    return InlineKeyboardButton(
+        text=texts.PANEL_REPLY if user_id else texts.PANEL_BUTTON,
+        web_app=WebAppInfo(url=url))
+
+
+def panel() -> InlineKeyboardMarkup | None:
+    button = panel_button()
+    return InlineKeyboardMarkup(inline_keyboard=[[button]]) if button else None
+
+
+def ban_ask(user_id: int, chat_id: int | None = None) -> InlineKeyboardMarkup:
+    u"""Кнопки под уведомлением о человеке: ответить в пульте и в чёрный список.
+
+    Пульт добавляется только в личной переписке (chat_id > 0) — в командном
+    чате телеграм отказывается принимать кнопку мини-приложения.
+    """
+    rows = []
+    if chat_id is not None and chat_id > 0:
+        button = panel_button(user_id)
+        if button:
+            rows.append([button])
+    rows.append([InlineKeyboardButton(text=texts.BAN_BUTTON, callback_data='bl:ask:%d' % user_id)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def ban_confirm(user_id: int) -> InlineKeyboardMarkup:

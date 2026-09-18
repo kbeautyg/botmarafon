@@ -8,7 +8,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import backup, config, db, delivery, handlers, leads, nudge, scheduler, stats, texts
+from . import (backup, config, db, delivery, handlers, leads, nudge, scheduler,
+               stats, texts, web)
 
 log = logging.getLogger('marathon')
 
@@ -81,12 +82,17 @@ async def run():
     worker = asyncio.create_task(scheduler.loop(bot))
     reporter = asyncio.create_task(stats.loop(bot))
     nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
+    # Пульт админа поднимается рядом с ботом: та же база, тот же процесс.
+    # Нет порта (машина разработчика) — бот работает как раньше, без пульта.
+    panel = await web.serve(bot)
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
         worker.cancel()
         reporter.cancel()
         nudger.cancel()
+        if panel:
+            await panel.cleanup()
         await bot.session.close()
 
 

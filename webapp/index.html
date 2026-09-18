@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Пульт · Марафон ФИНИШ</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/app.css?v=1">
+</head>
+<body>
+
+<!-- Экран 1: люди -->
+<section id="list" class="screen is-open">
+  <header class="bar">
+    <div class="bar__row">
+      <input id="search" class="search" type="search" inputmode="search"
+             placeholder="Ник, имя или ID" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="bar__row bar__row--tabs">
+      <button class="tab is-on" data-only="1" type="button">Переписки</button>
+      <button class="tab" data-only="0" type="button">Все участники</button>
+      <span id="count" class="count"></span>
+    </div>
+  </header>
+  <div id="people" class="people"></div>
+  <p id="empty" class="empty" hidden>Никого не нашли</p>
+</section>
+
+<!-- Экран 2: диалог -->
+<section id="chat" class="screen screen--chat">
+  <header class="bar bar--chat">
+    <button id="back" class="icon" type="button" aria-label="Назад">‹</button>
+    <div class="who">
+      <b id="chat-name">—</b>
+      <span id="chat-sub" class="who__sub"></span>
+    </div>
+    <button id="ban" class="ban" type="button">🚫</button>
+  </header>
+  <div id="log" class="log"></div>
+  <form id="send" class="send">
+    <textarea id="text" class="send__text" rows="1" placeholder="Сообщение от имени бота"></textarea>
+    <button id="go" class="send__go" type="submit" aria-label="Отправить">➤</button>
+  </form>
+</section>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/app.js?v=1"></script>
+</body>
+</html>
