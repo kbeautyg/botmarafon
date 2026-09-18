@@ -94,6 +94,48 @@ def watch(url: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.WATCH_BUTTON, url=url)]])
 
 
+def daily(base: int, chosen: list) -> InlineKeyboardMarkup:
+    u"""Календарь под отчётом: дни строками по четыре, выбранные — с точкой.
+
+    Нажатие добавляет или убирает день, и отчёт пересчитывается в том же
+    сообщении (AleX 18.09.2026: «выбрать сразу день или несколько дней по
+    календарю, и отчёт этот мини обновляется»).
+    """
+    from . import daily
+
+    picked = set(chosen)
+    buttons = []
+    for number in range(base, base - daily.CALENDAR_DAYS, -1):
+        mark = u'• ' if number in picked else u''
+        chosen_now = (picked - {number}) if number in picked else (picked | {number})
+        if not chosen_now:
+            chosen_now = {number}          # хотя бы один день должен остаться
+        buttons.append(InlineKeyboardButton(
+            text=mark + daily.title(number).split(', ')[-1],
+            callback_data=daily.pack(base, list(chosen_now))))
+    rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    rows.append([InlineKeyboardButton(text=u'Сегодня',
+                                      callback_data=daily.pack(base, [base])),
+                 InlineKeyboardButton(text=u'Вчера',
+                                      callback_data=daily.pack(base, [base - 1])),
+                 InlineKeyboardButton(text=u'7 дней',
+                                      callback_data=daily.pack(base, list(range(base - 6, base + 1))))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def broadcast(broadcast_id: int, count: int) -> InlineKeyboardMarkup:
+    u"""Подтверждение рассылки: разослать всем или отменить.
+
+    Рассылку нельзя отозвать, поэтому отправка — вторым касанием, и на
+    кнопке сразу видно, скольким людям уйдёт.
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.BROADCAST_GO.format(count=count),
+                              callback_data='bc:go:%d' % broadcast_id)],
+        [InlineKeyboardButton(text=texts.BROADCAST_CANCEL,
+                              callback_data='bc:no:%d' % broadcast_id)]])
+
+
 def offer() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=texts.OFFER_GYM, callback_data='buy:gym')],

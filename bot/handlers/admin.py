@@ -17,8 +17,8 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import (backup, config, db, delivery, funnel, insights, keyboards, leads,
-                scheduler, stats, texts)
+from .. import (backup, broadcast, config, daily, db, delivery, funnel, insights,
+                keyboards, leads, scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -89,6 +89,101 @@ async def on_panel(message: Message):
         await message.answer(texts.PANEL_OFF)
         return
     await message.answer(texts.PANEL_INTRO, reply_markup=keys)
+
+
+@router.message(Command('отчет', 'отчёт', 'report'))
+async def on_daily(message: Message):
+    u"""Мини-отчёт за сутки — тот же, что приходит ночью сам."""
+    if not _can_stats(message):
+        return
+    base = daily.day_number()
+    await message.answer(daily.report([base]), reply_markup=keyboards.daily(base, [base]))
+
+
+@router.callback_query(F.data.startswith('dl:'))
+async def on_daily_button(call: CallbackQuery):
+    u"""Выбрали другой день (или несколько) — пересчитать в том же сообщении."""
+    if not config.can_stats(call.from_user.id, call.message.chat.id):
+        await call.answer()
+        return
+    base, days = daily.unpack(call.data)
+    try:
+        await call.message.edit_text(daily.report(days),
+                                     reply_markup=keyboards.daily(base, days))
+    except Exception:
+        # тот же набор дней — Telegram отказывается править сообщение тем же текстом
+        pass
+    await call.answer()
+
+
+# -------------------------------------------------- рассылка всем
+#
+# Пишем «жду сообщение» в базу, а не в память: между командой и самим
+# сообщением бот может перезапуститься, и тогда присланное видео ушло бы
+# в никуда.
+
+WAIT_KEY = 'broadcast:await:%d'
+
+
+@router.message(Command('рассылка', 'broadcast'))
+async def on_broadcast(message: Message):
+    u"""Рассылка всем: следующее сообщение станет тем, что уйдёт людям."""
+    if not _is_admin(message.from_user.id):
+        return
+    if db.broadcasts_going():
+        await message.answer(texts.BROADCAST_BUSY)
+        return
+    db.put_content(WAIT_KEY % message.from_user.id, 'await', '1')
+    await message.answer(texts.BROADCAST_ASK_MESSAGE)
+
+
+@router.message(Command('отмена', 'cancel'))
+async def on_cancel(message: Message):
+    if not _is_admin(message.from_user.id):
+        return
+    db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
+    await message.answer(texts.BROADCAST_CANCELLED)
+
+
+def waiting_broadcast(message: Message) -> bool:
+    u"""Админ только что дал команду «рассылка» — это она и есть."""
+    if not message.from_user or not _is_admin(message.from_user.id):
+        return False
+    stored = db.get_content(WAIT_KEY % message.from_user.id)
+    return bool(stored and stored[1])
+
+
+@router.message(waiting_broadcast)
+async def on_broadcast_message(message: Message):
+    u"""То, что разошлём. Показываем предпросмотр и спрашиваем подтверждение."""
+    db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
+    task_id = db.broadcast_add(message.chat.id, message.message_id, message.from_user.id)
+    task = db.broadcast(task_id)
+    await message.reply(broadcast.preview(task),
+                        reply_markup=keyboards.broadcast(task_id, db.broadcast_left(0)))
+
+
+@router.callback_query(F.data.startswith('bc:'))
+async def on_broadcast_button(call: CallbackQuery):
+    if not _is_admin(call.from_user.id):
+        await call.answer()
+        return
+    action, task_id = call.data.split(':')[1], int(call.data.split(':')[2])
+    task = db.broadcast(task_id)
+    if not task or task['status'] not in ('ready',):
+        await call.answer(u'Эта рассылка уже не ждёт подтверждения')
+        return
+    if action == 'no':
+        db.broadcast_status(task_id, 'cancelled')
+        await call.message.edit_reply_markup(reply_markup=None)
+        await call.answer(u'Отменено')
+        await call.message.reply(texts.BROADCAST_CANCELLED)
+        return
+
+    await call.answer(texts.BROADCAST_STARTED)
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.reply(texts.BROADCAST_STARTED)
+    asyncio.create_task(broadcast.run(call.bot, task_id))
 
 
 @router.message(Command('day1', 'day2', 'day3', 'day4'))

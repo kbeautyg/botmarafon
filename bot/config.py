@@ -144,6 +144,28 @@ PAY_URLS = {
     'course': os.getenv('COURSE_PAY_URL', '').strip(),
 }
 
+# Ежедневный отчёт команде (AleX 18.09.2026): «в 00:00 по МСК, пусть этот
+# временной параметр потом можно будет настроить». Формат «ЧЧ:ММ».
+DAILY_REPORT_AT = os.getenv('DAILY_REPORT_AT', '00:00').strip()
+
+
+def daily_at() -> tuple:
+    u"""Во сколько по Москве слать отчёт. Непонятное значение — полночь."""
+    try:
+        hour, minute = DAILY_REPORT_AT.split(':')
+        hour, minute = int(hour), int(minute)
+    except (ValueError, AttributeError):
+        return 0, 0
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return 0, 0
+    return hour, minute
+
+
+def report_recipients() -> tuple:
+    u"""Кому уходит ежедневный отчёт: админы и команда проекта лично."""
+    return tuple(dict.fromkeys(ADMIN_IDS + TEAM_STATS_IDS + purchase_recipients()))
+
+
 # Пульт админа — мини-приложение внутри Telegram (bot/web.py).
 # WEBAPP_URL — публичный адрес сервиса на Railway (https://…): по нему
 # Telegram открывает пульт, и без него кнопка пульта не показывается —

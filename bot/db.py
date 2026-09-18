@@ -109,6 +109,23 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_user ON messages(user_id, at);
 
+-- Рассылка «уведомить всех» (AleX 18.09.2026). Храним не текст, а ссылку
+-- на исходное сообщение: бот копирует его каждому, и медиа со ссылками
+-- уходят как есть. cursor — докуда дошли: рассылка переживает перезапуск
+-- и не начинается заново, иначе люди получили бы её дважды.
+CREATE TABLE IF NOT EXISTS broadcasts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id    INTEGER NOT NULL,     -- где лежит исходное сообщение
+  message_id INTEGER NOT NULL,
+  author     INTEGER NOT NULL,     -- кто из команды запустил
+  at         REAL NOT NULL,
+  cursor     INTEGER NOT NULL DEFAULT 0,   -- последний, кому отправили
+  sent       INTEGER NOT NULL DEFAULT 0,
+  gone       INTEGER NOT NULL DEFAULT 0,   -- закрыли бота
+  failed     INTEGER NOT NULL DEFAULT 0,
+  status     TEXT NOT NULL DEFAULT 'ready' -- ready | going | done | cancelled
+);
+
 -- Чёрный список (AleX 16.09.2026): одна строка на человека. Убрали из
 -- списка — строка остаётся с removed_at: статистике нужна история, а не
 -- только кто в списке сейчас. Имя и ник — на момент добавления: человек
@@ -379,6 +396,92 @@ def answered(user_id: int, poll: str) -> bool:
     u"""Ответил ли человек на вопрос в этом прогоне (reset_funnel стирает ответы)."""
     return _conn.execute('SELECT 1 FROM answers WHERE user_id=? AND poll=?',
                          (user_id, poll)).fetchone() is not None
+
+
+# --------------------------------------------------------- отчёт за день
+
+def day_stats(since: float, until: float) -> dict:
+    u"""Что случилось в промежутке: пришли, запустили, ответили, купили.
+
+    AleX 18.09.2026: «сколько всего в этот день пришло новых, сколько из
+    них нажали Да или Нет после первой практики, сколько после второй,
+    третий и четвёртый, и коротко источники против каждого пункта цифра».
+    Считаем по времени самого события: ответ засчитывается в те сутки,
+    когда человек нажал кнопку, а не когда он пришёл в бота.
+    """
+    def one(sql: str) -> int:
+        return _conn.execute(sql, (since, until)).fetchone()[0]
+
+    answers = _conn.execute(
+        'SELECT poll, answer, COUNT(*) AS n FROM answers '
+        'WHERE answered >= ? AND answered < ? GROUP BY poll, answer',
+        (since, until)).fetchall()
+    days = _conn.execute(
+        "SELECT ref, COUNT(DISTINCT user_id) AS n FROM events "
+        "WHERE kind='day' AND at >= ? AND at < ? GROUP BY ref", (since, until)).fetchall()
+    sources = _conn.execute(
+        "SELECT COALESCE(source, '') AS src, COUNT(*) AS n FROM users "
+        'WHERE started_at >= ? AND started_at < ? GROUP BY src ORDER BY n DESC, src',
+        (since, until)).fetchall()
+    buys = _conn.execute(
+        'SELECT product, COUNT(*) AS n FROM purchases WHERE at >= ? AND at < ? '
+        'GROUP BY product', (since, until)).fetchall()
+    return {
+        'came': one('SELECT COUNT(*) FROM users WHERE started_at >= ? AND started_at < ?'),
+        'launched': one('SELECT COUNT(*) FROM users WHERE launched_at >= ? AND launched_at < ?'),
+        'answers': {(r['poll'], r['answer']): r['n'] for r in answers},
+        'days': {int(r['ref']): r['n'] for r in days if str(r['ref']).isdigit()},
+        'sources': [(r['src'], r['n']) for r in sources],
+        'buys': {r['product']: r['n'] for r in buys},
+        'left': one('SELECT COUNT(*) FROM users WHERE blocked_at >= ? AND blocked_at < ?'),
+    }
+
+
+# ------------------------------------------------------------- рассылка
+
+def broadcast_add(chat_id: int, message_id: int, author: int) -> int:
+    return _run('INSERT INTO broadcasts (chat_id, message_id, author, at) '
+                'VALUES (?, ?, ?, ?)', (chat_id, message_id, author, time.time())).lastrowid
+
+
+def broadcast(broadcast_id: int) -> dict | None:
+    row = _conn.execute('SELECT * FROM broadcasts WHERE id=?', (broadcast_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def broadcast_status(broadcast_id: int, status: str) -> None:
+    _run('UPDATE broadcasts SET status=? WHERE id=?', (status, broadcast_id))
+
+
+def broadcasts_going() -> list[dict]:
+    u"""Рассылки, прерванные перезапуском, — их продолжают с курсора."""
+    rows = _conn.execute("SELECT * FROM broadcasts WHERE status='going' ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+# Кому уходит рассылка: все, кто заходил в бота, кроме закрывших его и тех,
+# кто в чёрном списке. Команду проекта тоже не трогаем — они получат отчёт.
+_BROADCAST_WHERE = ('WHERE u.user_id > ? AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' ')
+
+
+def broadcast_targets(after: int, limit: int = 200) -> list[int]:
+    rows = _conn.execute('SELECT u.user_id FROM users u ' + _BROADCAST_WHERE +
+                         'ORDER BY u.user_id LIMIT ?', (after, limit)).fetchall()
+    return [r[0] for r in rows]
+
+
+def broadcast_left(after: int = 0) -> int:
+    return _conn.execute('SELECT COUNT(*) FROM users u ' + _BROADCAST_WHERE,
+                         (after,)).fetchone()[0]
+
+
+def broadcast_step(broadcast_id: int, user_id: int, result: str) -> dict:
+    u"""Отметить одного получателя и подвинуть курсор — чтобы перезапуск не
+    заставил слать заново тем, кто уже получил."""
+    column = {'ok': 'sent', 'gone': 'gone'}.get(result, 'failed')
+    _run('UPDATE broadcasts SET cursor=?, %s=%s+1 WHERE id=?' % (column, column),
+         (user_id, broadcast_id))
+    return broadcast(broadcast_id)
 
 
 def answers_of(user_id: int) -> dict:
