@@ -148,7 +148,28 @@ PAY_URLS = {
 # WEBAPP_URL — публичный адрес сервиса на Railway (https://…): по нему
 # Telegram открывает пульт, и без него кнопка пульта не показывается —
 # мини-приложение работает только по https. PORT Railway задаёт сам.
-WEBAPP_URL = os.getenv('WEBAPP_URL', '').strip().rstrip('/')
+def _webapp_url(raw: str | None) -> str:
+    u"""Адрес пульта в том виде, в каком его примет Telegram.
+
+    Sharp 18.09.2026 положил в переменную адрес без «https://», как его
+    показывает Railway. Telegram такую кнопку не принимает — и вместе с
+    командой /пульт перестали уходить уведомления команде о новых людях.
+    Поэтому схему дописываем сами, а адрес без точки в имени (localhost,
+    опечатка) не берём вовсе: лучше без пульта, чем со сломанными
+    уведомлениями.
+    """
+    url = (raw or '').strip().rstrip('/')
+    if not url:
+        return ''
+    if url.startswith('http://'):
+        url = 'https://' + url[len('http://'):]
+    elif not url.startswith('https://'):
+        url = 'https://' + url
+    host = url[len('https://'):].split('/')[0]
+    return url if '.' in host and ' ' not in host else ''
+
+
+WEBAPP_URL = _webapp_url(os.getenv('WEBAPP_URL'))
 WEB_PORT = _int(os.getenv('PORT'), 0)
 
 # Куда сообщать о запуске бота по ссылке с сайта спортзала: сайт отдаёт его

@@ -139,9 +139,18 @@
     return row;
   }
 
-  function drawPeople(people) {
+  function drawPeople(people, everyone) {
     var box = $('people');
     box.textContent = '';
+    // Переписка копится с 18.09.2026: пока её нет, показываем всех и
+    // говорим об этом, чтобы пустой список не выглядел поломкой.
+    if (everyone) {
+      var note = document.createElement('p');
+      note.className = 'hint';
+      note.textContent = 'Переписок пока нет — они копятся с того дня, как включили пульт. '
+        + 'Ниже все, кто заходил в бота: откройте любого и напишите первым.';
+      box.appendChild(note);
+    }
     people.forEach(function (person) { box.appendChild(personRow(person)); });
     $('empty').hidden = people.length > 0;
     var waiting = people.filter(function (p) { return p.waiting; }).length;
@@ -150,7 +159,7 @@
 
   function loadPeople() {
     return api('people', { query: state.query, onlyChats: state.onlyChats })
-      .then(function (data) { drawPeople(data.people || []); })
+      .then(function (data) { drawPeople(data.people || [], data.everyone); })
       .catch(function (err) {
         if (!initData) { return noEntry(); }
         toast(err.message);

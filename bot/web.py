@@ -140,10 +140,22 @@ def _person(row: dict) -> dict:
 
 @route
 async def api_people(request, user):
+    u"""Люди для списка.
+
+    Переписка копится только с 18.09.2026 — до этого сообщения нигде не
+    сохранялись. Поэтому если на вкладке «Переписки» пусто, показываем
+    всех, кто заходил в бота: пустой экран выглядел бы поломкой, а писать
+    людям можно и тем, кто нам ещё ни разу не писал.
+    """
     body = await _body(request)
     query = str(body.get('query') or '')[:64]
-    rows = db.people(query, PAGE_SIZE, only_chats=bool(body.get('onlyChats', True)))
-    return web.json_response({'people': [_person(r) for r in rows]})
+    only_chats = bool(body.get('onlyChats', True))
+    rows = db.people(query, PAGE_SIZE, only_chats=only_chats)
+    everyone = False
+    if only_chats and not rows and not query.strip():
+        rows = db.people('', PAGE_SIZE, only_chats=False)
+        everyone = bool(rows)
+    return web.json_response({'people': [_person(r) for r in rows], 'everyone': everyone})
 
 
 def _messages(user_id: int) -> list[dict]:

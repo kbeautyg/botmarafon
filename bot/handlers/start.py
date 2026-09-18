@@ -31,7 +31,8 @@ from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from .. import config, contact, db, keyboards, launch_report, scheduler, stats, texts
+from .. import (config, contact, db, delivery, keyboards, launch_report, scheduler,
+                stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='start')
@@ -72,7 +73,9 @@ async def _announce(bot, user, text: str, skip: tuple = ()) -> None:
             continue
         try:
             # под уведомлением — «в чёрный список» в одно касание (AleX 16.09.2026)
-            sent = await bot.send_message(chat, text, reply_markup=keyboards.ban_ask(user.id, chat))
+            sent = await delivery.note(bot, chat, text,
+                                       keyboards.ban_ask(user.id, chat),
+                                       keyboards.ban_ask(user.id))
         except Exception as err:
             log.warning(u'уведомление о входе %s не ушло в %s: %s', user.id, chat, err)
             continue

@@ -135,6 +135,16 @@ html, body {
 
 .empty { padding: 32px 16px; color: var(--muted); text-align: center; }
 
+.hint {
+  margin: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 /* ----------------------------------------------------------- диалог */
 
 .bar--chat { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 4px; }

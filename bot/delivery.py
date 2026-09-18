@@ -26,6 +26,23 @@ class Gone(Exception):
     u"""Человек закрыл бота — вести его дальше некуда."""
 
 
+async def note(bot, chat: int, text: str, keys=None, plain=None):
+    u"""Сообщение команде о человеке — так, чтобы кнопки не смогли его отменить.
+
+    18.09.2026: в кнопке пульта оказался адрес без «https://», Telegram
+    отверг такую клавиатуру целиком, и команда перестала видеть новых
+    людей вообще. Уведомление важнее любой кнопки под ним: не приняли
+    клавиатуру — шлём то же самое без неё.
+    """
+    try:
+        return await bot.send_message(chat, text, reply_markup=keys)
+    except TelegramBadRequest as err:
+        if keys is None:
+            raise
+        log.warning(u'кнопки под уведомлением не приняты (%s) — шлём без них', err)
+        return await bot.send_message(chat, text, reply_markup=plain)
+
+
 # Сбой связи с Telegram (сеть, 5xx, «подождите N секунд», HTML-страница шлюза
 # вместо ответа) — не вина шага: такой шаг ждут, а не снимают (ревью 11.09.2026).
 TRANSIENT = (TelegramNetworkError, TelegramServerError, TelegramRetryAfter, asyncio.TimeoutError)

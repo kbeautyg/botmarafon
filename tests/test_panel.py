@@ -272,3 +272,42 @@ def test_из_сообщения_запоминаем_вид_вложения():
 
     текст = FakeMessage(text=u'просто текст', user=FakeUser(11))
     assert chatlog.parts(текст) == ('text', u'просто текст', None)
+
+
+# ------------------------------------------- адрес пульта и уведомления
+#
+# 18.09.2026: в переменную WEBAPP_URL лёг адрес без «https://», как его
+# показывает Railway. Telegram отверг кнопку — и вместе с /пульт пропали
+# уведомления команде о каждом новом человеке. Дважды такому не бывать.
+
+def test_адрес_пульта_приводим_к_https():
+    приведём = config._webapp_url
+    assert приведём('botmarafon-production.up.railway.app') == \
+        'https://botmarafon-production.up.railway.app'
+    assert приведём('http://bot.example.com/') == 'https://bot.example.com'
+    assert приведём(' https://bot.example.com/ ') == 'https://bot.example.com'
+
+
+def test_негодный_адрес_пульта_лучше_никакого():
+    u"""Без точки в имени Telegram кнопку не примет — не показываем её вовсе."""
+    for мусор in ('', None, 'localhost:8080', 'адрес не задан'):
+        assert config._webapp_url(мусор) == ''
+
+
+async def test_уведомление_доходит_даже_если_телеграм_отверг_кнопки():
+    from aiogram.exceptions import TelegramBadRequest
+
+    from bot import delivery, keyboards
+
+    class Привереда(FakeBot):
+        u"""Принимает сообщение только без клавиатуры — как Telegram с битой кнопкой."""
+
+        async def send_message(self, chat_id, text, **kw):
+            if kw.get('reply_markup') is not None:
+                raise TelegramBadRequest(method=None, message=u'Bad Request: Web App URL is invalid')
+            return await self._record('text', chat_id, text)
+
+    bot = Привереда()
+    ушло = await delivery.note(bot, 999, u'🚀 Новый запуск марафона',
+                               keyboards.ban_ask(1, 999), None)
+    assert ушло is not None and bot.sent == [('text', 999, u'🚀 Новый запуск марафона')]
