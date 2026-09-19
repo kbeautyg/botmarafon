@@ -94,6 +94,36 @@ def watch(url: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.WATCH_BUTTON, url=url)]])
 
 
+def menu() -> InlineKeyboardMarkup:
+    u"""Меню команды: всё, что умеет бот, — кнопками.
+
+    AleX 19.09.2026: «нельзя это кнопками всё прилепить, чтобы команду не
+    называть». Пульт — кнопка мини-приложения, остальное — обычные
+    нажатия; без адреса пульта первая кнопка просто не показывается.
+    """
+    rows = []
+    panel = panel_button()
+    if panel:
+        rows.append([panel])
+    rows.append([InlineKeyboardButton(text=texts.MENU_BROADCAST, callback_data='mn:bc'),
+                 InlineKeyboardButton(text=texts.MENU_DAILY, callback_data='mn:day')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_STATS, callback_data='mn:stats'),
+                 InlineKeyboardButton(text=texts.MENU_WHO, callback_data='mn:who')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_LINKS, callback_data='mn:links'),
+                 InlineKeyboardButton(text=texts.MENU_CHATS, callback_data='mn:chats')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def team_keys() -> ReplyKeyboardMarkup:
+    u"""Кнопка «Меню» под полем ввода у своих — чтобы не искать команду."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=texts.MENU_BUTTON)]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder=u'Ник и текст — уйдёт человеку от имени бота')
+
+
 def daily(base: int, chosen: list) -> InlineKeyboardMarkup:
     u"""Календарь под отчётом: дни строками по четыре, выбранные — с точкой.
 

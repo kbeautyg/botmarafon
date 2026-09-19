@@ -41,7 +41,8 @@ def _is_admin(user_id: int) -> bool:
 # /рассылка и /отчёт до него не доходили вовсе: роутер их не пропускал.
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'panel', 'пульт', 'рассылка', 'broadcast',
-                  'отчет', 'отчёт', 'report', 'отмена', 'cancel')
+                  'отчет', 'отчёт', 'report', 'отмена', 'cancel',
+                  'меню', 'menu')
 
 
 def _command(message: Message) -> str:
@@ -83,6 +84,66 @@ async def on_help(message: Message):
     if not _is_admin(message.from_user.id):
         return
     await message.answer(texts.ADMIN_HELP)
+
+
+# ------------------------------------------------------------ меню
+#
+# AleX 19.09.2026: «а нельзя это кнопками всё прилепить, чтобы команду не
+# называть». Команды никуда не делись — просто держать их в голове больше
+# не нужно: /меню (и /start у своих) открывает всё кнопками.
+
+def _team_message(message: Message) -> bool:
+    return bool(message.from_user) and config.is_team(message.from_user.id)
+
+
+@router.message(Command('меню', 'menu'))
+async def on_menu(message: Message):
+    if not _team_message(message):
+        return
+    await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu())
+    await message.answer(texts.MENU_HINT_KEYS, reply_markup=keyboards.team_keys())
+
+
+@router.message(F.text == texts.MENU_BUTTON)
+async def on_menu_button(message: Message):
+    if not _team_message(message):
+        return
+    await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu())
+
+
+@router.callback_query(F.data.startswith('mn:'))
+async def on_menu_button_pressed(call: CallbackQuery):
+    u"""Кнопка меню — то же самое, что и команда."""
+    if not config.is_team(call.from_user.id):
+        await call.answer()
+        return
+    what = call.data.split(':', 1)[1]
+    await call.answer()
+    me = None
+
+    if what == 'bc':
+        if db.broadcasts_going():
+            await call.message.answer(texts.BROADCAST_BUSY)
+            return
+        db.put_content(WAIT_KEY % call.from_user.id, 'await', '1')
+        db.put_content(PICK_KEY % call.from_user.id, 'picked', '')
+        await call.message.answer(texts.BROADCAST_ASK_MESSAGE)
+    elif what == 'day':
+        base = daily.day_number()
+        await call.message.answer(daily.report([base]),
+                                  reply_markup=keyboards.daily(base, [base]))
+    elif what == 'stats':
+        await call.message.answer(insights.render('sum', '7d'),
+                                  reply_markup=keyboards.stats_menu('sum', '7d'))
+    elif what == 'who':
+        for part in stats.who_messages(30):
+            await call.message.answer(part)
+    elif what == 'ban':
+        await call.message.answer(insights.render('bl', 'all') + texts.MENU_BAN_HINT)
+    elif what in ('links', 'chats'):
+        me = await call.bot.get_me()
+        await call.message.answer(stats.chat_links_report(me.username) if what == 'chats'
+                                  else stats.links_report(me.username))
 
 
 @router.message(Command('panel', 'пульт'))

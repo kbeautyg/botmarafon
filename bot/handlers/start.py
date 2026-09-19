@@ -126,6 +126,13 @@ def _repeat_start_text(user_id: int) -> str:
 @router.message(CommandStart())
 async def on_start(message: Message, command: CommandObject | None = None):
     user_id = message.from_user.id
+    # Свой нажал «Запустить» — ему меню, а не марафон (AleX 19.09.2026:
+    # «нельзя это кнопками всё прилепить»). Пройти марафон самому команда
+    # может кнопкой в меню или командой /test с короткими паузами.
+    if config.is_team(user_id):
+        await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu())
+        await message.answer(texts.MENU_HINT_KEYS, reply_markup=keyboards.team_keys())
+        return
     # site_fb--k3v9x0a1b2c4: хвост — код клика на сайте, источник — до него
     raw, click = launch_report.split(_payload(message, command).strip().lower())
     lead = LEAD_PAYLOAD.match(raw)
