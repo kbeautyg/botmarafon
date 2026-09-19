@@ -242,14 +242,18 @@ html, body {
 
 .log__empty { margin: auto; color: var(--muted); text-align: center; }
 
+/* Поле во всю ширину, кнопки — строкой под ним: иначе на телефоне четыре
+   кнопки в ряду съедают поле, и от текста видно два слова. */
 .send {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: flex-end;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
 }
-.send__body { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.send__body { display: flex; flex-direction: column; gap: 6px; }
+.send__tools { display: flex; align-items: center; gap: 8px; }
+.send__tools .send__go { margin-left: auto; }
 
 .send__media {
   padding: 8px 12px;
@@ -304,6 +308,64 @@ html, body {
   cursor: pointer;
 }
 .send__go:disabled { opacity: 0.45; }
+
+/* Запись голосового и кружка: полоска над полем ввода. */
+.rec {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+  z-index: 9;
+}
+.rec__row { display: flex; align-items: center; gap: 10px; }
+.rec__preview {
+  display: block;
+  width: 9rem;
+  height: 9rem;
+  margin: 0 auto 10px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--card);
+}
+.rec__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: recpulse 1s infinite;
+}
+.rec__time { font-variant-numeric: tabular-nums; }
+.rec__stop {
+  margin-left: auto;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: inherit;
+  cursor: pointer;
+}
+.rec__drop {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+@keyframes recpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec__dot { animation: none; }
+}
 
 /* ------------------------------------------------------------ прочее */
 

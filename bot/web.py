@@ -24,7 +24,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import blacklist, config, db, delivery
+from . import blacklist, config, db, delivery, record
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,10 @@ MAX_TEXT = 4000
 # Сколько чатов Павла опрашивать для карточки: каждый — отдельный
 # запрос к Telegram, а карточка должна открываться сразу.
 CHATS_IN_CARD = 8
+# Предел записи из пульта. Минута голосового весит килобайты, минута
+# кружка — единицы мегабайт; двадцать даём с запасом на длинные записи и
+# щедрые кодеки телефонов.
+MAX_UPLOAD = 20 * 1024 * 1024
 
 
 class Denied(Exception):
@@ -398,6 +402,111 @@ def _telegram_reason(err: Exception) -> str:
     return text[:200]
 
 
+async def api_record(request):
+    u"""Голосовое или кружок, записанные в пульте (AleX 19.09.2026).
+
+    Тело читаем частями, а не целиком: первым идёт подпись, и пока она не
+    сошлась, файл мы даже не начинаем принимать. Иначе публичный адрес
+    пульта позволял бы кому угодно залить в процесс бота двадцать
+    мегабайт до всякой проверки.
+    """
+    try:
+        parts = await request.multipart()
+    except Exception:
+        return web.json_response({'error': u'не разобрали запись'}, status=400)
+
+    fields, blob, name = {}, b'', ''
+    while True:
+        part = await parts.next()
+        if part is None:
+            break
+        if part.name == 'file':
+            if not _who_safe(fields):
+                return web.json_response({'error': u'этот пульт — для команды проекта'},
+                                         status=403)
+            name = part.filename or 'record'
+            while True:
+                chunk = await part.read_chunk()
+                if not chunk:
+                    break
+                blob += chunk
+                if len(blob) > MAX_UPLOAD:
+                    return web.json_response(
+                        {'error': u'запись длиннее, чем бот принимает — запишите короче'},
+                        status=413)
+        else:
+            fields[part.name] = (await part.read(decode=True)).decode('utf-8', 'replace')
+
+    user = _who_safe(fields)
+    if not user:
+        return web.json_response({'error': u'этот пульт — для команды проекта'}, status=403)
+    if not blob:
+        return web.json_response({'error': u'пустая запись'}, status=400)
+
+    user_id = int(fields.get('id') or 0)
+    if not db.get_user(user_id):
+        return web.json_response({'error': u'человека нет в базе'}, status=404)
+    kind = 'note' if fields.get('kind') == 'note' else 'voice'
+    caption = (fields.get('text') or '').strip()[:1024]
+
+    try:
+        return await _send_record(request.app['bot'], user_id, kind, blob, name,
+                                  caption, int(user['id']))
+    except delivery.Gone:
+        db.mark_blocked(user_id)
+        return web.json_response({'error': u'человек закрыл бота — писать ему нельзя'}, status=409)
+    except Exception as err:
+        log.exception(u'пульт: запись не ушла')
+        return web.json_response({'error': str(err)[:300]}, status=500)
+
+
+def _who_safe(fields: dict):
+    u"""Кто прислал запись; None — подпись не сошлась или он не из команды."""
+    try:
+        user = check_data(fields.get('initData') or '', config.BOT_TOKEN)
+    except Denied:
+        return None
+    if not user.get('id') or not config.is_team(int(user['id'])):
+        return None
+    return user
+
+
+async def _send_record(bot, user_id: int, kind: str, blob: bytes, name: str,
+                       caption: str, author: int):
+    u"""Перекодировать запись и отправить человеку."""
+    from aiogram.types import BufferedInputFile
+
+    source = record.keep(blob, os.path.splitext(name)[1] or '.webm')
+    ready = None
+    try:
+        if record.have_ffmpeg():
+            ready = await (record.to_note(source) if kind == 'note'
+                           else record.to_voice(source))
+        data = open(ready or source, 'rb').read()
+        if ready and kind == 'note':
+            sent = await delivery._guard(bot.send_video_note(
+                user_id, BufferedInputFile(data, 'note.mp4')))
+            saved = 'video_note'
+        elif ready:
+            sent = await delivery._guard(bot.send_voice(
+                user_id, BufferedInputFile(data, 'voice.ogg'), caption=caption or None))
+            saved = 'voice'
+        else:
+            # Без перекодировки Telegram не примет ни голосовое, ни кружок —
+            # отправляем обычным файлом, чтобы запись всё-таки дошла.
+            sent = await delivery._guard(bot.send_document(
+                user_id, BufferedInputFile(data, name or 'record.webm'),
+                caption=caption or None))
+            saved = 'document'
+    finally:
+        record.forget(source, ready)
+
+    db.save_message(user_id, 'out', saved, caption or None, None, author,
+                    getattr(sent, 'message_id', None))
+    log.info(u'пульт: %s отправил(а) %s человеку %s', author, saved, user_id)
+    return web.json_response({'messages': _messages(user_id), 'kind': saved})
+
+
 @route
 async def api_ban(request, user):
     u"""Чёрный список прямо из пульта: и в боте, и в каналах Павла."""
@@ -460,7 +569,13 @@ async def _static(request):
 
 
 async def _health(request):
-    return web.Response(text='ok')
+    u"""Жив ли пульт и есть ли чем перекодировать записи.
+
+    ffmpeg ставится в контейнер отдельно (nixpacks.toml); если сборка его
+    не подхватит, голосовые начнут уходить файлами — и понять это надо
+    сразу, а не по жалобе команды.
+    """
+    return web.Response(text='ok; ffmpeg: %s' % (u'да' if record.have_ffmpeg() else u'нет'))
 
 
 # Сколько запросов в минуту принимаем с одного адреса. Пульт открывают
@@ -507,6 +622,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/people', api_people)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/send', api_send)
+    app.router.add_post('/api/record', api_record)
     app.router.add_post('/api/edit', api_edit)
     app.router.add_post('/api/drop', api_drop)
     app.router.add_post('/api/ban', api_ban)

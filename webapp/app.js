@@ -410,6 +410,122 @@
     else if (window.confirm(ask)) { run(); }
   }
 
+  // ------------------------------------------------- голосовое и кружок
+  //
+  // Записываем прямо в пульте (AleX 19.09.2026). Браузер отдаёт webm, а
+  // Telegram принимает голосовое только ogg/opus и кружок только
+  // квадратным mp4 — перекодирует бот, здесь наше дело записать.
+
+  var REC_LIMIT_MS = 60000;              // минута: столько держит кружок
+  var recorder = null;
+  var recChunks = [];
+  var recKind = 'voice';
+  var recStarted = 0;
+  var recTimer = null;
+  var recStream = null;
+
+  function recTick() {
+    var passed = Math.floor((Date.now() - recStarted) / 1000);
+    $('rec-time').textContent = Math.floor(passed / 60) + ':' + ('0' + (passed % 60)).slice(-2);
+    if (passed * 1000 >= REC_LIMIT_MS) { finishRecord(true); }
+  }
+
+  function stopStream() {
+    if (recStream) {
+      recStream.getTracks().forEach(function (track) { track.stop(); });
+      recStream = null;
+    }
+    clearInterval(recTimer);
+    $('rec').hidden = true;
+    $('preview').hidden = true;
+    $('preview').srcObject = null;
+  }
+
+  function startRecord(kind) {
+    if (recorder) { return; }
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      toast('Этот телефон не даёт записывать прямо в пульте. Ответьте голосовым '
+            + 'реплаем в самом боте — дойдёт так же.');
+      return;
+    }
+    recKind = kind;
+    var wants = kind === 'note'
+      ? { audio: true, video: { facingMode: 'user', width: 480, height: 480 } }
+      : { audio: true };
+    navigator.mediaDevices.getUserMedia(wants).then(function (stream) {
+      recStream = stream;
+      recChunks = [];
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = function (event) {
+        if (event.data && event.data.size) { recChunks.push(event.data); }
+      };
+      recorder.start();
+      recStarted = Date.now();
+      $('rec').hidden = false;
+      $('rec-time').textContent = '0:00';
+      recTimer = setInterval(recTick, 250);
+      if (kind === 'note') {
+        var video = $('preview');
+        video.hidden = false;
+        video.srcObject = stream;
+        video.play().catch(function () { /* показ превью — не главное */ });
+      }
+    }).catch(function () {
+      toast(kind === 'note'
+        ? 'Телефон не дал доступ к камере. Разрешите его для Telegram или '
+          + 'отправьте кружок реплаем в самом боте.'
+        : 'Телефон не дал доступ к микрофону. Разрешите его для Telegram или '
+          + 'отправьте голосовое реплаем в самом боте.');
+    });
+  }
+
+  function finishRecord(send) {
+    if (!recorder) { return; }
+    var kind = recKind;
+    recorder.onstop = function () {
+      var blob = new Blob(recChunks, { type: recChunks[0] ? recChunks[0].type : 'video/webm' });
+      recorder = null;
+      stopStream();
+      if (send && blob.size) { uploadRecord(blob, kind); }
+    };
+    try { recorder.stop(); } catch (e) { recorder = null; stopStream(); }
+  }
+
+  function uploadRecord(blob, kind) {
+    var form = new FormData();
+    form.append('initData', initData);
+    form.append('id', String(state.id));
+    form.append('kind', kind);
+    form.append('text', $('text').value.trim());
+    form.append('file', blob, kind === 'note' ? 'note.webm' : 'voice.webm');
+    state.busy = true;
+    $('go').disabled = true;
+    toast(kind === 'note' ? 'Отправляю кружок…' : 'Отправляю голосовое…');
+    fetch('/api/record', { method: 'POST', body: form })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          if (!res.ok) { throw new Error(data.error || ('ошибка ' + res.status)); }
+          return data;
+        });
+      })
+      .then(function (data) {
+        $('text').value = '';
+        grow($('text'));
+        drawChat({ person: state.person, card: state.card, chats: state.chats,
+                   messages: data.messages || [] });
+        if (data.kind === 'document') {
+          toast('Отправили файлом: перекодировать запись не вышло.');
+        }
+      })
+      .catch(function (err) { toast(err.message); })
+      .then(function () { state.busy = false; $('go').disabled = false; });
+  }
+
+  $('mic').addEventListener('click', function () { startRecord('voice'); });
+  $('cam').addEventListener('click', function () { startRecord('note'); });
+  $('rec-stop').addEventListener('click', function () { finishRecord(true); });
+  $('rec-drop').addEventListener('click', function () { finishRecord(false); });
+
   // -------------------------------------------------------------- связи
 
   $('back').addEventListener('click', closeChat);

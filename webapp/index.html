@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=8">
+<link rel="stylesheet" href="/static/app.css?v=10">
 </head>
 <body>
 
@@ -45,13 +45,26 @@
              placeholder="Ссылка на фото, видео или подкаст" autocomplete="off">
       <textarea id="text" class="send__text" rows="3" placeholder="Сообщение от имени бота"></textarea>
     </div>
-    <button id="clip" class="send__clip" type="button" aria-label="Вложение по ссылке">📎</button>
-    <button id="go" class="send__go" type="submit" aria-label="Отправить">➤</button>
+    <div class="send__tools">
+      <button id="clip" class="send__clip" type="button" aria-label="Вложение по ссылке">📎</button>
+      <button id="mic" class="send__clip" type="button" aria-label="Записать голосовое">🎤</button>
+      <button id="cam" class="send__clip" type="button" aria-label="Записать кружок">⭕</button>
+      <button id="go" class="send__go" type="submit" aria-label="Отправить">➤</button>
+    </div>
   </form>
+  <div id="rec" class="rec" hidden>
+    <video id="preview" class="rec__preview" playsinline muted hidden></video>
+    <div class="rec__row">
+      <span id="rec-dot" class="rec__dot"></span>
+      <span id="rec-time" class="rec__time">0:00</span>
+      <button id="rec-stop" class="rec__stop" type="button">Отправить</button>
+      <button id="rec-drop" class="rec__drop" type="button">Отменить</button>
+    </div>
+  </div>
 </section>
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=8"></script>
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>
