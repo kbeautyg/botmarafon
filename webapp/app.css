@@ -213,6 +213,33 @@ html, body {
 .msg__at { display: block; margin-top: 3px; font-size: 11px; opacity: 0.65; }
 .msg--media { font-style: italic; opacity: 0.9; }
 
+/* Свои сообщения можно поправить или убрать — кнопки под сообщением. */
+.msg--own { cursor: pointer; }
+
+.msg__acts { display: flex; gap: 6px; margin-top: 6px; }
+.msg__do {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Шаг воронки в ленте: что прислал сам бот и что нажал человек. */
+.note {
+  align-self: center;
+  max-width: 92%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .log__empty { margin: auto; color: var(--muted); text-align: center; }
 
 .send {

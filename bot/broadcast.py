@@ -50,8 +50,9 @@ async def run(bot, broadcast_id: int) -> dict:
         return {}
     db.broadcast_status(broadcast_id, 'going')
 
+    picked = db.broadcast_picked(task)
     while True:
-        people = db.broadcast_targets(task['cursor'], limit=200)
+        people = db.broadcast_targets(task['cursor'], 200, picked)
         if not people:
             break
         for user_id in people:
@@ -99,7 +100,8 @@ async def resume(bot) -> int:
 
 def preview(task: dict) -> str:
     u"""Сколько человек получит рассылку и когда она кончится."""
-    left = db.broadcast_left(task['cursor'])
+    picked = db.broadcast_picked(task)
+    left = db.broadcast_left(task['cursor'], picked)
     minutes = max(1, int(left * PAUSE / 60 + 0.5))
-    return texts.BROADCAST_ASK.format(count=left, minutes=minutes,
-                                      when=time.strftime('%H:%M'))
+    text = texts.BROADCAST_ASK if not picked else texts.BROADCAST_ASK_PICKED
+    return text.format(count=left, minutes=minutes, when=time.strftime('%H:%M'))

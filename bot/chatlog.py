@@ -30,11 +30,13 @@ def parts(message) -> tuple[str, str | None, str | None]:
     return 'text', message.text or message.caption, None
 
 
-def save(message, user_id: int, side: str, author: int | None = None) -> None:
+def save(message, user_id: int, side: str, author: int | None = None,
+         tg_id: int | None = None) -> None:
     u"""Записать сообщение переписки. Сбой записи не должен ронять доставку."""
     kind, text, file_id = parts(message)
-    db.save_message(user_id, side, kind, text, file_id, author)
+    db.save_message(user_id, side, kind, text, file_id, author, tg_id)
 
 
-def save_text(user_id: int, text: str, author: int | None = None) -> None:
-    db.save_message(user_id, 'out', 'text', text, None, author)
+def save_text(user_id: int, text: str, author: int | None = None,
+              tg_id: int | None = None) -> None:
+    db.save_message(user_id, 'out', 'text', text, None, author, tg_id)

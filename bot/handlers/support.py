@@ -46,11 +46,12 @@ async def _relay(message: Message) -> None:
                             u'кому отправить.')
         return
     try:
-        await message.bot.copy_message(user_id, message.chat.id, message.message_id)
+        copy = await message.bot.copy_message(user_id, message.chat.id, message.message_id)
     except Exception as err:
         await message.reply(u'Не доставили: %s' % html.escape(str(err))[:300])
         return
-    chatlog.save(message, user_id, 'out', message.from_user.id)
+    chatlog.save(message, user_id, 'out', message.from_user.id,
+                 getattr(copy, 'message_id', None))
     log.info(u'ответ команды %s ушёл человеку %s', message.from_user.id, user_id)
     await message.reply(u'Отправлено ✅')
 
@@ -146,7 +147,7 @@ async def _write(message: Message, ref: str, start: int) -> None:
         return
 
     try:
-        await delivery._guard(message.bot.send_message(
+        ушло = await delivery._guard(message.bot.send_message(
             user_id, body, entities=entities, parse_mode=None))
     except delivery.Gone:
         db.mark_blocked(user_id)
@@ -155,7 +156,8 @@ async def _write(message: Message, ref: str, start: int) -> None:
     except Exception as err:
         await message.answer(texts.WRITE_FAILED.format(who=who, why=html.escape(str(err))[:300]))
         return
-    chatlog.save_text(user_id, body, message.from_user.id)
+    chatlog.save_text(user_id, body, message.from_user.id,
+                      getattr(ушло, 'message_id', None))
     log.info(u'команда %s написала человеку %s по /написать', message.from_user.id, user_id)
     sent = await message.answer(texts.WRITE_SENT.format(who=who))
     db.link_care(message.chat.id, sent.message_id, user_id)
@@ -219,7 +221,7 @@ async def to_support(message: Message):
 
     db.remember_user(message.from_user.id, message.from_user.username,
                      message.from_user.first_name)
-    chatlog.save(message, message.from_user.id, 'in')
+    chatlog.save(message, message.from_user.id, 'in', tg_id=message.message_id)
     delivered = await _mirror(message)
     db.set_care_open(message.from_user.id, False)
     await message.answer(texts.CARE_SENT_HERE if delivered else texts.CARE_SENT,

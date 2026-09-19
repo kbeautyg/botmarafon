@@ -161,14 +161,45 @@ async def api_people(request, user):
     return web.json_response({'people': [_person(r) for r in rows], 'everyone': everyone})
 
 
+# Как назвать шаг воронки в ленте диалога.
+DAY_NOTE = u'Бот прислал запись %s дня'
+POLL_NOTE = u'Бот спросил: посмотрел %s день?'
+OFFER_NOTE = u'Бот прислал кнопки покупки'
+ANSWER_NOTE = u'Ответ на вопрос %s дня: %s'
+ORDINAL = {'1': u'первого', '2': u'второго', '3': u'третьего', '4': u'четвёртого'}
+ORDINAL_ASK = {'day1': u'первый', 'day2': u'второй', 'day3': u'третий'}
+YES_NO = {'yes': u'Да', 'no': u'Нет'}
+
+
+def _note(step: dict) -> str:
+    u"""Шаг воронки строкой для человека, а не для программиста."""
+    ref = str(step.get('ref') or '')
+    if step['kind'] == 'day':
+        return DAY_NOTE % ORDINAL.get(ref, ref)
+    if step['kind'] == 'poll':
+        return POLL_NOTE % ORDINAL_ASK.get(ref, ref)
+    if step['kind'] == 'answer':
+        # «Ответ на вопрос первого дня» — падеж тот же, что у записи дня.
+        return ANSWER_NOTE % (ORDINAL.get(ref.replace('day', ''), ref),
+                              YES_NO.get(step.get('answer'), step.get('answer') or ''))
+    return OFFER_NOTE
+
+
 def _messages(user_id: int) -> list[dict]:
-    u"""Переписка для пульта: только то, что он показывает.
+    u"""Лента диалога: сообщения вперемешку с шагами воронки, по времени.
 
     Внутренние id отправителя и вложения наружу не отдаём — пульту они не
     нужны, а любое лишнее поле в ответе рано или поздно где-нибудь всплывёт.
     """
-    return [{'id': m['id'], 'kind': m['kind'], 'text': m['text'], 'at': m['at'],
-             'mine': m['side'] == 'out'} for m in db.chat_history(user_id)]
+    lines = [{'id': m['id'], 'kind': m['kind'], 'text': m['text'], 'at': m['at'],
+              'mine': m['side'] == 'out',
+              # править и удалять можно только своё и только текстовое
+              'can_edit': bool(m['side'] == 'out' and m['tg_id'] and m['kind'] == 'text'),
+              'can_drop': bool(m['side'] == 'out' and m['tg_id'])}
+             for m in db.chat_history(user_id)]
+    lines += [{'id': 0, 'note': True, 'text': _note(step), 'at': step['at'],
+               'kind': 'text', 'mine': False} for step in db.timeline(user_id)]
+    return sorted(lines, key=lambda line: line['at'])
 
 
 async def _chats_of(bot, user_id: int) -> list[dict]:
@@ -257,7 +288,7 @@ def check_media(url: str) -> str:
     return url if parts.scheme in ('http', 'https') and '.' in parts.netloc else ''
 
 
-async def send_media(bot, user_id: int, url: str, caption: str) -> str:
+async def send_media(bot, user_id: int, url: str, caption: str) -> tuple:
     u"""Отправить вложение по ссылке. Возвращает вид отправленного."""
     kind = media_kind(url)
     senders = {
@@ -270,10 +301,10 @@ async def send_media(bot, user_id: int, url: str, caption: str) -> str:
     if kind not in senders:
         # Не узнали вложение — пусть уходит ссылкой: Telegram покажет превью.
         body = (caption + u'\n' + url) if caption else url
-        await delivery._guard(bot.send_message(user_id, body, parse_mode=None))
-        return 'text'
-    await delivery._guard(senders[kind](user_id, url, caption=caption or None))
-    return kind
+        sent = await delivery._guard(bot.send_message(user_id, body, parse_mode=None))
+        return 'text', sent
+    sent = await delivery._guard(senders[kind](user_id, url, caption=caption or None))
+    return kind, sent
 
 
 @route
@@ -298,19 +329,73 @@ async def api_send(request, user):
         return web.json_response({'error': u'человека нет в базе'}, status=404)
 
     bot = request.app['bot']
+    sent = None
     try:
         if media:
-            kind = await send_media(bot, user_id, media, text)
+            kind, sent = await send_media(bot, user_id, media, text)
         else:
             kind = 'text'
-            await delivery._guard(bot.send_message(user_id, text, parse_mode=None))
+            sent = await delivery._guard(bot.send_message(user_id, text, parse_mode=None))
     except delivery.Gone:
         db.mark_blocked(user_id)
         return web.json_response({'error': u'человек закрыл бота — писать ему нельзя'}, status=409)
     db.save_message(user_id, 'out', kind, text or media, media or None,
-                    author=int(user['id']))
+                    author=int(user['id']), tg_id=getattr(sent, 'message_id', None))
     log.info(u'пульт: %s написал(а) человеку %s', user['id'], user_id)
     return web.json_response({'messages': _messages(user_id)})
+
+
+@route
+async def api_edit(request, user):
+    u"""Поправить своё отправленное сообщение — и у человека тоже."""
+    body = await _body(request)
+    line = db.message(int(body.get('messageId') or 0))
+    text = str(body.get('text') or '').strip()
+    if not line or line['side'] != 'out' or not line['tg_id']:
+        return web.json_response({'error': u'это сообщение править нельзя'}, status=400)
+    if not text or len(text) > MAX_TEXT:
+        return web.json_response({'error': u'пустое или слишком длинное сообщение'}, status=400)
+    try:
+        await request.app['bot'].edit_message_text(
+            chat_id=line['user_id'], message_id=line['tg_id'], text=text, parse_mode=None)
+    except Exception as err:
+        return web.json_response({'error': _telegram_reason(err)}, status=409)
+    db.edit_message(line['id'], text)
+    log.info(u'пульт: %s поправил(а) сообщение %s', user['id'], line['id'])
+    return web.json_response({'messages': _messages(line['user_id'])})
+
+
+@route
+async def api_drop(request, user):
+    u"""Удалить своё отправленное сообщение у человека."""
+    body = await _body(request)
+    line = db.message(int(body.get('messageId') or 0))
+    if not line or line['side'] != 'out' or not line['tg_id']:
+        return web.json_response({'error': u'это сообщение удалить нельзя'}, status=400)
+    try:
+        await request.app['bot'].delete_message(chat_id=line['user_id'],
+                                                message_id=line['tg_id'])
+    except Exception as err:
+        return web.json_response({'error': _telegram_reason(err)}, status=409)
+    db.drop_message(line['id'])
+    log.info(u'пульт: %s удалил(а) сообщение %s', user['id'], line['id'])
+    return web.json_response({'messages': _messages(line['user_id'])})
+
+
+def _telegram_reason(err: Exception) -> str:
+    u"""Почему Telegram отказал — словами, а не кодом.
+
+    Своё сообщение бот может удалить только двое суток, а править —
+    пока человек не закрыл бота; чаще всего отказ именно об этом.
+    """
+    text = str(err)
+    if 'too old' in text or "can't be deleted" in text:
+        return u'прошло больше двух суток — Telegram больше не даёт его трогать'
+    if 'not modified' in text:
+        return u'текст тот же самый'
+    if 'not found' in text:
+        return u'сообщение уже удалено'
+    return text[:200]
 
 
 @route
@@ -422,6 +507,8 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/people', api_people)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/send', api_send)
+    app.router.add_post('/api/edit', api_edit)
+    app.router.add_post('/api/drop', api_drop)
     app.router.add_post('/api/ban', api_ban)
     app.router.add_get('/static/{name}', _static)
     return app

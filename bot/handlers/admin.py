@@ -36,8 +36,12 @@ def _is_admin(user_id: int) -> bool:
     return user_id in config.ADMIN_IDS
 
 
+# Команды, открытые всей команде проекта, а не только тем, кто грузит
+# записи. AleX 19.09.2026: «работает команда только пульт и статс» — а
+# /рассылка и /отчёт до него не доходили вовсе: роутер их не пропускал.
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
-                  'panel', 'пульт')
+                  'panel', 'пульт', 'рассылка', 'broadcast',
+                  'отчет', 'отчёт', 'report', 'отмена', 'cancel')
 
 
 def _command(message: Message) -> str:
@@ -125,21 +129,48 @@ async def on_daily_button(call: CallbackQuery):
 WAIT_KEY = 'broadcast:await:%d'
 
 
+PICK_KEY = 'broadcast:picked:%d'
+
+
 @router.message(Command('рассылка', 'broadcast'))
-async def on_broadcast(message: Message):
-    u"""Рассылка всем: следующее сообщение станет тем, что уйдёт людям."""
-    if not _is_admin(message.from_user.id):
+async def on_broadcast(message: Message, command: CommandObject | None = None):
+    u"""Рассылка: следующее сообщение станет тем, что уйдёт людям.
+
+    Без списка — всем. Со списком ников или ID («/рассылка @ник1 @ник2»)
+    — только им: AleX 19.09.2026 просил «пачкой кому-то отправить что-то».
+    """
+    if not config.is_team(message.from_user.id):
         return
     if db.broadcasts_going():
         await message.answer(texts.BROADCAST_BUSY)
         return
+
+    from .blacklist import _refs, _resolve
+
+    refs = _refs((command.args if command else None) or u'')
+    found, missing = [], []
+    for ref in refs:
+        user_id = _resolve(ref)
+        (found if user_id and db.get_user(user_id) else missing).append(user_id or ref)
+    if refs and not found:
+        await message.answer(texts.BROADCAST_PICKED_NONE)
+        return
+
     db.put_content(WAIT_KEY % message.from_user.id, 'await', '1')
-    await message.answer(texts.BROADCAST_ASK_MESSAGE)
+    db.put_content(PICK_KEY % message.from_user.id, 'picked',
+                   ','.join(str(uid) for uid in found))
+    if not refs:
+        await message.answer(texts.BROADCAST_ASK_MESSAGE)
+        return
+    note = texts.BROADCAST_PICKED_MISSING.format(
+        who=html.escape(u', '.join(str(x) for x in missing))) if missing else u''
+    await message.answer(texts.BROADCAST_PICKED_HEAD.format(
+        found=len(found), asked=len(refs), missing=note))
 
 
 @router.message(Command('отмена', 'cancel'))
 async def on_cancel(message: Message):
-    if not _is_admin(message.from_user.id):
+    if not config.is_team(message.from_user.id):
         return
     db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
     await message.answer(texts.BROADCAST_CANCELLED)
@@ -147,7 +178,7 @@ async def on_cancel(message: Message):
 
 def waiting_broadcast(message: Message) -> bool:
     u"""Админ только что дал команду «рассылка» — это она и есть."""
-    if not message.from_user or not _is_admin(message.from_user.id):
+    if not message.from_user or not config.is_team(message.from_user.id):
         return False
     stored = db.get_content(WAIT_KEY % message.from_user.id)
     return bool(stored and stored[1])
@@ -157,15 +188,21 @@ def waiting_broadcast(message: Message) -> bool:
 async def on_broadcast_message(message: Message):
     u"""То, что разошлём. Показываем предпросмотр и спрашиваем подтверждение."""
     db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
-    task_id = db.broadcast_add(message.chat.id, message.message_id, message.from_user.id)
+    stored = db.get_content(PICK_KEY % message.from_user.id)
+    picked = [int(piece) for piece in ((stored[1] if stored else '') or '').split(',')
+              if piece.strip().lstrip('-').isdigit()]
+    db.put_content(PICK_KEY % message.from_user.id, 'picked', '')
+    task_id = db.broadcast_add(message.chat.id, message.message_id,
+                               message.from_user.id, picked)
     task = db.broadcast(task_id)
     await message.reply(broadcast.preview(task),
-                        reply_markup=keyboards.broadcast(task_id, db.broadcast_left(0)))
+                        reply_markup=keyboards.broadcast(task_id,
+                                                         db.broadcast_left(0, picked)))
 
 
 @router.callback_query(F.data.startswith('bc:'))
 async def on_broadcast_button(call: CallbackQuery):
-    if not _is_admin(call.from_user.id):
+    if not config.is_team(call.from_user.id):
         await call.answer()
         return
     action, task_id = call.data.split(':')[1], int(call.data.split(':')[2])

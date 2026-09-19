@@ -382,3 +382,88 @@ async def test_уведомления_команде_не_считаются_с�
     _человек(42)
     db.link_care(500, 777, 42)                  # только уведомление, сам не писал
     assert insights.model()['people'][42]['care'] == 0
+
+
+# ------------------- правка и удаление сообщения (AleX 19.09.2026)
+
+class Редактор(FakeBot):
+    u"""Телеграм, который умеет править и удалять свои сообщения."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.edited = []
+        self.deleted = []
+
+    async def edit_message_text(self, chat_id=None, message_id=None, text=None, **kw):
+        self.edited.append((chat_id, message_id, text))
+        return True
+
+    async def delete_message(self, chat_id=None, message_id=None, **kw):
+        self.deleted.append((chat_id, message_id))
+        return True
+
+
+async def test_своё_сообщение_правится_и_у_человека(пульт):
+    _человек(51)
+    номер = db.save_message(51, 'out', 'text', u'Добрый день', author=СВОЙ, tg_id=777)
+    bot = Редактор()
+    пульт.app['bot'] = bot
+
+    ответ = await пульт.post('/api/edit', json={
+        'initData': подпись(), 'messageId': номер, 'text': u'Добрый вечер'})
+
+    assert ответ.status == 200
+    assert bot.edited == [(51, 777, u'Добрый вечер')]
+    assert db.chat_history(51)[-1]['text'] == u'Добрый вечер'
+
+
+async def test_своё_сообщение_удаляется_и_пропадает_из_переписки(пульт):
+    _человек(52)
+    номер = db.save_message(52, 'out', 'text', u'Лишнее', author=СВОЙ, tg_id=778)
+    bot = Редактор()
+    пульт.app['bot'] = bot
+
+    ответ = await пульт.post('/api/drop', json={'initData': подпись(), 'messageId': номер})
+
+    assert ответ.status == 200
+    assert bot.deleted == [(52, 778)]
+    assert db.chat_history(52) == []
+
+
+async def test_чужое_сообщение_править_нельзя(пульт):
+    u"""Сообщение человека — не наше: Telegram его править и не даст."""
+    _человек(53)
+    номер = db.save_message(53, 'in', 'text', u'вопрос', tg_id=12)
+    ответ = await пульт.post('/api/edit', json={
+        'initData': подпись(), 'messageId': номер, 'text': u'подмена'})
+    assert ответ.status == 400
+    assert db.chat_history(53)[0]['text'] == u'вопрос'
+
+
+async def test_старое_сообщение_телеграм_удалять_не_даёт_а_мы_объясняем(пульт):
+    _человек(54)
+    номер = db.save_message(54, 'out', 'text', u'Давнее', author=СВОЙ, tg_id=779)
+
+    class Отказ(FakeBot):
+        async def delete_message(self, **kw):
+            raise RuntimeError("Bad Request: message can't be deleted for everyone")
+
+    пульт.app['bot'] = Отказ()
+    ответ = await пульт.post('/api/drop', json={'initData': подпись(), 'messageId': номер})
+    assert ответ.status == 409
+    assert u'двух суток' in (await ответ.json())['error']
+    assert db.chat_history(54)                      # в переписке осталось
+
+
+async def test_в_ленте_видно_шаги_воронки_а_не_только_слова(пульт):
+    u"""AleX 19.09.2026: «просто одно слово, а на что это был ответ — непонятно»."""
+    _человек(55)
+    db.log_event(55, 'day', 1)
+    db.log_event(55, 'poll', 'day1')
+    db.save_answer(55, 'day1', 'yes')
+
+    ответ = await пульт.post('/api/chat', json={'initData': подпись(), 'id': 55})
+    строки = [m['text'] for m in (await ответ.json())['messages']]
+    assert u'Бот прислал запись первого дня' in строки
+    assert u'Бот спросил: посмотрел первый день?' in строки
+    assert u'Ответ на вопрос первого дня: Да' in строки

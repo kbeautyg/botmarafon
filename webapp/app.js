@@ -10,7 +10,8 @@
   var REFRESH_MS = 15000;      // как часто подтягивать новое
   var TYPING_PAUSE = 350;      // пауза после ввода перед поиском
 
-  var state = { id: null, onlyChats: true, query: '', busy: false, person: null };
+  var state = { id: null, onlyChats: true, query: '', busy: false, person: null,
+                editing: null, card: null, chats: null };
 
   var $ = function (id) { return document.getElementById(id); };
   var listScreen = $('list');
@@ -177,6 +178,13 @@
 
   function messageRow(message) {
     var row = document.createElement('div');
+    // Шаг воронки — не сообщение, а пометка: что бот прислал сам и что
+    // человек нажал. Без неё «Да» висело в диалоге без вопроса.
+    if (message.note) {
+      row.className = 'note';
+      row.textContent = message.text + ' · ' + when(message.at);
+      return row;
+    }
     row.className = 'msg' + (message.mine ? ' msg--mine' : '');
     var body = message.kind && message.kind !== 'text'
       ? (KINDS[message.kind] || 'вложение') + (message.text ? '\n' + message.text : '')
@@ -187,7 +195,69 @@
     at.className = 'msg__at';
     at.textContent = when(message.at);
     row.appendChild(at);
+
+    // Своё сообщение можно поправить или убрать у человека: нажатие
+    // открывает под ним две кнопки (AleX 19.09.2026).
+    if (message.mine && (message.can_edit || message.can_drop)) {
+      row.classList.add('msg--own');
+      row.addEventListener('click', function (event) {
+        if (event.target.tagName === 'BUTTON') { return; }
+        showActions(row, message);
+      });
+    }
     return row;
+  }
+
+  function actionButton(title, onClick) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'msg__do';
+    button.textContent = title;
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function showActions(row, message) {
+    var old = row.querySelector('.msg__acts');
+    if (old) { old.remove(); return; }             // второе нажатие — закрыть
+    var box = document.createElement('div');
+    box.className = 'msg__acts';
+    if (message.can_edit) {
+      box.appendChild(actionButton('Изменить', function () { startEdit(message); }));
+    }
+    if (message.can_drop) {
+      box.appendChild(actionButton('Удалить', function () { dropMessage(message); }));
+    }
+    row.appendChild(box);
+  }
+
+  function startEdit(message) {
+    state.editing = message.id;
+    var field = $('text');
+    field.value = message.text || '';
+    grow(field);
+    field.focus();
+    $('go').textContent = '✓';
+    toast('Поправьте текст и нажмите ✓ — сообщение изменится и у человека');
+  }
+
+  function stopEdit() {
+    state.editing = null;
+    $('go').textContent = '➤';
+  }
+
+  function dropMessage(message) {
+    var ask = 'Удалить это сообщение? Оно исчезнет и у человека.';
+    var run = function () {
+      api('drop', { messageId: message.id })
+        .then(function (data) {
+          drawChat({ person: state.person, card: state.card, chats: state.chats,
+                     messages: data.messages || [] });
+        })
+        .catch(function (err) { toast(err.message); });
+    };
+    if (tg && tg.showConfirm) { tg.showConfirm(ask, function (ok) { if (ok) { run(); } }); }
+    else if (window.confirm(ask)) { run(); }
   }
 
   // Карточка участника: когда пришёл, что получил и что ответил по каждому
@@ -217,7 +287,7 @@
   function drawCard(data) {
     var box = $('card');
     box.textContent = '';
-    var card = data.card || {};
+    var card = data.card || state.card || {};
     var person = data.person || {};
 
     box.appendChild(cardLine('Зашёл в бота', moment(card.started_at) || 'неизвестно'));
@@ -235,7 +305,7 @@
       box.appendChild(cardLine('День ' + item.day, value));
     });
 
-    var chats = data.chats || [];
+    var chats = data.chats || state.chats || [];
     box.appendChild(cardLine('Чаты ФИНИШ', chats.length
       ? chats.map(function (c) { return c.title + ' — ' + c.status; }).join('; ')
       : 'бот не состоит ни в одном чате — добавьте его, и будет видно'));
@@ -243,6 +313,8 @@
 
   function drawChat(data) {
     state.person = data.person;
+    state.card = data.card || state.card;
+    state.chats = data.chats || state.chats;
     var person = data.person;
     $('chat-name').textContent = person.name;
     var bits = [];
@@ -278,6 +350,7 @@
     $('log').textContent = '';
     $('card').hidden = true;
     $('info').classList.remove('is-on');
+    stopEdit();
     if (tg && tg.BackButton) { tg.BackButton.show(); }
     api('chat', { id: id }).then(drawChat).catch(function (err) { toast(err.message); });
   }
@@ -299,12 +372,16 @@
     if ((!text && !media) || state.busy || !state.id) { return; }
     state.busy = true;
     $('go').disabled = true;
-    api('send', { id: state.id, text: text, media: media })
+    var call = state.editing
+      ? api('edit', { messageId: state.editing, text: text })
+      : api('send', { id: state.id, text: text, media: media });
+    call
       .then(function (data) {
         field.value = '';
         link.value = '';
         link.hidden = true;
         $('clip').classList.remove('is-on');
+        stopEdit();
         grow(field);
         drawChat({ person: state.person, messages: data.messages || [] });
         if (tg && tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred('success'); }

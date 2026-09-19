@@ -138,3 +138,69 @@ async def test_вторую_рассылку_поверх_идущей_не_на
     вторая = FakeMessage(text='/рассылка', user=FakeUser(АДМИН), bot=bot)
     await admin.on_broadcast(вторая)
     assert вторая.answers[-1] == texts.BROADCAST_BUSY
+
+
+# ------------------------------- выбранным (AleX 19.09.2026: «пачкой кому-то»)
+
+def _команда(args):
+    return type('Cmd', (), {'args': args})()
+
+
+async def test_рассылка_по_списку_ников_уходит_только_им():
+    _люди(1, 2, 3)
+    db.remember_user(4, 'nick_four', u'Четвёртый')
+    bot = FakeBot()
+    старт = FakeMessage(text='/рассылка', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast(старт, _команда(u'@nick_four 2'))
+    assert u'Нашли в базе: 2 из 2' in старт.answers[-1]
+
+    сообщение = FakeMessage(text=u'Новый подкаст', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast_message(сообщение)
+    await broadcast.run(bot, 1)
+
+    assert sorted(_получатели(bot)) == [2, 4]
+
+
+async def test_кого_нет_в_базе_называем_поимённо():
+    db.remember_user(1, 'nick_one', u'Первый')
+    bot = FakeBot()
+    старт = FakeMessage(text='/рассылка', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast(старт, _команда(u'@nick_one @kogo_net'))
+    assert u'Нашли в базе: 1 из 2' in старт.answers[-1]
+    assert u'Не нашли: @kogo_net' in старт.answers[-1]
+
+
+async def test_если_никого_не_нашли_рассылку_не_заводим():
+    _люди(1)
+    bot = FakeBot()
+    старт = FakeMessage(text='/рассылка', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast(старт, _команда(u'@nikogo @vovse_net'))
+    assert старт.answers[-1] == texts.BROADCAST_PICKED_NONE
+    assert not admin.waiting_broadcast(FakeMessage(text=u'что-то', user=FakeUser(АДМИН)))
+
+
+async def test_выбранная_рассылка_не_трогает_чёрный_список():
+    _люди(1, 2)
+    db.ban_add(2, 'u2', u'Тролль', u'AleX')
+    bot = FakeBot()
+    старт = FakeMessage(text='/рассылка', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast(старт, _команда(u'1 2'))
+    await admin.on_broadcast_message(FakeMessage(text=u'привет', user=FakeUser(АДМИН), bot=bot))
+    await broadcast.run(bot, 1)
+    assert _получатели(bot) == [1]
+
+
+async def test_команда_проекта_а_не_только_владелец_может_рассылать(monkeypatch):
+    u"""AleX 19.09.2026: «работает команда только пульт и статс»."""
+    from bot import config as конфиг
+
+    monkeypatch.setattr(конфиг, 'ADMIN_IDS', (999,))          # владелец — не он
+    monkeypatch.setattr(конфиг, 'TEAM_STATS_IDS', (АДМИН,))   # AleX в команде
+    monkeypatch.setattr(конфиг, 'STATS_IDS', (АДМИН,))
+    _люди(1)
+    bot = FakeBot()
+    старт = FakeMessage(text='/рассылка', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast(старт, _команда(u''))
+    assert старт.answers, u'команда не ответила тому, кто в команде проекта'
+    assert admin.waiting_broadcast(FakeMessage(text=u'текст', user=FakeUser(АДМИН)))
+    assert 'рассылка' in admin.STATS_COMMANDS and 'отчёт' in admin.STATS_COMMANDS
