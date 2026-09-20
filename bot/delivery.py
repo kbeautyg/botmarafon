@@ -283,20 +283,27 @@ async def send_day(bot: Bot, user_id: int, day: int,
     text = texts.DAY_TEXTS[day]
     stored = db.get_content('day%d' % day) or _day_from_env(day)
 
+    # Вопрос открыт с той минуты, как ушла запись: кнопки «Да»/«Нет» теперь
+    # прямо под ней, и ответ должен приниматься сразу (жалобы 20.09.2026).
+    if day < 4:
+        db.set_poll(user_id, 'day%d' % day)
+
     if stored and stored[0] == 'video':
         # supports_streaming: без него Telegram сначала выкачивает запись
         # целиком, и человек видит «скачать» вместо кнопки «смотреть»
         # (Павел 18.09.2026: «чтобы просмотреть им марафон, надо скачивать»).
         return await _guard(bot.send_video(user_id, stored[1], caption=text,
                                            cover=day_cover(day),
-                                           supports_streaming=True))
+                                           supports_streaming=True,
+                                           reply_markup=keyboards.day(day)))
     if stored and stored[0] == 'link':
         # Запись выложена в интернете: под текстом — кнопка в плеер, чтобы
         # человек смотрел, а не искал ссылку глазами.
         return await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text),
-                                             reply_markup=keyboards.watch(stored[1])))
+                                             reply_markup=keyboards.day(day, stored[1])))
 
-    await _guard(bot.send_message(user_id, u'%s\n\n%s' % (text, texts.DAY_MISSING_USER)))
+    await _guard(bot.send_message(user_id, u'%s\n\n%s' % (text, texts.DAY_MISSING_USER),
+                                  reply_markup=keyboards.day(day)))
     db.mark_missed(user_id, day)
     if admins_alert:
         await alert_admins(bot, texts.DAY_MISSING_ADMIN.format(day=day))
@@ -315,10 +322,11 @@ async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
     lead = texts.DAY_RESEND.format(day=day)
     if stored[0] == 'video':
         await _guard(bot.send_video(user_id, stored[1], caption=lead, cover=day_cover(day),
-                                    supports_streaming=True))
+                                    supports_streaming=True,
+                                    reply_markup=keyboards.day(day)))
     else:
         await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1]),
-                                      reply_markup=keyboards.watch(stored[1])))
+                                      reply_markup=keyboards.day(day, stored[1])))
     db.clear_missed(user_id, day)
     return True
 

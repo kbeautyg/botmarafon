@@ -88,6 +88,28 @@ def pay(url: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.PAY_BUTTON, url=url)]])
 
 
+def day(number: int, url: str | None = None) -> InlineKeyboardMarkup | None:
+    u"""Кнопки под самой записью дня: посмотреть и ответить.
+
+    Павел 18.09.2026 поменял текст дней на «чтобы пришёл следующий день,
+    нажми Да или Нет на кнопках ниже» — а кнопки приходили отдельным
+    сообщением через два с половиной часа. Люди искали их под записью и
+    писали, что «второй день не приходит, кнопка не кликабельна»
+    (20.09.2026). Теперь кнопки там, где про них написано.
+
+    После четвёртого дня вопроса нет — там только кнопки покупки.
+    """
+    rows = []
+    if url:
+        rows.append([InlineKeyboardButton(text=texts.WATCH_BUTTON, url=url)])
+    if number < 4:
+        name = 'day%d' % number
+        rows.append([
+            InlineKeyboardButton(text=texts.POLL_YES, callback_data='poll:%s:yes' % name),
+            InlineKeyboardButton(text=texts.POLL_NO, callback_data='poll:%s:no' % name)])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
 def watch(url: str) -> InlineKeyboardMarkup:
     u"""Кнопка «смотреть запись» под днём, выложенным ссылкой."""
     return InlineKeyboardMarkup(inline_keyboard=[[

@@ -216,3 +216,75 @@ async def test_под_записью_ссылкой_есть_кнопка_смо
     assert разметка is not None
     кнопка = разметка.inline_keyboard[0][0]
     assert кнопка.url == 'https://kinescope.io/xyz' and u'Смотреть' in кнопка.text
+
+
+# ------------- кнопки под записью дня (жалобы людей 20.09.2026)
+
+def _кнопки(markup):
+    return [b.callback_data or b.url for row in markup.inline_keyboard for b in row]
+
+
+@pytest.mark.asyncio
+async def test_под_записью_дня_сразу_есть_да_и_нет():
+    u"""Павел 18.09 поменял текст на «нажми Да или Нет на кнопках ниже», а
+    кнопки приходили через два с половиной часа отдельным сообщением —
+    люди писали, что «второй день не приходит, кнопка не кликабельна»."""
+    db.put_content('day1', 'video', 'FILEID1')
+    разметка = {}
+
+    class Запоминалка(FakeBot):
+        async def send_video(self, chat_id, video, **kw):
+            разметка['keys'] = kw.get('reply_markup')
+            return await self._record('video', chat_id, video)
+
+    await delivery.send_day(Запоминалка(), 7, 1)
+    assert _кнопки(разметка['keys']) == ['poll:day1:yes', 'poll:day1:no']
+
+
+@pytest.mark.asyncio
+async def test_ответ_кнопкой_под_записью_принимается_сразу():
+    u"""Нажатие сразу после записи должно двигать марафон, а не отвечать
+    «вопрос уже закрыт»: бот ждёт ответа с этой минуты."""
+    from bot.handlers import poll as poll_handler
+    from tests.fakes import FakeCall, FakeUser
+
+    db.remember_user(8, 'u8', u'Человек')
+    db.mark_launched(8)
+    db.put_content('day1', 'video', 'FILEID1')
+    await delivery.send_day(FakeBot(), 8, 1)
+    assert db.get_user(8)['poll'] == 'day1'
+
+    call = FakeCall('poll:day1:yes', user=FakeUser(8))
+    await poll_handler.on_answer(call)
+    assert db.answered(8, 'day1')
+    assert 'day1_yes' in {j['chain'] for j in db.user_jobs(8)}
+
+
+@pytest.mark.asyncio
+async def test_под_четвёртым_днём_вопроса_нет():
+    db.put_content('day4', 'video', 'FILEID4')
+    разметка = {}
+
+    class Запоминалка(FakeBot):
+        async def send_video(self, chat_id, video, **kw):
+            разметка['keys'] = kw.get('reply_markup')
+            return await self._record('video', chat_id, video)
+
+    await delivery.send_day(Запоминалка(), 9, 4)
+    assert разметка['keys'] is None
+    assert (db.get_user(9) or {}).get('poll') in (None, '')
+
+
+@pytest.mark.asyncio
+async def test_под_днём_ссылкой_есть_и_смотреть_и_ответ():
+    db.put_content('day2', 'link', 'https://kinescope.io/abc')
+    разметка = {}
+
+    class Запоминалка(FakeBot):
+        async def send_message(self, chat_id, text, **kw):
+            разметка['keys'] = kw.get('reply_markup')
+            return await self._record('text', chat_id, text)
+
+    await delivery.send_day(Запоминалка(), 10, 2)
+    кнопки = _кнопки(разметка['keys'])
+    assert кнопки == ['https://kinescope.io/abc', 'poll:day2:yes', 'poll:day2:no']
