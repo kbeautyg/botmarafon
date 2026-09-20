@@ -108,14 +108,18 @@ html, body {
 .person.is-picked .tick {
   border-color: var(--accent);
   background: var(--accent);
-  /* галочка рисуется уголком, чтобы не тащить ради неё картинку */
-  background-image: linear-gradient(45deg, transparent 42%, var(--on-accent) 42%,
-                    var(--on-accent) 52%, transparent 52%),
-                    linear-gradient(-45deg, transparent 58%, var(--on-accent) 58%,
-                    var(--on-accent) 68%, transparent 68%);
-  background-size: 60% 60%, 60% 60%;
-  background-position: 46% 62%, 46% 62%;
-  background-repeat: no-repeat;
+}
+/* Галочка — уголок из двух границ, повёрнутый на 45°: так она и правда
+   галочка, а не крестик, и картинку ради неё тащить не нужно. */
+.person.is-picked .tick::after {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 9px;
+  margin: 2px auto 0;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 .person.is-picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tick--off { border-style: dashed; opacity: .5; }
