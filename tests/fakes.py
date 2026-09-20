@@ -22,13 +22,17 @@ class FakeBot(object):
 
     def __init__(self, fail_times=0, forbidden=False):
         self.sent = []
+        # Клавиатура каждой отправки, тем же порядком, что и sent: кнопки —
+        # это то, чем человек продолжает марафон, и их пропажу надо ловить.
+        # Имя не markups: так называют свои списки FakeMessage и наследники.
+        self.keys_sent = []
         self.fail_times = fail_times
         self.forbidden = forbidden
         self._next_id = 100
         self.by_id = {}        # message_id -> FakeMessage, чтобы править и закреплять
         self.pinned = {}       # chat_id -> закреплённое сообщение
 
-    async def _record(self, kind, chat_id, payload=None):
+    async def _record(self, kind, chat_id, payload=None, keys=None):
         from bot import delivery
         if self.forbidden:
             raise delivery.Gone()
@@ -36,6 +40,7 @@ class FakeBot(object):
             self.fail_times -= 1
             raise RuntimeError(u'телеграм не в духе')
         self.sent.append((kind, chat_id, payload))
+        self.keys_sent.append(keys)
         self._next_id += 1
         message = FakeMessage(text=payload, message_id=self._next_id, bot=self,
                               chat_id=chat_id)
@@ -43,7 +48,7 @@ class FakeBot(object):
         return message
 
     async def send_message(self, chat_id, text, **kw):
-        return await self._record('text', chat_id, text)
+        return await self._record('text', chat_id, text, kw.get('reply_markup'))
 
     async def send_video_note(self, chat_id, video, **kw):
         # Кружок уходит объектом файла — записываем имя, иначе в проверках
@@ -53,7 +58,7 @@ class FakeBot(object):
                                   os.path.splitext(os.path.basename(str(name)))[0])
 
     async def send_video(self, chat_id, video, **kw):
-        return await self._record('video', chat_id, video)
+        return await self._record('video', chat_id, video, kw.get('reply_markup'))
 
     async def send_photo(self, chat_id, photo, **kw):
         return await self._record('photo', chat_id, photo)

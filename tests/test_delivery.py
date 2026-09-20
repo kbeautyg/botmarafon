@@ -33,6 +33,20 @@ async def test_отсутствующий_кружок_не_ломает_шаг(
 
 
 @pytest.mark.asyncio
+async def test_тревога_про_незалитую_запись_не_повторяется_на_каждого():
+    u"""Запись не залита — это один факт, а людей на этом дне десятки. По
+    тревоге на каждого админы получали поток, в котором тонуло всё
+    остальное, что им пишет бот (аудит 20.09.2026)."""
+    bot = FakeBot()
+    for uid in (1, 2, 3):
+        db.remember_user(uid, 'u%d' % uid, u'Человек')
+        await delivery.send_day(bot, uid, 1)
+
+    тревоги = [payload for kind, chat, payload in bot.sent if chat == 777]
+    assert len(тревоги) == 1
+
+
+@pytest.mark.asyncio
 async def test_день_без_записи_уходит_текстом_и_тревогой_админам():
     bot = FakeBot()
     await delivery.send_day(bot, 1, 1)

@@ -114,6 +114,31 @@ async def test_когда_застрявших_нет_так_и_говорим()
     assert сообщение.answers[-1] == texts.STUCK_NONE
 
 
+class ОтвечаетПоХоду(FakeBot):
+    u"""Пока досылка идёт по списку, второй человек жмёт кнопку сам."""
+
+    async def send_message(self, chat_id, text, **kw):
+        if chat_id == 1:
+            db.save_answer(2, 'day2', 'yes')
+            db.set_poll(2, None)
+        return await super().send_message(chat_id, text, **kw)
+
+
+async def test_ответившему_по_ходу_досылки_вопрос_не_откатывают():
+    u"""Список собран до начала, а рассылка идёт минутами. Кто ответил за
+    это время, уехал дальше — вернуть ему прошлый вопрос значит убить обе
+    клавиатуры разом: и старую, и новую (аудит 20.09.2026)."""
+    _человек(1, 'day1')
+    _человек(2, 'day2')
+    bot = ОтвечаетПоХоду()
+
+    await admin.on_stuck_go(FakeCall('stuck:go', user=FakeUser(СВОЙ), bot=bot))
+
+    assert _кому(bot) == [1]
+    assert db.get_user(2)['poll'] is None
+    assert u'Ответили сами, пока досылали: 1' in bot.sent[-1][2]
+
+
 async def test_посторонний_досылку_не_запустит():
     _человек(1, 'day1')
     bot = FakeBot()

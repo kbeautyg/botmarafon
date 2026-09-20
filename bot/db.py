@@ -600,22 +600,35 @@ def timeline(user_id: int) -> list:
     return sorted(out, key=lambda item: item['at'])
 
 
-def stuck_on_poll() -> list[dict]:
-    u"""Кто стоит на вопросе без ответа и ждёт кнопок.
+STUCK_AFTER = 3 * 3600      # сколько молчания считать «застрял»
 
-    До 20.09.2026 кнопки «Да»/«Нет» приходили отдельным сообщением через
-    два с половиной часа, а в тексте дня уже было написано «нажми на
-    кнопках ниже». Люди искали их под записью и не находили — эти и
-    застряли. Берём тех, у кого вопрос открыт, ответа нет, бота не
-    закрывали и в чёрном списке не состоят.
+
+def stuck_on_poll(before: float | None = None) -> list[dict]:
+    u"""Кто давно получил день и так и не нажал ни «Да», ни «Нет».
+
+    До 20.09.2026 кнопки приходили отдельным сообщением через два с
+    половиной часа, а в тексте дня уже было написано «нажми на кнопках
+    ниже». Люди искали их под записью и не находили — эти и застряли.
+
+    Теперь кнопки идут сразу под записью, и «вопрос открыт» означает всего
+    лишь «день ушёл». Если брать всех подряд, в список попадёт каждый, кто
+    прямо сейчас смотрит видео, — и досылка пришлёт ему дубль вопроса.
+    Поэтому берём только тех, кто молчит дольше STUCK_AFTER.
+
+    Момента вопроса может не быть вовсе — у тех, кому день ушёл до того,
+    как бот начал его записывать. Это как раз исходные застрявшие, их берём.
     """
+    before = (time.time() - STUCK_AFTER) if before is None else before
     rows = _conn.execute(
-        'SELECT u.user_id, u.poll FROM users u '
+        'SELECT u.user_id, u.poll, MIN(e.at) AS asked FROM users u '
+        "LEFT JOIN events e ON e.user_id = u.user_id "
+        "                  AND e.kind = 'poll' AND e.ref = u.poll "
         "WHERE u.poll IS NOT NULL AND u.poll != '' "
         'AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' '
         'AND NOT EXISTS (SELECT 1 FROM answers a '
         '                WHERE a.user_id = u.user_id AND a.poll = u.poll) '
-        'ORDER BY u.user_id').fetchall()
+        'GROUP BY u.user_id, u.poll HAVING asked IS NULL OR asked <= ? '
+        'ORDER BY u.user_id', (before,)).fetchall()
     return [dict(r) for r in rows]
 
 

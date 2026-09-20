@@ -22,3 +22,18 @@ def dispatcher():
     dp = Dispatcher()
     handlers.setup(dp)
     return dp
+
+
+@pytest.fixture(autouse=True)
+def без_памяти_между_проверками():
+    u"""Отметки «админам про этот день уже сказали» живут в памяти процесса.
+
+    В боте это правильно — тревога про незалитую запись не должна уходить
+    на каждого из десятков человек. В прогоне тестов один процесс на все
+    файлы, и отметка от одной проверки глушила бы тревогу в следующей.
+    """
+    from bot import delivery
+
+    delivery._missed_told.clear()
+    yield
+    delivery._missed_told.clear()

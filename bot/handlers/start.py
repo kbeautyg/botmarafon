@@ -169,16 +169,20 @@ async def on_start(message: Message, command: CommandObject | None = None):
         return
 
     _launching.add(user_id)
+    nth = 0
     try:
-        await message.answer(texts.START_TEXT, reply_markup=keyboards.care())
-    finally:
-        # Марафон встаёт в очередь в любом случае: сбой этого сообщения
-        # оставлял человека «запущенным» без единого шага (ревью 11.09.2026).
-        # Отметку снимаем первой: упадёт постановка — повторный /start скажет
-        # правду, а не «придёт по расписанию».
-        _launching.discard(user_id)
+        # Марафон встаёт в очередь ДО обращения к телеграму. Между отметкой
+        # «запущен» и постановкой шагов не должно быть ни одного ожидания:
+        # жёсткий перезапуск (выкладка) внутри него оставлял человека
+        # запущенным, но без единого шага, а повторный /start отвечал ему
+        # «новых дней нет» — потеря молча (аудит 20.09.2026). Раньше это
+        # стояло в finally: сбой приветствия воронку и тогда не отменял
+        # (ревью 11.09.2026), но окно оставалось.
         scheduler.start_chain(user_id, 'launch')
         nth = db.count_launch(user_id)
+        await message.answer(texts.START_TEXT, reply_markup=keyboards.care())
+    finally:
+        _launching.discard(user_id)
         log.info(u'воронка запущена для %s', user_id)
         # Первый запуск по ссылке с сайта — сайту, для рекламы Meta. Повторный
         # /start сюда не доходит: запуск считается один раз на человека.

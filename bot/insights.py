@@ -66,13 +66,13 @@ WEEKDAYS = (u'пн', u'вт', u'ср', u'чт', u'пт', u'сб', u'вс')
 # Где человек сейчас — в порядке воронки.
 POSITIONS = (
     ('launch', u'смотрят приветствие и отзывы, ждут 1-й день'),
-    ('q1', u'получили 1-й день, ждут вопроса'),
+    ('q1', u'получили 1-й день и смотрят его'),
     ('a1', u'не ответили на «посмотрел?» после 1-го дня'),
     ('d2', u'ждут 2-й день'),
-    ('q2', u'получили 2-й день, ждут вопроса'),
+    ('q2', u'получили 2-й день и смотрят его'),
     ('a2', u'не ответили на «посмотрел?» после 2-го дня'),
     ('d3', u'ждут 3-й день'),
-    ('q3', u'получили 3-й день, ждут вопроса'),
+    ('q3', u'получили 3-й день и смотрят его'),
     ('a3', u'не ответили на «посмотрел?» после 3-го дня'),
     ('d4', u'ждут 4-й день'),
     ('offer_wait', u'получили 4-й день, ждут кнопок покупки'),
@@ -145,6 +145,23 @@ def _position(p: dict) -> str:
         return 'banned'
     if u.get('blocked_at'):
         return 'blocked'
+    # Очередь смотрим ПЕРВОЙ. С 20.09.2026 кнопки «Да»/«Нет» уходят вместе
+    # с записью, поэтому открытый вопрос больше не значит «молчит»: он
+    # значит всего лишь «день ушёл». Если цепочка напоминания ещё в
+    # очереди — человек просто смотрит день, и молчуном его звать рано.
+    # Раньше проверка вопроса стояла выше, и строки «получили N-й день»
+    # стали недостижимы, а «не ответили» раздулись всеми, кто в эту минуту
+    # включил видео (аудит 20.09.2026).
+    nxt = p['next']
+    chain = nxt['chain'] if nxt else ''
+    if chain == 'launch':
+        return 'launch'
+    if chain.startswith('after_day'):
+        k = _day_of(chain[len('after_'):])
+        if k == 4:
+            return 'offer_got' if nxt.get('pos', 0) >= 2 else 'offer_wait'
+        return 'q%d' % k
+    # Напоминания в очереди нет, а вопрос открыт: спросили и не дождались.
     # Вопрос живой, только пока в очереди ждёт ветка «нет»: без неё он
     # устарел — бот уже повёл человека дальше сам (ревью 11.09).
     fallback = funnel.POLL_BRANCHES.get(u.get('poll') or '', {}).get('no')
@@ -152,18 +169,8 @@ def _position(p: dict) -> str:
     if u.get('poll') and not later_day and (config.POLL_FALLBACK_HOURS <= 0
                                             or fallback in p['pending']):
         return 'a%d' % _day_of(u['poll'])
-    nxt = p['next']
-    if nxt:
-        chain = nxt['chain']
-        if chain == 'launch':
-            return 'launch'
-        if chain.startswith('after_day'):
-            k = _day_of(chain[len('after_'):])
-            if k == 4:
-                return 'offer_got' if nxt.get('pos', 0) >= 2 else 'offer_wait'
-            return 'q%d' % k
-        if chain.endswith('_yes') or chain.endswith('_no'):
-            return 'd%d' % (_day_of(chain.split('_')[0]) + 1)
+    if chain.endswith('_yes') or chain.endswith('_no'):
+        return 'd%d' % (_day_of(chain.split('_')[0]) + 1)
     if p['buys']:
         return 'bought'
     if p['reached'] >= OFFER:

@@ -22,7 +22,7 @@ from datetime import datetime
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery
 
-from . import config, contact, db, stats, texts
+from . import config, contact, db, scheduler, stats, texts
 
 log = logging.getLogger(__name__)
 
@@ -97,8 +97,33 @@ async def remove(bot, user_id: int, by_user) -> tuple[bool, str]:
     log.info(u'чёрный список: %s убран, убрал %s', user_id, by_user.id)
     chats = await _each_chat(
         bot, lambda chat, uid: bot.unban_chat_member(chat, uid, only_if_banned=True), user_id)
+    back = _resume(user_id)
     return True, texts.UNBAN_DONE.format(who=who(user_id), by=html.escape(by_line(by_user)),
-                                         when=when(None), chats=chats)
+                                         when=when(None), chats=chats) + back
+
+
+def _resume(user_id: int) -> str:
+    u"""Вернуть человека на его вопрос после ошибочного бана.
+
+    Бан снимает всю очередь и закрывает вопрос (db.stop_funnel) — правильно,
+    пока человек в списке. Но кнопка «в чёрный список» стоит в одно касание
+    под каждым уведомлением о входе, промахнуться мимо «Ответить» легко, и
+    до 20.09.2026 разбан возвращал только чаты: в боте у человека оставались
+    мёртвые кнопки под записью и один путь дальше — начать марафон с первого
+    дня. Восстановить очередь неоткуда, а вопрос последнего полученного дня
+    открыть можно — с него воронка и поедет дальше.
+    """
+    days = db.days_of(user_id)
+    day = max(days) if days else 0
+    if not 1 <= day <= 3:
+        return u''
+    poll = 'day%d' % day
+    if db.answered(user_id, poll):
+        return u''
+    db.set_poll(user_id, poll)
+    scheduler.requeue_poll(user_id, poll)
+    log.info(u'разбан %s: вернули на вопрос %s', user_id, poll)
+    return texts.UNBAN_RESUMED.format(day=day)
 
 
 class Gate(BaseMiddleware):

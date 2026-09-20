@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 from aiogram.exceptions import (ClientDecodeError, TelegramBadRequest, TelegramEntityTooLarge,
                                 TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter,
@@ -272,6 +273,62 @@ def _day_from_env(day: int):
     return ('link', value) if value.lower().startswith('http') else ('video', value)
 
 
+# Незалитая запись — один факт, а людей на этом дне в тот же час десятки.
+# Тревога уходила на каждого, и в этом потоке терялось всё остальное, что
+# бот пишет админам (аудит 20.09.2026). Отметки в памяти: перезапуск их
+# сбросит — и тревога повторится, что как раз правильно.
+MISSED_EVERY = 30 * 60
+_missed_told: dict[int, float] = {}
+
+
+def _tell_missed(day: int) -> bool:
+    u"""Пора ли снова сказать админам, что записи дня нет."""
+    now = time.time()
+    if now - _missed_told.get(day, 0) < MISSED_EVERY:
+        return False
+    _missed_told[day] = now
+    return True
+
+
+def may_open(user_id: int, poll: str) -> bool:
+    u"""Можно ли открыть этот вопрос, не откатив человека назад.
+
+    Вопрос дня — это состояние: пока он открыт, кнопки под записью живые, а
+    ответ на них ведёт дальше по воронке. Открыть вопрос прошлого дня тому,
+    кто уже ответил и уехал, — значит обездвижить его совсем: старые кнопки
+    ответят «уже закрыт», новые тоже (аудит 20.09.2026).
+    """
+    day = int(poll[3:])
+    if any(db.answered(user_id, 'day%d' % d) for d in range(day, 4)):
+        return False
+    current = (db.get_user(user_id) or {}).get('poll')
+    return not (current and current > poll)
+
+
+def open_poll(user_id: int, day: int) -> None:
+    u"""Открыть вопрос дня — запись с кнопками уже ушла.
+
+    Строго ПОСЛЕ отправки. Раньше вопрос открывался до неё, и человек, до
+    которого запись не дошла, числился ждущим ответа: бот считал его
+    застрявшим и досылал вопрос про день, которого тот не видел.
+
+    Момент записываем шагом poll. По нему дожим отсчитывает часы молчания и
+    статистика меряет, через сколько люди отвечают; до 20.09.2026 этот шаг
+    писался только при отдельном сообщении-вопросе — то есть на два часа
+    позже, чем человек на самом деле получал кнопки.
+    """
+    if day >= 4:
+        return
+    poll = 'day%d' % day
+    if not may_open(user_id, poll):
+        return
+    db.set_poll(user_id, poll)
+    try:
+        db.log_event(user_id, 'poll', poll)
+    except Exception as err:            # статистика не повод рвать воронку
+        log.warning(u'не записали момент вопроса %s у %s: %s', poll, user_id, err)
+
+
 async def send_day(bot: Bot, user_id: int, day: int,
                    admins_alert: bool = True) -> Message | None:
     u"""Запись дня и текст под ней.
@@ -283,31 +340,33 @@ async def send_day(bot: Bot, user_id: int, day: int,
     text = texts.DAY_TEXTS[day]
     stored = db.get_content('day%d' % day) or _day_from_env(day)
 
-    # Вопрос открыт с той минуты, как ушла запись: кнопки «Да»/«Нет» теперь
-    # прямо под ней, и ответ должен приниматься сразу (жалобы 20.09.2026).
-    if day < 4:
-        db.set_poll(user_id, 'day%d' % day)
+    if not stored:
+        # Записи нет. Кнопок «Да»/«Нет» под обещанием не даём намеренно:
+        # нажав их, человек уехал бы на следующий день, не посмотрев этого,
+        # и весь марафон прошёл бы мимо записей. Вопрос ему откроет /resend,
+        # когда запись зальют (аудит 20.09.2026).
+        await _guard(bot.send_message(user_id, u'%s\n\n%s' % (text, texts.DAY_MISSING_USER)))
+        db.mark_missed(user_id, day)
+        if admins_alert and _tell_missed(day):
+            await alert_admins(bot, texts.DAY_MISSING_ADMIN.format(day=day))
+        return None
 
-    if stored and stored[0] == 'video':
+    if stored[0] == 'video':
         # supports_streaming: без него Telegram сначала выкачивает запись
         # целиком, и человек видит «скачать» вместо кнопки «смотреть»
         # (Павел 18.09.2026: «чтобы просмотреть им марафон, надо скачивать»).
-        return await _guard(bot.send_video(user_id, stored[1], caption=text,
+        sent = await _guard(bot.send_video(user_id, stored[1], caption=text,
                                            cover=day_cover(day),
                                            supports_streaming=True,
                                            reply_markup=keyboards.day(day)))
-    if stored and stored[0] == 'link':
+    else:
         # Запись выложена в интернете: под текстом — кнопка в плеер, чтобы
         # человек смотрел, а не искал ссылку глазами.
-        return await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text),
+        sent = await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text),
                                              reply_markup=keyboards.day(day, stored[1])))
 
-    await _guard(bot.send_message(user_id, u'%s\n\n%s' % (text, texts.DAY_MISSING_USER),
-                                  reply_markup=keyboards.day(day)))
-    db.mark_missed(user_id, day)
-    if admins_alert:
-        await alert_admins(bot, texts.DAY_MISSING_ADMIN.format(day=day))
-    return None
+    open_poll(user_id, day)
+    return sent
 
 
 async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
@@ -328,10 +387,20 @@ async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
         await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1]),
                                       reply_markup=keyboards.day(day, stored[1])))
     db.clear_missed(user_id, day)
+    # Тем, кому день ушёл без записи, это единственный способ продолжить:
+    # кнопок под обещанием не было, и вопрос у них не открывался.
+    open_poll(user_id, day)
     return True
 
 
 async def send_poll(bot: Bot, user_id: int, name: str) -> Message | None:
+    if not may_open(user_id, name):
+        # Пока вопрос ждал очереди (или досылки через /дошли), человек
+        # ответил и уехал дальше. Открыть вопрос заново значило бы откатить
+        # его состояние: кнопки и под старой записью, и под новой начали бы
+        # отвечать «этот вопрос уже закрыт» (аудит 20.09.2026).
+        log.info(u'вопрос %s для %s не нужен — человек уже дальше', name, user_id)
+        return None
     db.set_poll(user_id, name)
     return await _guard(bot.send_message(user_id, texts.POLL_QUESTIONS[name],
                                          reply_markup=keyboards.poll(name)))

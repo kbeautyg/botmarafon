@@ -23,7 +23,7 @@ import asyncio
 import logging
 import time
 
-from . import db, delivery, texts
+from . import db, delivery, keyboards, texts
 
 log = logging.getLogger(__name__)
 
@@ -54,10 +54,25 @@ def since_poll(poll: str, now: float) -> float:
     return _since(SINCE_POLL % poll, now)
 
 
-async def _push(bot, user_id: int, text: str, mark, label: str) -> bool:
+def keys(user_id: int, poll: str):
+    u"""Кнопки «Да»/«Нет» прямо в дожиме.
+
+    Дожим был просто текстом: «заходи на марафон» — а нажать нечего.
+    Кнопки остались выше в переписке, у кого-то она и вовсе очищена, и
+    человек, которого мы позвали вернуться, возвращался в никуда. Теперь
+    ответить можно отсюда — если вопрос всё ещё открыт (аудит 20.09.2026).
+    """
+    user = db.get_user(user_id) or {}
+    if user.get('poll') != poll or db.answered(user_id, poll):
+        return None
+    return keyboards.poll(poll)
+
+
+async def _push(bot, user_id: int, text: str, mark, label: str, poll: str) -> bool:
     u"""Отправить дожим и отметить его. False — не ушёл."""
     try:
-        await delivery._guard(bot.send_message(user_id, text))
+        await delivery._guard(bot.send_message(user_id, text,
+                                               reply_markup=keys(user_id, poll)))
     except delivery.Gone:
         db.mark_blocked(user_id)
         mark()
@@ -76,12 +91,12 @@ async def run_once(bot, now: float | None = None) -> int:
     sent = 0
     for uid in db.nudge_candidates(since(now), now - AFTER):
         sent += await _push(bot, uid, texts.NUDGE_DAY1,
-                            lambda uid=uid: db.mark_nudged(uid), u'день 1')
+                            lambda uid=uid: db.mark_nudged(uid), u'день 1', 'day1')
     for poll in LATER_POLLS:
         for uid in db.poll_nudge_candidates(poll, since_poll(poll, now), now - AFTER):
             sent += await _push(bot, uid, texts.NUDGE_POLL[poll],
                                 lambda uid=uid, poll=poll: db.mark_poll_nudged(uid, poll),
-                                poll)
+                                poll, poll)
     return sent
 
 

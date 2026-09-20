@@ -233,23 +233,34 @@ async def on_stuck_go(call: CallbackQuery):
     except Exception:
         pass
 
-    sent = gone = failed = 0
+    sent = gone = failed = skipped = 0
     for person in db.stuck_on_poll():
+        uid, poll = person['user_id'], person['poll']
+        # Список собран до начала рассылки, а идёт она минутами. Человек за
+        # это время мог нажать кнопку под записью и уехать дальше — тогда
+        # вопрос откатил бы его назад, и обе клавиатуры, старая и новая,
+        # стали бы отвечать «этот вопрос уже закрыт» (аудит 20.09.2026).
+        fresh = db.get_user(uid) or {}
+        if fresh.get('poll') != poll or db.answered(uid, poll):
+            skipped += 1
+            continue
         try:
-            await delivery.send_poll(call.bot, person['user_id'], person['poll'])
+            await delivery.send_poll(call.bot, uid, poll)
         except delivery.Gone:
-            db.mark_blocked(person['user_id'])
+            db.mark_blocked(uid)
             gone += 1
             continue
         except Exception as err:
-            log.warning(u'вопрос %s не дослан %s: %s', person['poll'], person['user_id'], err)
+            log.warning(u'вопрос %s не дослан %s: %s', poll, uid, err)
             failed += 1
             continue
-        db.log_event(person['user_id'], 'poll', person['poll'])
+        db.log_event(uid, 'poll', poll)
         sent += 1
         await asyncio.sleep(0.05)
-    log.info(u'досылка вопроса: ушло %d, закрыли бота %d, сбоев %d', sent, gone, failed)
-    await call.message.answer(texts.STUCK_DONE.format(sent=sent, gone=gone, failed=failed))
+    log.info(u'досылка вопроса: ушло %d, ответили сами %d, закрыли бота %d, сбоев %d',
+             sent, skipped, gone, failed)
+    await call.message.answer(texts.STUCK_DONE.format(sent=sent, skipped=skipped,
+                                                      gone=gone, failed=failed))
 
 
 # ------------------------------------------------------------ меню

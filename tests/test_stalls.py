@@ -59,7 +59,7 @@ class НетКружков(FakeBot):
 
 
 class СвязиНет(FakeBot):
-    async def _record(self, kind, chat_id, payload=None):
+    async def _record(self, kind, chat_id, payload=None, keys=None):
         raise TelegramNetworkError(method=None, message=u'нет связи с Telegram')
 
 
@@ -90,6 +90,23 @@ async def test_сбой_приветствия_не_оставляет_без_м
     with pytest.raises(TelegramNetworkError):
         await start.on_start(сообщение)
     assert 'launch' in db.pending_chains(2)
+
+
+async def test_марафон_в_очереди_ещё_до_приветствия():
+    u"""Между отметкой «запущен» и постановкой шагов не должно быть ни
+    одного ожидания. Жёсткий перезапуск на выкладке внутри него оставлял
+    человека запущенным, но с пустой очередью: повторный /start отвечал ему
+    «новых дней нет», дожим его не находил, и он терялся молча."""
+    очередь = []
+    сообщение = FakeMessage(text='/start', user=FakeUser(9))
+
+    async def смотрим(*args, **kw):
+        очередь.append(db.pending_chains(9))
+
+    сообщение.answer = смотрим
+    await start.on_start(сообщение)
+
+    assert очередь and 'launch' in очередь[0]
 
 
 async def test_повторный_старт_без_очереди_не_обещает_расписание():
@@ -190,13 +207,13 @@ def test_начавший_после_учёта_и_вставший_прерва
 class ШлюзЛежит(FakeBot):
     u"""Шлюз Telegram отдаёт HTML-страницу 502 вместо ответа."""
 
-    async def _record(self, kind, chat_id, payload=None):
+    async def _record(self, kind, chat_id, payload=None, keys=None):
         raise ClientDecodeError('Failed to decode object', ValueError('not json'),
                                 u'<html><title>502 Bad Gateway</title></html>')
 
 
 class ФайлВелик(FakeBot):
-    async def _record(self, kind, chat_id, payload=None):
+    async def _record(self, kind, chat_id, payload=None, keys=None):
         raise TelegramEntityTooLarge(method=None, message=u'Request Entity Too Large')
 
 

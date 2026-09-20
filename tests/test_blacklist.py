@@ -223,6 +223,36 @@ async def test_разбан_и_незнакомый_ник():
     assert u'Не нашёл в боте' in нет.answers[-1]
 
 
+async def test_разбан_возвращает_человека_на_его_вопрос():
+    u"""Кнопка «в чёрный список» стоит в одно касание под каждым
+    уведомлением о входе — промахнуться мимо «Ответить» легко. Бан снимает
+    всю очередь и закрывает вопрос; до 20.09.2026 разбан возвращал только
+    чаты, и в боте у человека оставались мёртвые кнопки под записью и один
+    путь дальше — начать марафон заново с первого дня."""
+    db.log_event(TROLL, 'day', 2)
+    db.set_poll(TROLL, 'day2')
+    await blacklist.add(FakeBot(), TROLL, FakeUser(ALEX))
+    assert db.get_user(TROLL)['poll'] is None
+
+    ok, отчёт = await blacklist.remove(FakeBot(), TROLL, FakeUser(PAVEL))
+
+    assert ok and u'Вернул на вопрос 2-го дня' in отчёт
+    assert db.get_user(TROLL)['poll'] == 'day2'
+    assert 'after_day2' in {j['chain'] for j in db.user_jobs(TROLL)}
+
+
+async def test_разбан_прошедшего_марафон_на_вопрос_не_возвращает():
+    u"""Он всё посмотрел и на всё ответил — возвращать некуда."""
+    db.log_event(TROLL, 'day', 4)
+    db.save_answer(TROLL, 'day3', 'yes')
+    await blacklist.add(FakeBot(), TROLL, FakeUser(ALEX))
+
+    ok, отчёт = await blacklist.remove(FakeBot(), TROLL, FakeUser(PAVEL))
+
+    assert ok and u'Вернул на вопрос' not in отчёт
+    assert db.get_user(TROLL)['poll'] is None
+
+
 def _args(text):
     return type('Cmd', (), {'args': text})()
 
