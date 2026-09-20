@@ -243,6 +243,83 @@ async def test_незнакомому_id_пульт_не_пишет(пульт):
     assert пульт.bot.sent == []
 
 
+# ----------------------------------------------- написать выбранным
+#
+# AleX 20.09.2026: «оповещения кидать всем либо выбранным из списка».
+# Уходит людям, поэтому проверяем не вид кнопок, а что и кому отправлено.
+
+async def test_выбранным_уходит_одно_и_то_же_каждому(пульт):
+    for uid in (21, 22, 23):
+        _человек(uid)
+    _человек(24)                                   # этого не выбирали
+
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(), 'ids': [21, 22, 23], 'text': u'Сегодня эфир в 19:00'})
+
+    assert await ответ.json() == {'sent': 3, 'gone': 0, 'failed': 0}
+    assert пульт.bot.sent == [('text', 21, u'Сегодня эфир в 19:00'),
+                              ('text', 22, u'Сегодня эфир в 19:00'),
+                              ('text', 23, u'Сегодня эфир в 19:00')]
+    # у каждого это осталось в переписке — иначе в пульте не видно, что писали
+    assert [m['text'] for m in db.chat_history(22)] == [u'Сегодня эфир в 19:00']
+    assert db.chat_history(24) == []
+
+
+async def test_закрывший_бота_не_срывает_отправку_остальным(пульт):
+    u"""Из-за одного ушедшего остальные сообщение получить обязаны."""
+    for uid in (31, 32, 33):
+        _человек(uid)
+
+    class ОдинУшёл(FakeBot):
+        async def send_message(self, chat_id, text, **kw):
+            if chat_id == 32:
+                from bot import delivery
+                raise delivery.Gone()
+            return await super().send_message(chat_id, text, **kw)
+
+    пульт.app['bot'] = ОдинУшёл()
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(), 'ids': [31, 32, 33], 'text': u'Эфир'})
+
+    assert await ответ.json() == {'sent': 2, 'gone': 1, 'failed': 0}
+    assert db.get_user(32)['blocked_at'] is not None
+
+
+async def test_выбранных_берём_только_тех_кто_есть_в_базе(пульт):
+    _человек(41)
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(), 'ids': [41, 999999, 'ой', 41], 'text': u'Эфир'})
+    assert await ответ.json() == {'sent': 1, 'gone': 0, 'failed': 0}
+    assert пульт.bot.sent == [('text', 41, u'Эфир')]
+
+
+def test_больше_двухсот_выбранных_пульт_не_берёт(база):
+    u"""Дальше — не выбор, а рассылка: у неё свои кнопки, доклад о ходе и
+    продолжение после перезапуска (/рассылка)."""
+    for uid in range(1000, 1000 + web.MAX_PICKED + 10):
+        _человек(uid)
+    ids = list(range(1000, 1000 + web.MAX_PICKED + 10))
+
+    assert len(web.picked_ids({'ids': ids})) == web.MAX_PICKED
+
+
+def test_выбранные_приходят_и_строкой_через_запятую(база):
+    u"""Из формы записи голосового и кружка (multipart) — только строкой."""
+    _человек(61)
+    _человек(62)
+    assert web.picked_ids({'ids': '61, 62'}) == [61, 62]
+    assert web.picked_ids({'ids': None}) == []
+    assert web.picked_ids({}) == []
+
+
+async def test_посторонний_выбранным_не_напишет(пульт):
+    _человек(51)
+    ответ = await пульт.post('/api/send', json={
+        'initData': подпись(user_id=ЧУЖОЙ), 'ids': [51], 'text': u'Эфир'})
+    assert ответ.status == 403
+    assert пульт.bot.sent == []
+
+
 # --------------------------------------------------------- чёрный список
 
 async def test_чёрный_список_из_пульта_и_обратно(пульт):

@@ -73,9 +73,75 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  /* Кнопок в ряду четыре, и на узком телефоне «Все участники» ломалось
+     надвое. Не переносим: лучше подвинуть счётчик. */
+  white-space: nowrap;
+  flex: none;
 }
 .tab.is-on { background: var(--accent); color: var(--on-accent); }
-.count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.count {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ------------------------------------------- выбрать нескольких и написать
+
+   AleX 20.09.2026: «оповещения кидать всем либо выбранным из списка».
+   Галочки включаются отдельной кнопкой, а не живут в списке всегда: в
+   обычный день пультом открывают переписку, и лишний столбец с квадратами
+   только мешал бы попадать пальцем по строке. */
+
+.tab--pick { margin-left: 8px; padding-inline: 10px; }
+
+.tick {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  justify-self: center;
+}
+.person.is-picked .tick {
+  border-color: var(--accent);
+  background: var(--accent);
+  /* галочка рисуется уголком, чтобы не тащить ради неё картинку */
+  background-image: linear-gradient(45deg, transparent 42%, var(--on-accent) 42%,
+                    var(--on-accent) 52%, transparent 52%),
+                    linear-gradient(-45deg, transparent 58%, var(--on-accent) 58%,
+                    var(--on-accent) 68%, transparent 68%);
+  background-size: 60% 60%, 60% 60%;
+  background-position: 46% 62%, 46% 62%;
+  background-repeat: no-repeat;
+}
+.person.is-picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* Полоса выбора прижата к низу списка: её видно и когда список пролистан. */
+.picked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.picked[hidden] { display: none; }   /* иначе display:flex перебивает hidden */
+.picked__count { color: var(--muted); font-size: 13px; }
+.picked__clear,
+.picked__write {
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.picked__clear { background: var(--card); color: var(--muted); }
+.picked__write { margin-left: auto; background: var(--accent); color: var(--on-accent); }
+.picked__write:disabled { opacity: .45; cursor: default; }
 
 /* ------------------------------------------------------------- люди */
 
@@ -84,6 +150,12 @@ html, body {
 .person {
   display: grid;
   grid-template-columns: 40px 1fr auto;
+}
+/* В режиме выбора спереди добавляется кружок галочки. */
+.person:has(> .tick) {
+  grid-template-columns: 26px 40px 1fr auto;
+}
+.person {
   gap: 10px;
   align-items: center;
   width: 100%;

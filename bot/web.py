@@ -14,6 +14,7 @@ AleX 17.09.2026: «нельзя какой-нибудь чат чтобы отк
 Без WEBAPP_URL и PORT сервер не поднимается: на машине разработчика пульт
 не нужен, а мини-приложение всё равно работает только по https.
 """
+import asyncio
 import hashlib
 import hmac
 import json
@@ -24,7 +25,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import blacklist, config, db, delivery, record
+from . import blacklist, broadcast, config, db, delivery, record
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,11 @@ PAGE_SIZE = 60
 # Предел сообщения у Telegram — 4096 знаков; режем чуть раньше, чтобы
 # человеку в пульте пришёл понятный отказ, а не ошибка от Telegram.
 MAX_TEXT = 4000
+# Скольким можно написать разом из списка галочками. Дальше — не выбор, а
+# рассылка: у неё свои кнопки, доклад о ходе и продолжение после
+# перезапуска (/рассылка, bot/broadcast.py). Двести — это десять секунд
+# отправки, столько запрос подождёт спокойно.
+MAX_PICKED = 200
 # Сколько чатов Павла опрашивать для карточки: каждый — отдельный
 # запрос к Telegram, а карточка должна открываться сразу.
 CHATS_IN_CARD = 8
@@ -311,6 +317,54 @@ async def send_media(bot, user_id: int, url: str, caption: str) -> tuple:
     return kind, sent
 
 
+def picked_ids(source) -> list:
+    u"""Кого отметили галочками в списке. Берём только тех, кто есть в базе.
+
+    Из формы записи (multipart) приходит строкой через запятую, из обычного
+    запроса — списком; принимаем оба вида.
+    """
+    raw = source.get('ids')
+    if isinstance(raw, str):
+        raw = raw.split(',')
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw[:MAX_PICKED]:
+        try:
+            user_id = int(str(item).strip())
+        except (TypeError, ValueError):
+            continue
+        if user_id and user_id not in out and db.get_user(user_id):
+            out.append(user_id)
+    return out
+
+
+async def to_each(ids: list, one) -> web.Response:
+    u"""Одно и то же — каждому из выбранных.
+
+    По одному и с той же паузой, что у общей рассылки: Telegram принимает
+    от бота около тридцати сообщений в секунду на всех, и «написать
+    выбранным» не должно мешать самой воронке идти.
+
+    Закрывшего бота отмечаем и идём дальше: из-за одного ушедшего
+    остальные девятнадцать сообщение получить обязаны.
+    """
+    sent = gone = failed = 0
+    for user_id in ids:
+        try:
+            await one(user_id)
+        except delivery.Gone:
+            db.mark_blocked(user_id)
+            gone += 1
+        except Exception as err:
+            log.warning(u'пульт: выбранным — %s не ушло: %s', user_id, err)
+            failed += 1
+        else:
+            sent += 1
+        await asyncio.sleep(broadcast.PAUSE)
+    return web.json_response({'sent': sent, 'gone': gone, 'failed': failed})
+
+
 @route
 async def api_send(request, user):
     u"""Отправить человеку сообщение от имени бота."""
@@ -328,11 +382,25 @@ async def api_send(request, user):
         return web.json_response(
             {'error': u'слишком длинное: %d знаков, влезает %d' % (len(text), MAX_TEXT)},
             status=400)
+
+    bot = request.app['bot']
+    chosen = picked_ids(body)
+    if chosen:
+        async def one(uid):
+            if media:
+                kind, sent = await send_media(bot, uid, media, text)
+            else:
+                kind = 'text'
+                sent = await delivery._guard(bot.send_message(uid, text, parse_mode=None))
+            db.save_message(uid, 'out', kind, text or media, media or None,
+                            author=int(user['id']), tg_id=getattr(sent, 'message_id', None))
+
+        log.info(u'пульт: %s пишет %d выбранным', user['id'], len(chosen))
+        return await to_each(chosen, one)
+
     person = db.get_user(user_id)
     if not person:
         return web.json_response({'error': u'человека нет в базе'}, status=404)
-
-    bot = request.app['bot']
     sent = None
     try:
         if media:
@@ -444,10 +512,28 @@ async def api_record(request):
         return web.json_response({'error': u'пустая запись'}, status=400)
 
     user_id = int(fields.get('id') or 0)
-    if not db.get_user(user_id):
-        return web.json_response({'error': u'человека нет в базе'}, status=404)
     kind = 'note' if fields.get('kind') == 'note' else 'voice'
     caption = (fields.get('text') or '').strip()[:1024]
+
+    chosen = picked_ids(fields)
+    if chosen:
+        bot = request.app['bot']
+        # Перекодируем один раз на всех: ffmpeg на каждого из двадцати —
+        # это полминуты ожидания на ровном месте.
+        try:
+            ready, saved = await _make_record(kind, blob, name)
+        except Exception as err:
+            log.exception(u'пульт: запись выбранным не собралась')
+            return web.json_response({'error': str(err)[:300]}, status=500)
+        try:
+            log.info(u'пульт: %s шлёт %s %d выбранным', user['id'], saved, len(chosen))
+            return await to_each(chosen, lambda uid: _push_record(
+                bot, uid, saved, ready, name, caption, int(user['id'])))
+        finally:
+            record.forget(*ready[1])
+
+    if not db.get_user(user_id):
+        return web.json_response({'error': u'человека нет в базе'}, status=404)
 
     try:
         return await _send_record(request.app['bot'], user_id, kind, blob, name,
@@ -471,11 +557,13 @@ def _who_safe(fields: dict):
     return user
 
 
-async def _send_record(bot, user_id: int, kind: str, blob: bytes, name: str,
-                       caption: str, author: int):
-    u"""Перекодировать запись и отправить человеку."""
-    from aiogram.types import BufferedInputFile
+async def _make_record(kind: str, blob: bytes, name: str):
+    u"""Перекодировать запись один раз. Возвращает ((байты, имя), чем стало).
 
+    Отдельно от отправки затем, что выбранных бывает двадцать, а ffmpeg на
+    каждого — это полминуты ожидания на ровном месте. Во втором элементе —
+    файлы, которые надо убрать: record.forget(*ready[1]).
+    """
     source = record.keep(blob, os.path.splitext(name)[1] or '.webm')
     ready = None
     try:
@@ -483,27 +571,50 @@ async def _send_record(bot, user_id: int, kind: str, blob: bytes, name: str,
             ready = await (record.to_note(source) if kind == 'note'
                            else record.to_voice(source))
         data = open(ready or source, 'rb').read()
-        if ready and kind == 'note':
-            sent = await delivery._guard(bot.send_video_note(
-                user_id, BufferedInputFile(data, 'note.mp4')))
-            saved = 'video_note'
-        elif ready:
-            sent = await delivery._guard(bot.send_voice(
-                user_id, BufferedInputFile(data, 'voice.ogg'), caption=caption or None))
-            saved = 'voice'
-        else:
-            # Без перекодировки Telegram не примет ни голосовое, ни кружок —
-            # отправляем обычным файлом, чтобы запись всё-таки дошла.
-            sent = await delivery._guard(bot.send_document(
-                user_id, BufferedInputFile(data, name or 'record.webm'),
-                caption=caption or None))
-            saved = 'document'
-    finally:
+    except Exception:
         record.forget(source, ready)
+        raise
+    if ready and kind == 'note':
+        saved = 'video_note'
+    elif ready:
+        saved = 'voice'
+    else:
+        # Без перекодировки Telegram не примет ни голосовое, ни кружок —
+        # отправляем обычным файлом, чтобы запись всё-таки дошла.
+        saved = 'document'
+    return (data, (source, ready)), saved
 
+
+async def _push_record(bot, user_id: int, saved: str, ready, name: str,
+                       caption: str, author: int):
+    u"""Отправить готовую запись одному человеку и записать в переписку."""
+    from aiogram.types import BufferedInputFile
+
+    data = ready[0]
+    if saved == 'video_note':
+        sent = await delivery._guard(bot.send_video_note(
+            user_id, BufferedInputFile(data, 'note.mp4')))
+    elif saved == 'voice':
+        sent = await delivery._guard(bot.send_voice(
+            user_id, BufferedInputFile(data, 'voice.ogg'), caption=caption or None))
+    else:
+        sent = await delivery._guard(bot.send_document(
+            user_id, BufferedInputFile(data, name or 'record.webm'),
+            caption=caption or None))
     db.save_message(user_id, 'out', saved, caption or None, None, author,
                     getattr(sent, 'message_id', None))
     log.info(u'пульт: %s отправил(а) %s человеку %s', author, saved, user_id)
+    return sent
+
+
+async def _send_record(bot, user_id: int, kind: str, blob: bytes, name: str,
+                       caption: str, author: int):
+    u"""Перекодировать запись и отправить человеку."""
+    ready, saved = await _make_record(kind, blob, name)
+    try:
+        await _push_record(bot, user_id, saved, ready, name, caption, author)
+    finally:
+        record.forget(*ready[1])
     return web.json_response({'messages': _messages(user_id), 'kind': saved})
 
 

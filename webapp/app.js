@@ -10,8 +10,12 @@
   var REFRESH_MS = 15000;      // как часто подтягивать новое
   var TYPING_PAUSE = 350;      // пауза после ввода перед поиском
 
+  /* picking — в списке включены галочки; picked — кого отметили; to —
+     кому уйдёт следующее сообщение из окна переписки (пусто — одному,
+     тому, чей чат открыт). AleX 20.09.2026: «выбранным из списка». */
   var state = { id: null, onlyChats: true, query: '', busy: false, person: null,
-                editing: null, card: null, chats: null };
+                editing: null, card: null, chats: null,
+                picking: false, picked: [], to: [] };
 
   var $ = function (id) { return document.getElementById(id); };
   var listScreen = $('list');
@@ -136,8 +140,45 @@
     row.appendChild(ava);
     row.appendChild(main);
     row.appendChild(side);
-    row.addEventListener('click', function () { openChat(person.id); });
+
+    /* В режиме выбора строка не открывает переписку, а ставит галочку:
+       промахнуться пальцем и вместо отметки уйти в чужой диалог, потеряв
+       весь набранный список, слишком легко. */
+    if (state.picking) {
+      var mark = document.createElement('span');
+      mark.className = 'tick';
+      row.insertBefore(mark, ava);
+      row.classList.toggle('is-picked', state.picked.indexOf(person.id) > -1);
+      row.addEventListener('click', function () { togglePick(person.id, row); });
+    } else {
+      row.addEventListener('click', function () { openChat(person.id); });
+    }
     return row;
+  }
+
+  // ---------------------------------------------------------- выбор людей
+
+  function togglePick(id, row) {
+    var at = state.picked.indexOf(id);
+    if (at > -1) { state.picked.splice(at, 1); } else { state.picked.push(id); }
+    if (row) { row.classList.toggle('is-picked', at < 0); }
+    drawPicked();
+  }
+
+  function drawPicked() {
+    var bar = $('picked');
+    bar.hidden = !state.picking;
+    $('picked-count').textContent = 'Выбрано: ' + state.picked.length;
+    $('picked-write').disabled = state.picked.length === 0;
+  }
+
+  function setPicking(on) {
+    state.picking = on;
+    if (!on) { state.picked = []; }
+    $('pick').classList.toggle('is-on', on);
+    $('pick').textContent = on ? 'Отмена' : 'Выбрать';
+    drawPicked();
+    loadPeople();
   }
 
   function drawPeople(people, everyone) {
@@ -343,7 +384,37 @@
     $('go').disabled = !!person.blocked;
   }
 
+  /* Окно переписки, но получателей много. Карточки и чёрного списка тут
+     нет — они про одного человека, — а поле ввода, вложения, голосовое и
+     кружок работают как обычно: одно и то же уйдёт каждому. */
+  function openMany() {
+    if (!state.picked.length) { return; }
+    state.to = state.picked.slice();
+    state.id = null;
+    state.person = null;
+    listScreen.classList.add('is-behind');
+    chatScreen.classList.add('is-open');
+    stopEdit();
+    $('card').hidden = true;
+    $('info').hidden = true;
+    $('ban').hidden = true;
+    $('chat-name').textContent = 'Выбрано: ' + state.to.length;
+    $('chat-sub').textContent = 'напишем каждому одно и то же';
+    $('log').textContent = '';
+    var hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'Сообщение придёт каждому из выбранных отдельно, '
+      + 'как обычное сообщение от бота — с уведомлением. '
+      + 'Переписку видно в карточке каждого.';
+    $('log').appendChild(hint);
+    $('go').disabled = false;
+    if (tg && tg.BackButton) { tg.BackButton.show(); }
+  }
+
   function openChat(id) {
+    state.to = [];
+    $('info').hidden = false;
+    $('ban').hidden = false;
     state.id = id;
     listScreen.classList.add('is-behind');
     chatScreen.classList.add('is-open');
@@ -357,6 +428,7 @@
 
   function closeChat() {
     state.id = null;
+    state.to = [];
     chatScreen.classList.remove('is-open');
     listScreen.classList.remove('is-behind');
     if (tg && tg.BackButton) { tg.BackButton.hide(); }
@@ -369,12 +441,13 @@
     var link = $('media');
     var text = field.value.trim();
     var media = link.value.trim();
-    if ((!text && !media) || state.busy || !state.id) { return; }
+    var many = state.to.length;
+    if ((!text && !media) || state.busy || (!state.id && !many)) { return; }
     state.busy = true;
     $('go').disabled = true;
     var call = state.editing
       ? api('edit', { messageId: state.editing, text: text })
-      : api('send', { id: state.id, text: text, media: media });
+      : api('send', { id: state.id, ids: state.to, text: text, media: media });
     call
       .then(function (data) {
         field.value = '';
@@ -383,11 +456,24 @@
         $('clip').classList.remove('is-on');
         stopEdit();
         grow(field);
-        drawChat({ person: state.person, messages: data.messages || [] });
+        if (many) { doneMany(data); } else {
+          drawChat({ person: state.person, messages: data.messages || [] });
+        }
         if (tg && tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred('success'); }
       })
       .catch(function (err) { toast(err.message); })
       .then(function () { state.busy = false; $('go').disabled = false; });
+  }
+
+  /* Итог отправки выбранным. Закрывшие бота и сбои названы отдельно:
+     «ушло 18 из 20» без объяснения выглядит как поломка. */
+  function doneMany(data) {
+    var parts = ['Отправлено: ' + (data.sent || 0)];
+    if (data.gone) { parts.push('закрыли бота: ' + data.gone); }
+    if (data.failed) { parts.push('не дошло: ' + data.failed); }
+    toast(parts.join(' · '));
+    closeChat();
+    setPicking(false);
   }
 
   function toggleBan() {
@@ -492,9 +578,11 @@
   }
 
   function uploadRecord(blob, kind) {
+    var many = state.to.length;
     var form = new FormData();
     form.append('initData', initData);
-    form.append('id', String(state.id));
+    form.append('id', String(state.id || 0));
+    if (many) { form.append('ids', state.to.join(',')); }
     form.append('kind', kind);
     form.append('text', $('text').value.trim());
     form.append('file', blob, kind === 'note' ? 'note.webm' : 'voice.webm');
@@ -511,6 +599,7 @@
       .then(function (data) {
         $('text').value = '';
         grow($('text'));
+        if (many) { doneMany(data); return; }
         drawChat({ person: state.person, card: state.card, chats: state.chats,
                    messages: data.messages || [] });
         if (data.kind === 'document') {
@@ -529,6 +618,10 @@
   // -------------------------------------------------------------- связи
 
   $('back').addEventListener('click', closeChat);
+  $('pick').addEventListener('click', function () { setPicking(!state.picking); });
+  drawPicked();                      // полоса выбора закрыта, «Написать» погашено
+  $('picked-clear').addEventListener('click', function () { setPicking(false); });
+  $('picked-write').addEventListener('click', openMany);
   // Вложение — ссылкой: файл уходит от Telegram напрямую, минуя пульт.
   $('clip').addEventListener('click', function () {
     var link = $('media');

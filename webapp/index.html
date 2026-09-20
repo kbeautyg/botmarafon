@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=10">
+<link rel="stylesheet" href="/static/app.css?v=11">
 </head>
 <body>
 
@@ -20,10 +20,18 @@
       <button class="tab is-on" data-only="1" type="button">Переписки</button>
       <button class="tab" data-only="0" type="button">Все участники</button>
       <span id="count" class="count"></span>
+      <!-- Выбрать нескольких и написать им одно и то же: AleX 20.09.2026
+           «либо выбранным из списка, либо добавленным по никнейму». -->
+      <button id="pick" class="tab tab--pick" type="button">Выбрать</button>
     </div>
   </header>
   <div id="people" class="people"></div>
   <p id="empty" class="empty" hidden>Никого не нашли</p>
+  <div id="picked" class="picked" hidden>
+    <span id="picked-count" class="picked__count">Выбрано: 0</span>
+    <button id="picked-clear" class="picked__clear" type="button">Снять</button>
+    <button id="picked-write" class="picked__write" type="button">Написать</button>
+  </div>
 </section>
 
 <!-- Экран 2: диалог -->
@@ -65,6 +73,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=11"></script>
 </body>
 </html>
