@@ -55,7 +55,7 @@ async def test_человеку_старт_по_прежнему_запуска�
 
 async def test_в_меню_есть_всё_что_просили_кнопками():
     названия = _кнопки(keyboards.menu())
-    assert texts.MENU_PANEL.split()[-1] in ' '.join(названия) or texts.PANEL_BUTTON in названия
+    assert texts.PANEL_BUTTON.split()[-1] in ' '.join(названия) or texts.PANEL_BUTTON in названия
     for кнопка in (texts.MENU_BROADCAST, texts.MENU_DAILY, texts.MENU_STATS,
                    texts.MENU_WHO, texts.MENU_BAN, texts.MENU_LINKS, texts.MENU_CHATS):
         assert кнопка in названия, кнопка
@@ -104,3 +104,35 @@ async def test_без_адреса_пульта_меню_всё_равно_ра�
     названия = _кнопки(keyboards.menu())
     assert texts.PANEL_BUTTON not in названия
     assert texts.MENU_BROADCAST in названия
+
+
+# ------------------------------------------ пульт в рабочем чате
+#
+# Мини-приложение телеграм открывает только из личной переписки. Кнопку в
+# группе он не просто не показывает — он отвергает ВСЮ клавиатуру, а с ней
+# и сообщение: до 20.09.2026 /меню и /пульт из рабочего чата не приходили
+# вовсе, молча.
+
+def test_в_рабочем_чате_кнопки_пульта_в_меню_нет():
+    assert texts.PANEL_BUTTON in _кнопки(keyboards.menu(СВОЙ))        # личка
+    assert texts.PANEL_BUTTON not in _кнопки(keyboards.menu(-1001234567890))
+    # остальное на месте — меню в группе работать обязано
+    assert texts.MENU_BROADCAST in _кнопки(keyboards.menu(-1001234567890))
+
+
+async def test_пульт_из_рабочего_чата_говорит_куда_идти():
+    группа = FakeMessage(text=u'/пульт', user=FakeUser(СВОЙ), chat_id=-1001234567890)
+    await admin.on_panel(группа)
+    assert u'только в личной переписке' in группа.answers[-1]
+    assert группа.markups[-1] is None
+
+    личка = FakeMessage(text=u'/пульт', user=FakeUser(СВОЙ))
+    await admin.on_panel(личка)
+    assert _кнопки(личка.markups[-1]) == [texts.PANEL_BUTTON]
+
+
+async def test_меню_из_рабочего_чата_приходит_без_пульта():
+    группа = FakeMessage(text=u'/меню', user=FakeUser(СВОЙ), chat_id=-1001234567890)
+    await admin.on_menu(группа)
+    assert texts.PANEL_BUTTON not in _кнопки(группа.markups[0])
+    assert texts.MENU_STATS in _кнопки(группа.markups[0])

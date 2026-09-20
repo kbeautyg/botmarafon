@@ -277,7 +277,7 @@ def _team_message(message: Message) -> bool:
 async def on_menu(message: Message):
     if not _team_message(message):
         return
-    await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu())
+    await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu(message.chat.id))
     await message.answer(texts.MENU_HINT_KEYS, reply_markup=keyboards.team_keys())
 
 
@@ -285,7 +285,7 @@ async def on_menu(message: Message):
 async def on_menu_button(message: Message):
     if not _team_message(message):
         return
-    await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu())
+    await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu(message.chat.id))
 
 
 @router.callback_query(F.data.startswith('mn:'))
@@ -333,6 +333,11 @@ async def on_panel(message: Message):
     keys = keyboards.panel()
     if not keys:
         await message.answer(texts.PANEL_OFF)
+        return
+    # В рабочем чате телеграм отвергает кнопку мини-приложения, а вместе с
+    # ней и всё сообщение: на /пульт из группы не приходило ничего.
+    if message.chat.id < 0:
+        await message.answer(texts.PANEL_IN_GROUP)
         return
     await message.answer(texts.PANEL_INTRO, reply_markup=keys)
 

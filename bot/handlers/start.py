@@ -130,7 +130,7 @@ async def on_start(message: Message, command: CommandObject | None = None):
     # «нельзя это кнопками всё прилепить»). Пройти марафон самому команда
     # может кнопкой в меню или командой /test с короткими паузами.
     if config.is_team(user_id):
-        await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu())
+        await message.answer(texts.MENU_TITLE, reply_markup=keyboards.menu(message.chat.id))
         await message.answer(texts.MENU_HINT_KEYS, reply_markup=keyboards.team_keys())
         return
     # site_fb--k3v9x0a1b2c4: хвост — код клика на сайте, источник — до него

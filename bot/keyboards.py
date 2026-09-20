@@ -141,15 +141,20 @@ def stuck(count: int) -> InlineKeyboardMarkup:
                               callback_data='stuck:go')]])
 
 
-def menu() -> InlineKeyboardMarkup:
+def menu(chat_id: int | None = None) -> InlineKeyboardMarkup:
     u"""Меню команды: всё, что умеет бот, — кнопками.
 
     AleX 19.09.2026: «нельзя это кнопками всё прилепить, чтобы команду не
     называть». Пульт — кнопка мини-приложения, остальное — обычные
     нажатия; без адреса пульта первая кнопка просто не показывается.
+
+    В рабочем чате кнопки пульта нет: телеграм не принимает мини-приложение
+    в группе и отвергает ВСЮ клавиатуру целиком — то есть меню не пришло бы
+    вовсе. Тот же приём, что и под уведомлениями о человеке (ban_ask).
+    chat_id больше нуля — личная переписка.
     """
     rows = []
-    panel = panel_button()
+    panel = panel_button() if chat_id is None or chat_id > 0 else None
     if panel:
         rows.append([panel])
     rows.append([InlineKeyboardButton(text=texts.MENU_BROADCAST, callback_data='mn:bc'),
