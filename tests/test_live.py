@@ -142,3 +142,31 @@ async def test_под_анонсом_кнопка_ведёт_на_эфир():
     кнопка = keyboards.live('https://t.me/x?livestream').inline_keyboard[0][0]
     assert кнопка.url == 'https://t.me/x?livestream'
     assert u'Смотреть' in кнопка.text
+
+
+# ------------------------- проба на себе (Sharp 20.09.2026)
+
+async def test_проба_эфира_уходит_только_нажавшему():
+    u"""«Как протестить, чтоб не обосраться потом?» — вот так."""
+    _люди(1, 2, 3)
+    db.live_add('https://t.me/x', u'Приходите', _через(7200), СВОЙ)
+    bot = FakeBot()
+
+    await admin.on_live_button(FakeCall('live:me:1', user=FakeUser(СВОЙ), bot=bot))
+
+    получатели = [c for k, c, _ in bot.sent if k == 'text']
+    assert СВОЙ in получатели                     # себе пришло
+    assert _кому(bot) == []                       # людям — нет
+    assert db.live(1)['status'] == 'ready'        # эфир ещё не объявлен
+
+
+async def test_после_пробы_кнопки_остаются_и_можно_объявить():
+    _люди(1)
+    db.live_add('https://t.me/x', u'', _через(7200), СВОЙ)
+    bot = FakeBot()
+    проба = FakeCall('live:me:1', user=FakeUser(СВОЙ), bot=bot)
+    await admin.on_live_button(проба)
+    assert not проба.edited                       # разметку не сняли
+
+    await live.announce(bot, 1)
+    assert _кому(bot) == [1]

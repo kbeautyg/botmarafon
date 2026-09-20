@@ -204,3 +204,17 @@ async def test_команда_проекта_а_не_только_владеле
     assert старт.answers, u'команда не ответила тому, кто в команде проекта'
     assert admin.waiting_broadcast(FakeMessage(text=u'текст', user=FakeUser(АДМИН)))
     assert 'рассылка' in admin.STATS_COMMANDS and 'отчёт' in admin.STATS_COMMANDS
+
+
+async def test_проба_рассылки_уходит_только_нажавшему():
+    u"""Sharp 20.09.2026: проверить, ничего не рассылая людям."""
+    _люди(1, 2, 3)
+    bot = FakeBot()
+    await _подготовить(bot, u'Новость дня')
+    bot.sent.clear()
+
+    await admin.on_broadcast_button(FakeCall('bc:me:1', user=FakeUser(АДМИН), bot=bot))
+
+    копии = [chat for kind, chat, _ in bot.sent if kind == 'copy']
+    assert копии == [АДМИН]                       # только себе
+    assert db.broadcast(1)['status'] == 'ready'   # рассылка не запущена

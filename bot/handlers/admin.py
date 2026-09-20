@@ -145,10 +145,22 @@ async def on_live_button(call: CallbackQuery):
     if not planned or planned['status'] != 'ready':
         await call.answer(u'Этот эфир уже объявлен или отменён')
         return
-    try:
-        await call.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    if action != 'me':
+        # Кнопки убираем только у решения: пробу можно нажать и дважды.
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    if action == 'me':
+        await call.answer(u'Присылаю пробу…')
+        try:
+            await call.bot.send_message(call.from_user.id,
+                                        live.announce_text(planned),
+                                        reply_markup=keyboards.live(planned['url']))
+            await call.message.answer(texts.TRY_DONE)
+        except Exception as err:
+            await call.message.answer(texts.TRY_FAILED.format(why=html.escape(str(err))[:200]))
+        return
     if action == 'no':
         db.live_status(live_id, 'cancelled')
         await call.answer(u'Отменено')
@@ -190,6 +202,23 @@ async def on_stuck(message: Message):
     if not config.is_team(message.from_user.id):
         return
     await _stuck_preview(message)
+
+
+@router.callback_query(F.data == 'stuck:me')
+async def on_stuck_try(call: CallbackQuery):
+    u"""Показать на себе, что получат застрявшие."""
+    if not config.is_team(call.from_user.id):
+        await call.answer()
+        return
+    await call.answer(u'Присылаю пробу…')
+    people = db.stuck_on_poll()
+    poll = people[0]['poll'] if people else 'day1'
+    try:
+        await call.bot.send_message(call.from_user.id, texts.POLL_QUESTIONS[poll],
+                                    reply_markup=keyboards.poll(poll))
+        await call.message.answer(texts.TRY_DONE)
+    except Exception as err:
+        await call.message.answer(texts.TRY_FAILED.format(why=html.escape(str(err))[:200]))
 
 
 @router.callback_query(F.data == 'stuck:go')
@@ -411,6 +440,14 @@ async def on_broadcast_button(call: CallbackQuery):
     task = db.broadcast(task_id)
     if not task or task['status'] not in ('ready',):
         await call.answer(u'Эта рассылка уже не ждёт подтверждения')
+        return
+    if action == 'me':
+        # Проба на себе: копия того же сообщения, людям ничего не уходит.
+        await call.answer(u'Присылаю пробу…')
+        result = await broadcast.send_one(call.bot, call.from_user.id,
+                                          task['chat_id'], task['message_id'])
+        await call.message.answer(texts.TRY_DONE if result == 'ok'
+                                  else texts.TRY_FAILED.format(why=result))
         return
     if action == 'no':
         db.broadcast_status(task_id, 'cancelled')

@@ -125,6 +125,8 @@ def live(url: str) -> InlineKeyboardMarkup:
 def live_confirm(live_id: int, count: int) -> InlineKeyboardMarkup:
     u"""Анонс уходит всем сразу — значит спрашиваем перед отправкой."""
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.TRY_BUTTON,
+                              callback_data='live:me:%d' % live_id)],
         [InlineKeyboardButton(text=texts.LIVE_GO.format(count=count),
                               callback_data='live:go:%d' % live_id)],
         [InlineKeyboardButton(text=texts.BROADCAST_CANCEL,
@@ -133,9 +135,10 @@ def live_confirm(live_id: int, count: int) -> InlineKeyboardMarkup:
 
 def stuck(count: int) -> InlineKeyboardMarkup:
     u"""Подтверждение досылки: людям уйдёт сообщение, значит спрашиваем."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=texts.STUCK_GO.format(count=count),
-                             callback_data='stuck:go')]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.TRY_BUTTON, callback_data='stuck:me')],
+        [InlineKeyboardButton(text=texts.STUCK_GO.format(count=count),
+                              callback_data='stuck:go')]])
 
 
 def menu() -> InlineKeyboardMarkup:
@@ -206,6 +209,8 @@ def broadcast(broadcast_id: int, count: int) -> InlineKeyboardMarkup:
     кнопке сразу видно, скольким людям уйдёт.
     """
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.TRY_BUTTON,
+                              callback_data='bc:me:%d' % broadcast_id)],
         [InlineKeyboardButton(text=texts.BROADCAST_GO.format(count=count),
                               callback_data='bc:go:%d' % broadcast_id)],
         [InlineKeyboardButton(text=texts.BROADCAST_CANCEL,
