@@ -144,12 +144,18 @@
     /* В режиме выбора строка не открывает переписку, а ставит галочку:
        промахнуться пальцем и вместо отметки уйти в чужой диалог, потеряв
        весь набранный список, слишком легко. */
-    if (state.picking) {
+    if (state.picking && !person.banned) {
       var mark = document.createElement('span');
       mark.className = 'tick';
       row.insertBefore(mark, ava);
       row.classList.toggle('is-picked', state.picked.indexOf(person.id) > -1);
       row.addEventListener('click', function () { togglePick(person.id, row); });
+    } else if (state.picking) {
+      // Из чёрного списка: бот с ним не работает — отмечать нечего.
+      var off = document.createElement('span');
+      off.className = 'tick tick--off';
+      row.insertBefore(off, ava);
+      row.classList.add('is-off');
     } else {
       row.addEventListener('click', function () { openChat(person.id); });
     }

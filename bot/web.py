@@ -334,8 +334,13 @@ def picked_ids(source) -> list:
             user_id = int(str(item).strip())
         except (TypeError, ValueError):
             continue
-        if user_id and user_id not in out and db.get_user(user_id):
-            out.append(user_id)
+        if not user_id or user_id in out or not db.get_user(user_id):
+            continue
+        # Чёрный список значит «бот с ним больше не работает»: его обходят и
+        # дожим, и рассылка. Галочка в списке — не повод сделать исключение.
+        if db.is_banned(user_id):
+            continue
+        out.append(user_id)
     return out
 
 

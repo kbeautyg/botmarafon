@@ -118,6 +118,8 @@ html, body {
   background-repeat: no-repeat;
 }
 .person.is-picked { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.tick--off { border-style: dashed; opacity: .5; }
+.person.is-off { opacity: .55; cursor: default; }
 
 /* Полоса выбора прижата к низу списка: её видно и когда список пролистан. */
 .picked {
