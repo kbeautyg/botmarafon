@@ -42,7 +42,7 @@ def _is_admin(user_id: int) -> bool:
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'panel', 'пульт', 'рассылка', 'broadcast',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
-                  'меню', 'menu')
+                  'меню', 'menu', 'дошли', 'stuck')
 
 
 def _command(message: Message) -> str:
@@ -84,6 +84,71 @@ async def on_help(message: Message):
     if not _is_admin(message.from_user.id):
         return
     await message.answer(texts.ADMIN_HELP)
+
+
+# --------------------------------------------- вопрос застрявшим
+#
+# Sharp 20.09.2026: «дошли». До кнопок под записью люди стояли на вопросе,
+# которого не видели: кнопки приходили отдельным сообщением позже, а в
+# тексте дня уже было сказано «нажми ниже». Старые сообщения Telegram не
+# меняет — остаётся прислать вопрос заново.
+
+def _stuck_by_day(people: list) -> str:
+    u"""«день 1 — 12, день 2 — 3» для предпросмотра."""
+    counts = {}
+    for person in people:
+        counts[person['poll']] = counts.get(person['poll'], 0) + 1
+    return u', '.join(u'день %s — %d' % (poll.replace('day', ''), n)
+                      for poll, n in sorted(counts.items()))
+
+
+async def _stuck_preview(message: Message) -> None:
+    u"""Сколько людей ждут кнопок — и кнопка подтверждения."""
+    people = db.stuck_on_poll()
+    if not people:
+        await message.answer(texts.STUCK_NONE)
+        return
+    await message.answer(
+        texts.STUCK_ASK.format(count=len(people), days=_stuck_by_day(people)),
+        reply_markup=keyboards.stuck(len(people)))
+
+
+@router.message(Command('дошли', 'stuck'))
+async def on_stuck(message: Message):
+    if not config.is_team(message.from_user.id):
+        return
+    await _stuck_preview(message)
+
+
+@router.callback_query(F.data == 'stuck:go')
+async def on_stuck_go(call: CallbackQuery):
+    u"""Разослать вопрос с кнопками — по одному, не торопясь."""
+    if not config.is_team(call.from_user.id):
+        await call.answer()
+        return
+    await call.answer(u'Досылаю…')
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    sent = gone = failed = 0
+    for person in db.stuck_on_poll():
+        try:
+            await delivery.send_poll(call.bot, person['user_id'], person['poll'])
+        except delivery.Gone:
+            db.mark_blocked(person['user_id'])
+            gone += 1
+            continue
+        except Exception as err:
+            log.warning(u'вопрос %s не дослан %s: %s', person['poll'], person['user_id'], err)
+            failed += 1
+            continue
+        db.log_event(person['user_id'], 'poll', person['poll'])
+        sent += 1
+        await asyncio.sleep(0.05)
+    log.info(u'досылка вопроса: ушло %d, закрыли бота %d, сбоев %d', sent, gone, failed)
+    await call.message.answer(texts.STUCK_DONE.format(sent=sent, gone=gone, failed=failed))
 
 
 # ------------------------------------------------------------ меню
@@ -138,6 +203,8 @@ async def on_menu_button_pressed(call: CallbackQuery):
     elif what == 'who':
         for part in stats.who_messages(30):
             await call.message.answer(part)
+    elif what == 'stuck':
+        await _stuck_preview(call.message)
     elif what == 'ban':
         await call.message.answer(insights.render('bl', 'all') + texts.MENU_BAN_HINT)
     elif what in ('links', 'chats'):

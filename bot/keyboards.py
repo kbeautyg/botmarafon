@@ -116,6 +116,13 @@ def watch(url: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.WATCH_BUTTON, url=url)]])
 
 
+def stuck(count: int) -> InlineKeyboardMarkup:
+    u"""Подтверждение досылки: людям уйдёт сообщение, значит спрашиваем."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.STUCK_GO.format(count=count),
+                             callback_data='stuck:go')]])
+
+
 def menu() -> InlineKeyboardMarkup:
     u"""Меню команды: всё, что умеет бот, — кнопками.
 
@@ -131,7 +138,8 @@ def menu() -> InlineKeyboardMarkup:
                  InlineKeyboardButton(text=texts.MENU_DAILY, callback_data='mn:day')])
     rows.append([InlineKeyboardButton(text=texts.MENU_STATS, callback_data='mn:stats'),
                  InlineKeyboardButton(text=texts.MENU_WHO, callback_data='mn:who')])
-    rows.append([InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_STUCK, callback_data='mn:stuck'),
+                 InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
     rows.append([InlineKeyboardButton(text=texts.MENU_LINKS, callback_data='mn:links'),
                  InlineKeyboardButton(text=texts.MENU_CHATS, callback_data='mn:chats')])
     return InlineKeyboardMarkup(inline_keyboard=rows)

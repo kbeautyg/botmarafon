@@ -539,6 +539,25 @@ def timeline(user_id: int) -> list:
     return sorted(out, key=lambda item: item['at'])
 
 
+def stuck_on_poll() -> list[dict]:
+    u"""Кто стоит на вопросе без ответа и ждёт кнопок.
+
+    До 20.09.2026 кнопки «Да»/«Нет» приходили отдельным сообщением через
+    два с половиной часа, а в тексте дня уже было написано «нажми на
+    кнопках ниже». Люди искали их под записью и не находили — эти и
+    застряли. Берём тех, у кого вопрос открыт, ответа нет, бота не
+    закрывали и в чёрном списке не состоят.
+    """
+    rows = _conn.execute(
+        'SELECT u.user_id, u.poll FROM users u '
+        "WHERE u.poll IS NOT NULL AND u.poll != '' "
+        'AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' '
+        'AND NOT EXISTS (SELECT 1 FROM answers a '
+        '                WHERE a.user_id = u.user_id AND a.poll = u.poll) '
+        'ORDER BY u.user_id').fetchall()
+    return [dict(r) for r in rows]
+
+
 def answers_of(user_id: int) -> dict:
     u"""Все ответы человека: {'day1': ('yes', когда)} — для карточки в пульте."""
     rows = _conn.execute('SELECT poll, answer, answered FROM answers WHERE user_id=?',
