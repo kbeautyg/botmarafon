@@ -18,7 +18,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from .. import (backup, broadcast, config, daily, db, delivery, funnel, insights,
-                keyboards, leads, scheduler, stats, texts)
+                keyboards, leads, live, scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -42,7 +42,7 @@ def _is_admin(user_id: int) -> bool:
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'panel', 'пульт', 'рассылка', 'broadcast',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
-                  'меню', 'menu', 'дошли', 'stuck')
+                  'меню', 'menu', 'дошли', 'stuck', 'эфир', 'live')
 
 
 def _command(message: Message) -> str:
@@ -84,6 +84,78 @@ async def on_help(message: Message):
     if not _is_admin(message.from_user.id):
         return
     await message.answer(texts.ADMIN_HELP)
+
+
+# ------------------------------------------------------------ эфир
+#
+# Павел 20.09.2026 хочет вести эфиры «через бота». Саму трансляцию бот не
+# ведёт — это видеочат канала; бот делает то, из-за чего эфиры и
+# проваливаются: собирает людей и вовремя напоминает.
+
+LIVE_KEY = 'live:await:%d'
+
+
+async def _live_ask(message: Message) -> None:
+    db.put_content(LIVE_KEY % message.chat.id, 'await', '1')
+    planned = db.live_next()
+    if planned:
+        await message.answer(texts.LIVE_PLANNED.format(
+            when=live.when_text(planned['at']), url=planned['url']))
+    await message.answer(texts.LIVE_ASK)
+
+
+@router.message(Command('эфир', 'live'))
+async def on_live(message: Message):
+    if not config.is_team(message.from_user.id):
+        return
+    await _live_ask(message)
+
+
+def waiting_live(message: Message) -> bool:
+    u"""Команда только что нажала «Эфир» — это сообщение с датой и ссылкой."""
+    if not message.from_user or not config.is_team(message.from_user.id):
+        return False
+    stored = db.get_content(LIVE_KEY % message.chat.id)
+    return bool(stored and stored[1]) and bool(message.text)
+
+
+@router.message(waiting_live)
+async def on_live_message(message: Message):
+    at, url, own = live.parse(message.text)
+    if not at:
+        await message.answer(texts.LIVE_BAD)
+        return
+    db.put_content(LIVE_KEY % message.chat.id, 'await', '')
+    live_id = db.live_add(url, own, at, message.from_user.id)
+    count = db.broadcast_left(0)
+    await message.answer(texts.LIVE_CONFIRM.format(when=live.when_text(at), count=count))
+    # Показываем ровно то сообщение, которое получат люди.
+    await message.answer(live.announce_text(db.live(live_id)),
+                         reply_markup=keyboards.live(url))
+    await message.answer(u'\u2b07\ufe0f', reply_markup=keyboards.live_confirm(live_id, count))
+
+
+@router.callback_query(F.data.startswith('live:'))
+async def on_live_button(call: CallbackQuery):
+    if not config.is_team(call.from_user.id):
+        await call.answer()
+        return
+    action, live_id = call.data.split(':')[1], int(call.data.split(':')[2])
+    planned = db.live(live_id)
+    if not planned or planned['status'] != 'ready':
+        await call.answer(u'Этот эфир уже объявлен или отменён')
+        return
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    if action == 'no':
+        db.live_status(live_id, 'cancelled')
+        await call.answer(u'Отменено')
+        await call.message.answer(texts.BROADCAST_CANCELLED)
+        return
+    await call.answer(u'Объявляю…')
+    asyncio.create_task(live.announce(call.bot, live_id))
 
 
 # --------------------------------------------- вопрос застрявшим
@@ -203,6 +275,8 @@ async def on_menu_button_pressed(call: CallbackQuery):
     elif what == 'who':
         for part in stats.who_messages(30):
             await call.message.answer(part)
+    elif what == 'live':
+        await _live_ask(call.message)
     elif what == 'stuck':
         await _stuck_preview(call.message)
     elif what == 'ban':

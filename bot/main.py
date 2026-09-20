@@ -9,7 +9,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from . import (backup, broadcast, config, daily, db, delivery, handlers, leads,
-               nudge, scheduler, stats, texts, web)
+               live, nudge, scheduler, stats, texts, web)
 
 log = logging.getLogger('marathon')
 
@@ -83,6 +83,7 @@ async def run():
     reporter = asyncio.create_task(stats.loop(bot))
     nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
     reporter_daily = asyncio.create_task(daily.loop(bot))  # отчёт за сутки ночью
+    liver = asyncio.create_task(live.loop(bot))       # напоминания об эфире
     # Пульт админа поднимается рядом с ботом: та же база, тот же процесс.
     # Нет порта (машина разработчика) — бот работает как раньше, без пульта.
     # Рассылка, прерванная деплоем, продолжается с того же места.
@@ -97,6 +98,7 @@ async def run():
         reporter.cancel()
         nudger.cancel()
         reporter_daily.cancel()
+        liver.cancel()
         if panel:
             await panel.cleanup()
         await bot.session.close()

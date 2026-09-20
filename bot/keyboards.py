@@ -116,6 +116,21 @@ def watch(url: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=texts.WATCH_BUTTON, url=url)]])
 
 
+def live(url: str) -> InlineKeyboardMarkup:
+    u"""Кнопка «смотреть эфир» под анонсом и напоминаниями."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.LIVE_BUTTON, url=url)]])
+
+
+def live_confirm(live_id: int, count: int) -> InlineKeyboardMarkup:
+    u"""Анонс уходит всем сразу — значит спрашиваем перед отправкой."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.LIVE_GO.format(count=count),
+                              callback_data='live:go:%d' % live_id)],
+        [InlineKeyboardButton(text=texts.BROADCAST_CANCEL,
+                              callback_data='live:no:%d' % live_id)]])
+
+
 def stuck(count: int) -> InlineKeyboardMarkup:
     u"""Подтверждение досылки: людям уйдёт сообщение, значит спрашиваем."""
     return InlineKeyboardMarkup(inline_keyboard=[[
@@ -138,8 +153,9 @@ def menu() -> InlineKeyboardMarkup:
                  InlineKeyboardButton(text=texts.MENU_DAILY, callback_data='mn:day')])
     rows.append([InlineKeyboardButton(text=texts.MENU_STATS, callback_data='mn:stats'),
                  InlineKeyboardButton(text=texts.MENU_WHO, callback_data='mn:who')])
-    rows.append([InlineKeyboardButton(text=texts.MENU_STUCK, callback_data='mn:stuck'),
-                 InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_LIVE, callback_data='mn:live'),
+                 InlineKeyboardButton(text=texts.MENU_STUCK, callback_data='mn:stuck')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
     rows.append([InlineKeyboardButton(text=texts.MENU_LINKS, callback_data='mn:links'),
                  InlineKeyboardButton(text=texts.MENU_CHATS, callback_data='mn:chats')])
     return InlineKeyboardMarkup(inline_keyboard=rows)

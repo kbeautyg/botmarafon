@@ -129,6 +129,28 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   targets    TEXT                          -- кому именно; пусто — всем
 );
 
+-- Эфиры (Павел 20.09.2026). Бот не ведёт трансляцию — он собирает на неё
+-- людей: объявляет, напоминает за час и за десять минут и зовёт в момент
+-- начала. Напоминания живут в базе, иначе деплой между анонсом и эфиром
+-- стёр бы расписание.
+CREATE TABLE IF NOT EXISTS lives (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  url    TEXT NOT NULL,          -- куда вести людей
+  text   TEXT,                   -- свои слова к анонсу
+  at     REAL NOT NULL,          -- когда начинается
+  author INTEGER NOT NULL,
+  made   REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ready'   -- ready | going | done | cancelled
+);
+
+-- Какие напоминания уже ушли: одно на эфир и срок, дважды не шлём.
+CREATE TABLE IF NOT EXISTS live_reminders (
+  live_id INTEGER NOT NULL,
+  left    INTEGER NOT NULL,      -- за сколько секунд до начала
+  at      REAL NOT NULL,
+  PRIMARY KEY (live_id, left)
+);
+
 -- Чёрный список (AleX 16.09.2026): одна строка на человека. Убрали из
 -- списка — строка остаётся с removed_at: статистике нужна история, а не
 -- только кто в списке сейчас. Имя и ник — на момент добавления: человек
@@ -410,6 +432,45 @@ def answered(user_id: int, poll: str) -> bool:
     u"""Ответил ли человек на вопрос в этом прогоне (reset_funnel стирает ответы)."""
     return _conn.execute('SELECT 1 FROM answers WHERE user_id=? AND poll=?',
                          (user_id, poll)).fetchone() is not None
+
+
+# ------------------------------------------------------------------ эфир
+
+def live_add(url: str, text: str, at: float, author: int) -> int:
+    return _run('INSERT INTO lives (url, text, at, author, made) VALUES (?, ?, ?, ?, ?)',
+                (url, text or '', at, author, time.time())).lastrowid
+
+
+def live(live_id: int) -> dict | None:
+    row = _conn.execute('SELECT * FROM lives WHERE id=?', (live_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def live_status(live_id: int, status: str) -> None:
+    _run('UPDATE lives SET status=? WHERE id=?', (status, live_id))
+
+
+def lives_going() -> list[dict]:
+    u"""Объявленные эфиры, которые ещё не прошли."""
+    rows = _conn.execute("SELECT * FROM lives WHERE status='going' ORDER BY at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def live_next() -> dict | None:
+    u"""Ближайший объявленный эфир — для меню и /эфир без аргументов."""
+    row = _conn.execute("SELECT * FROM lives WHERE status IN ('ready','going') "
+                        'AND at > ? ORDER BY at LIMIT 1', (time.time(),)).fetchone()
+    return dict(row) if row else None
+
+
+def live_remind(live_id: int, left: int) -> None:
+    _run('INSERT OR IGNORE INTO live_reminders (live_id, left, at) VALUES (?, ?, ?)',
+         (live_id, left, time.time()))
+
+
+def live_reminded(live_id: int, left: int) -> bool:
+    return _conn.execute('SELECT 1 FROM live_reminders WHERE live_id=? AND left=?',
+                         (live_id, left)).fetchone() is not None
 
 
 # --------------------------------------------------------- отчёт за день
