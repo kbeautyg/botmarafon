@@ -251,3 +251,77 @@ async def test_опоздавшее_напоминание_не_уходит():
     assert await live.tick(bot, now=at - 3600 + live.LATE + 60) == 0
     assert _кому(bot) == []
     assert db.live_reminded(1, 3600)                   # отмечено — не придёт и позже
+
+
+# ------------------------- прогон на выбранных (Sharp 21.09.2026)
+#
+# «Чтобы тест показался одному человеку, которого я выбрал»: прогон уходит
+# тем, кого назвали ником или ID. Остальным людям — ничего.
+
+async def test_прогон_уходит_только_выбранному_по_нику():
+    _люди(1, 2, СВОЙ)
+    db.remember_user(5, 'alex_kent', u'AleX')
+    at = _через(900)
+    db.live_add('https://t.me/x', u'', at, СВОЙ)
+    bot = FakeBot()
+
+    await admin.on_live_button(FakeCall('live:pick:1', user=FakeUser(СВОЙ), bot=bot))
+    выбор = FakeMessage(text=u'@alex_kent', user=FakeUser(СВОЙ), bot=bot)
+    assert admin.waiting_live_pick(выбор)
+    await admin.on_live_pick(выбор)
+    await _дать_поработать()
+
+    людям = sorted(c for k, c, _ in bot.sent if k == 'text' and c not in (СВОЙ,))
+    assert людям == [5]                                # только AleX
+    assert u'@alex_kent' in выбор.answers[-1]
+
+    assert await live.tick(bot, now=at - 590) == 1
+    людям = sorted(c for k, c, _ in bot.sent if k == 'text' and c not in (СВОЙ,))
+    assert людям == [5, 5]                             # и напоминание — ему же
+
+
+async def test_себя_можно_добавить_словом_мне():
+    _люди(1, СВОЙ)
+    db.remember_user(5, 'alex_kent', u'AleX')
+    db.live_add('https://t.me/x', u'', _через(900), СВОЙ)
+    bot = FakeBot()
+
+    await admin.on_live_button(FakeCall('live:pick:1', user=FakeUser(СВОЙ), bot=bot))
+    await admin.on_live_pick(FakeMessage(text=u'@alex_kent мне', user=FakeUser(СВОЙ), bot=bot))
+    await _дать_поработать()
+
+    assert sorted(int(x) for x in db.live(1)['targets'].split(',')) == sorted([5, СВОЙ])
+    assert 1 not in [c for k, c, _ in bot.sent]        # человек 1 — ничего
+
+
+async def test_незнакомый_ник_не_запускает_прогон():
+    _люди(1, СВОЙ)
+    db.live_add('https://t.me/x', u'', _через(900), СВОЙ)
+    bot = FakeBot()
+
+    await admin.on_live_button(FakeCall('live:pick:1', user=FakeUser(СВОЙ), bot=bot))
+    выбор = FakeMessage(text=u'@nobody_here', user=FakeUser(СВОЙ), bot=bot)
+    await admin.on_live_pick(выбор)
+
+    assert u'нет в боте' in выбор.answers[-1]
+    assert db.live(1)['status'] == 'ready'             # ничего не ушло
+    assert admin.waiting_live_pick(FakeMessage(text=u'@alex', user=FakeUser(СВОЙ)))
+
+
+async def test_отмена_снимает_выбор_получателей():
+    _люди(СВОЙ)
+    db.live_add('https://t.me/x', u'', _через(900), СВОЙ)
+    await admin.on_live_button(FakeCall('live:pick:1', user=FakeUser(СВОЙ), bot=FakeBot()))
+    assert not admin.waiting_live_pick(FakeMessage(text=u'/отмена', user=FakeUser(СВОЙ)))
+    await admin.on_cancel(FakeMessage(text=u'/отмена', user=FakeUser(СВОЙ)))
+    assert not admin.waiting_live_pick(FakeMessage(text=u'@alex', user=FakeUser(СВОЙ)))
+
+
+async def test_отмена_во_время_ожидания_даты_эфира_работает():
+    u"""LIVE_ASK обещает «передумали — /отмена», а «/отмена» разбиралась как
+    дата эфира и отвечала «не разобрал»."""
+    await admin._live_ask(FakeMessage(text=u'/эфир', user=FakeUser(СВОЙ)))
+    assert not admin.waiting_live(FakeMessage(text=u'/отмена', user=FakeUser(СВОЙ)))
+    await admin.on_cancel(FakeMessage(text=u'/отмена', user=FakeUser(СВОЙ)))
+    assert not admin.waiting_live(FakeMessage(text=u'21.09 19:00 https://t.me/x',
+                                              user=FakeUser(СВОЙ)))

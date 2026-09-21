@@ -94,6 +94,8 @@ async def on_help(message: Message):
 # проваливаются: собирает людей и вовремя напоминает.
 
 LIVE_KEY = 'live:await:%d'
+# Нажали «Прогнать на выбранных» — следующее сообщение в этом чате: кому.
+LIVE_PICK_KEY = 'live:pick:%d'
 
 
 async def _live_ask(message: Message) -> None:
@@ -118,8 +120,10 @@ def waiting_live(message: Message) -> bool:
     u"""Команда только что нажала «Эфир» — это сообщение с датой и ссылкой."""
     if not message.from_user or not config.is_team(message.from_user.id):
         return False
+    if not message.text or message.text.startswith('/'):
+        return False                       # /отмена и прочие команды — мимо
     stored = db.get_content(LIVE_KEY % message.chat.id)
-    return bool(stored and stored[1]) and bool(message.text)
+    return bool(stored and stored[1])
 
 
 @router.message(waiting_live)
@@ -138,6 +142,60 @@ async def on_live_message(message: Message):
     await message.answer(u'\u2b07\ufe0f', reply_markup=keyboards.live_confirm(live_id, count))
 
 
+def waiting_live_pick(message: Message) -> bool:
+    u"""Команда нажала «Прогнать на выбранных» — это список, кому."""
+    if not message.from_user or not config.is_team(message.from_user.id):
+        return False
+    if not message.text or message.text.startswith('/'):
+        return False                       # /отмена и прочие команды — мимо
+    stored = db.get_content(LIVE_PICK_KEY % message.chat.id)
+    return bool(stored and stored[1])
+
+
+ME_WORDS = {u'мне', u'я', u'меня', u'себе', u'me'}
+
+
+def _who(user_ids: list) -> str:
+    u"""«@alex_kent, Павел» — как назвать получателей прогона."""
+    names = []
+    for uid in user_ids:
+        person = db.get_user(uid) or {}
+        names.append(u'@' + person['username'] if person.get('username')
+                     else person.get('first_name') or str(uid))
+    return html.escape(u', '.join(names))
+
+
+@router.message(waiting_live_pick)
+async def on_live_pick(message: Message):
+    u"""Прогон эфира тем, кого назвали: анонс и напоминания — только им."""
+    from .blacklist import _refs, _resolve
+
+    live_id = int(db.get_content(LIVE_PICK_KEY % message.chat.id)[1])
+    found, missing = [], []
+    for ref in _refs(message.text):
+        if ref.lower() in ME_WORDS:
+            found.append(message.from_user.id)
+            continue
+        user_id = _resolve(ref)
+        (found if user_id and db.get_user(user_id) else missing).append(user_id or ref)
+    found = list(dict.fromkeys(found))
+    if not found:
+        await message.answer(texts.LIVE_PICK_NONE.format(
+            who=html.escape(u', '.join(str(x) for x in missing)) or u'—'))
+        return
+    db.put_content(LIVE_PICK_KEY % message.chat.id, 'await', '')
+    planned = db.live(live_id)
+    if not planned or planned['status'] != 'ready':
+        await message.answer(u'Этот эфир уже объявлен или отменён — заведите новый: /эфир')
+        return
+    db.live_only_for(live_id, found)
+    note = texts.LIVE_PICK_MISSING.format(
+        who=html.escape(u', '.join(str(x) for x in missing))) if missing else u''
+    await message.answer(texts.LIVE_TEST_STARTED.format(
+        who=_who(found), plan=_test_plan(planned['at'])) + note)
+    asyncio.create_task(live.announce(message.bot, live_id))
+
+
 @router.callback_query(F.data.startswith('live:'))
 async def on_live_button(call: CallbackQuery):
     if not config.is_team(call.from_user.id):
@@ -147,6 +205,11 @@ async def on_live_button(call: CallbackQuery):
     planned = db.live(live_id)
     if not planned or planned['status'] != 'ready':
         await call.answer(u'Этот эфир уже объявлен или отменён')
+        return
+    if action == 'pick':
+        db.put_content(LIVE_PICK_KEY % call.message.chat.id, 'await', str(live_id))
+        await call.answer()
+        await call.message.answer(texts.LIVE_PICK_ASK)
         return
     if action != 'me':
         # Кнопки убираем только у решения: пробу можно нажать и дважды.
@@ -174,7 +237,7 @@ async def on_live_button(call: CallbackQuery):
         db.live_only_for(live_id, [call.from_user.id])
         await call.answer(u'Прогон пошёл')
         await call.message.answer(texts.LIVE_TEST_STARTED.format(
-            plan=_test_plan(planned['at'])))
+            who=u'только вы', plan=_test_plan(planned['at'])))
         asyncio.create_task(live.announce(call.bot, live_id))
         return
     await call.answer(u'Объявляю…')
@@ -443,6 +506,9 @@ async def on_cancel(message: Message):
     if not config.is_team(message.from_user.id):
         return
     db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
+    # LIVE_ASK обещает «передумали — /отмена», а эфир ждал даты и после неё
+    db.put_content(LIVE_KEY % message.chat.id, 'await', '')
+    db.put_content(LIVE_PICK_KEY % message.chat.id, 'await', '')
     await message.answer(texts.BROADCAST_CANCELLED)
 
 

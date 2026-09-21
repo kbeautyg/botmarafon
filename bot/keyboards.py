@@ -129,6 +129,8 @@ def live_confirm(live_id: int, count: int) -> InlineKeyboardMarkup:
                               callback_data='live:me:%d' % live_id)],
         [InlineKeyboardButton(text=texts.LIVE_TEST_BUTTON,
                               callback_data='live:test:%d' % live_id)],
+        [InlineKeyboardButton(text=texts.LIVE_PICK_BUTTON,
+                              callback_data='live:pick:%d' % live_id)],
         [InlineKeyboardButton(text=texts.LIVE_GO.format(count=count),
                               callback_data='live:go:%d' % live_id)],
         [InlineKeyboardButton(text=texts.BROADCAST_CANCEL,
