@@ -166,3 +166,11 @@ def test_короткие_метки_alex_понятны_в_статистике
     ссылки = stats.links_report('finish_marafon_bot')
     for метка in ('az', 'ls', 'nc', 'tg_ads1'):
         assert u'?start=%s</code>' % метка in ссылки
+
+
+def test_реклама_в_telegram_ads_видна_под_своим_именем():
+    u"""AleX 21.09.2026: объявление ведёт на ?start=tgADS, а в отчёте
+    переходы искали под «Telegram» — там их не было, стояло «tgads»."""
+    assert stats.parse_source('tgADS') == 'tgads'
+    assert stats.label('tgads') == u'Telegram Ads'
+    assert stats.label('tgads_story2') == u'Telegram Ads ← story2'
