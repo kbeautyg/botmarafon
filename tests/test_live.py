@@ -325,3 +325,19 @@ async def test_отмена_во_время_ожидания_даты_эфира
     await admin.on_cancel(FakeMessage(text=u'/отмена', user=FakeUser(СВОЙ)))
     assert not admin.waiting_live(FakeMessage(text=u'21.09 19:00 https://t.me/x',
                                               user=FakeUser(СВОЙ)))
+
+
+async def test_кнопки_эфира_стоят_под_читаемым_сообщением():
+    u"""Ширину кнопок задаёт ширина сообщения: под одной «⬇️» они сжимались
+    до «🧪 Прог…», и две кнопки прогона было не отличить (21.09.2026)."""
+    bot = FakeBot()
+    сообщение = FakeMessage(text=u'21.09 19:30 https://t.me/x', user=FakeUser(СВОЙ), bot=bot)
+    await admin._live_ask(FakeMessage(text=u'/эфир', user=FakeUser(СВОЙ), bot=bot))
+    await admin.on_live_message(сообщение)
+
+    с_кнопками = сообщение.answers[-1]
+    assert с_кнопками == texts.LIVE_CHOOSE
+    assert len(с_кнопками) > 60                        # сообщение широкое
+    надписи = [b.text for row in сообщение.markups[-1].inline_keyboard for b in row]
+    assert len(set(надписи)) == len(надписи)           # все кнопки разные
+    assert any(u'всем' in n for n in надписи)          # видно, какая — по-настоящему

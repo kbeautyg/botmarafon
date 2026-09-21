@@ -139,7 +139,7 @@ async def on_live_message(message: Message):
     # Показываем ровно то сообщение, которое получат люди.
     await message.answer(live.announce_text(db.live(live_id)),
                          reply_markup=keyboards.live(url))
-    await message.answer(u'\u2b07\ufe0f', reply_markup=keyboards.live_confirm(live_id, count))
+    await message.answer(texts.LIVE_CHOOSE, reply_markup=keyboards.live_confirm(live_id, count))
 
 
 def waiting_live_pick(message: Message) -> bool:
