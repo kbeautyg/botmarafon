@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS lives (
   at     REAL NOT NULL,          -- когда начинается
   author INTEGER NOT NULL,
   made   REAL NOT NULL,
-  status TEXT NOT NULL DEFAULT 'ready'   -- ready | going | done | cancelled
+  status TEXT NOT NULL DEFAULT 'ready',  -- ready | going | done | cancelled
+  targets TEXT                   -- кому именно (прогон на себе); пусто — всем
 );
 
 -- Какие напоминания уже ушли: одно на эфир и срок, дважды не шлём.
@@ -228,6 +229,11 @@ def connect(path: str) -> sqlite3.Connection:
     broadcast_columns = [row[1] for row in _conn.execute('PRAGMA table_info(broadcasts)')]
     if broadcast_columns and 'targets' not in broadcast_columns:
         _conn.execute('ALTER TABLE broadcasts ADD COLUMN targets TEXT')
+    # 21.09.2026: эфир можно прогнать на себе — анонс и напоминания только
+    # тому, кто проверяет.
+    live_columns = [row[1] for row in _conn.execute('PRAGMA table_info(lives)')]
+    if live_columns and 'targets' not in live_columns:
+        _conn.execute('ALTER TABLE lives ADD COLUMN targets TEXT')
     _conn.commit()
     return _conn
 
@@ -457,10 +463,18 @@ def lives_going() -> list[dict]:
 
 
 def live_next() -> dict | None:
-    u"""Ближайший объявленный эфир — для меню и /эфир без аргументов."""
+    u"""Ближайший объявленный эфир — для меню и /эфир без аргументов.
+    Прогон на себе — не эфир: его в «ближайшие» не показываем."""
     row = _conn.execute("SELECT * FROM lives WHERE status IN ('ready','going') "
+                        "AND (targets IS NULL OR targets = '') "
                         'AND at > ? ORDER BY at LIMIT 1', (time.time(),)).fetchone()
     return dict(row) if row else None
+
+
+def live_only_for(live_id: int, user_ids: list) -> None:
+    u"""Эфир только этим людям — прогон на себе."""
+    _run('UPDATE lives SET targets=? WHERE id=?',
+         (','.join(str(int(uid)) for uid in user_ids), live_id))
 
 
 def live_remind(live_id: int, left: int) -> None:

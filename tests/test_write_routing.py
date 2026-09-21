@@ -74,3 +74,18 @@ async def test_ник_с_двоеточием_без_команды_доходи
     await dispatcher.feed_raw_update(Bot('42:TEST', session=session), upd)
     calls = [(type(c).__name__, c.chat_id, getattr(c, 'text', None)) for c in session.calls]
     assert ('SendMessage', PERSON, u'Добрый день!') in calls
+
+
+# /live с 11.09 возвращает админу боевые сроки после /test. 20.09 на неё же
+# повесили эфир, и она молча открывала его — сроки не возвращались.
+async def test_live_возвращает_боевые_сроки_а_не_открывает_эфир(dispatcher):
+    calls = await _send(dispatcher, SHARP, u'/live')
+    ответы = u' '.join(c[2] or u'' for c in calls if c[1] == SHARP)
+    assert u'Боевые сроки вернул' in ответы
+    assert texts.LIVE_ASK not in ответы
+
+
+@pytest.mark.parametrize('command', [u'/эфир', u'/stream'])
+async def test_эфир_открывается_своими_командами(dispatcher, command):
+    calls = await _send(dispatcher, ALEX, command)
+    assert any(texts.LIVE_ASK == (c[2] or u'') for c in calls)

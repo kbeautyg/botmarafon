@@ -30,6 +30,9 @@ log = logging.getLogger(__name__)
 REMINDERS = (3600, 600, 0)
 EVERY = 30                       # как часто смотреть, не пора ли напомнить
 PER_SECOND = 20                  # с той же скоростью, что рассылка
+# Напоминание, опоздавшее больше чем на пять минут, уже врёт: «эфир через
+# час» за двадцать минут до начала. Такое не шлём, а отмечаем пропущенным.
+LATE = 300
 
 
 def parse(text: str, now: float | None = None) -> tuple:
@@ -84,13 +87,15 @@ def announce_text(live: dict, left: int | None = None) -> str:
 
 
 async def _spread(bot, live: dict, left: int | None) -> dict:
-    u"""Разослать анонс или напоминание всем, кому бот ещё может писать."""
+    u"""Разослать анонс или напоминание всем, кому бот ещё может писать.
+    У прогона на себе список получателей свой — только проверяющий."""
     text = announce_text(live, left)
     keys = keyboards.live(live['url'])
+    picked = db.broadcast_picked(live)
     sent = gone = failed = 0
     after = 0
     while True:
-        people = db.broadcast_targets(after, 200)
+        people = db.broadcast_targets(after, 200, picked)
         if not people:
             break
         for user_id in people:
@@ -112,11 +117,20 @@ async def _spread(bot, live: dict, left: int | None) -> dict:
     return {'sent': sent, 'gone': gone, 'failed': failed}
 
 
-async def announce(bot, live_id: int) -> dict:
-    u"""Объявить об эфире — сразу после подтверждения."""
+async def announce(bot, live_id: int, now: float | None = None) -> dict:
+    u"""Объявить об эфире — сразу после подтверждения.
+
+    Напоминания, чей срок к этому моменту уже прошёл, отмечаются сразу:
+    эфир, объявленный за двадцать минут, не должен следом прислать людям
+    «эфир через час» (21.09.2026, нашлось при подготовке проверки).
+    """
     live = db.live(live_id)
     if not live or live['status'] != 'ready':
         return {}
+    now = time.time() if now is None else now
+    for left in REMINDERS:
+        if now >= live['at'] - left:
+            db.live_remind(live_id, left)
     db.live_status(live_id, 'going')
     result = await _spread(bot, live, None)
     await _report(bot, live, texts.LIVE_SENT, result)
@@ -125,7 +139,9 @@ async def announce(bot, live_id: int) -> dict:
 
 async def _report(bot, live: dict, head: str, result: dict) -> None:
     text = head + texts.LIVE_REPORT.format(**result)
-    for chat in dict.fromkeys((live['author'],) + config.report_recipients()):
+    # Прогон на себе — отчёт только проверяющему: команде он ни к чему.
+    everyone = () if live.get('targets') else config.report_recipients()
+    for chat in dict.fromkeys((live['author'],) + everyone):
         try:
             await bot.send_message(chat, text)
         except Exception:
@@ -151,11 +167,14 @@ async def tick(bot, now: float | None = None) -> int:
         for left in REMINDERS:
             if db.live_reminded(live['id'], left):
                 continue
-            # Напоминание за час не шлём, если до эфира уже меньше: человек
-            # получил бы «через час» за пять минут до начала.
             if now < live['at'] - left:
                 continue
             if now > live['at'] + 900:          # эфир давно начался — молчим
+                db.live_remind(live['id'], left)
+                continue
+            # Опоздавшее напоминание не шлём: «через час» за двадцать минут
+            # до начала врёт (бот лежал, или эфир объявили поздно).
+            if left and now > live['at'] - left + LATE:
                 db.live_remind(live['id'], left)
                 continue
             db.live_remind(live['id'], left)

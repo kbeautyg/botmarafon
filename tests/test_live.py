@@ -170,3 +170,84 @@ async def test_после_пробы_кнопки_остаются_и_можно
 
     await live.announce(bot, 1)
     assert _кому(bot) == [1]
+
+
+# ------------------- прогон эфира на себе (Sharp 21.09.2026: «как протестировать?»)
+#
+# «Сначала мне» показывает только анонс, а напоминания уходят по часам —
+# их так не проверить. Прогон проводит весь эфир целиком, но один человек.
+
+async def _дать_поработать():
+    import asyncio
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+async def test_прогон_проводит_весь_эфир_только_нажавшему():
+    _люди(1, 2, СВОЙ)
+    at = _через(900)                                   # эфир через 15 минут
+    db.live_add('https://t.me/x', u'', at, СВОЙ)
+    bot = FakeBot()
+
+    нажатие = FakeCall('live:test:1', user=FakeUser(СВОЙ), bot=bot)
+    await admin.on_live_button(нажатие)
+    await _дать_поработать()
+
+    assert _кому(bot) == []                            # людям — ничего
+    assert db.live(1)['status'] == 'going'
+    assert any(u'Прогон пошёл' in (a or u'') for a in нажатие.message.answers)
+    assert any(c == СВОЙ and u'Эфир с Павлом' in (p or u'') for k, c, p in bot.sent)
+
+    # напоминания по часам — тоже только проверяющему
+    assert await live.tick(bot, now=at - 590) == 1
+    assert await live.tick(bot, now=at + 5) == 1
+    assert _кому(bot) == []
+    мне = [p for k, c, p in bot.sent if c == СВОЙ and k == 'text']
+    assert any(u'через десять минут' in p for p in мне)
+    assert any(u'начался' in p for p in мне)
+
+
+async def test_прогон_не_виден_в_меню_как_ближайший_эфир():
+    _люди(СВОЙ)
+    db.live_add('https://t.me/x', u'', _через(900), СВОЙ)
+    await admin.on_live_button(FakeCall('live:test:1', user=FakeUser(СВОЙ), bot=FakeBot()))
+    await _дать_поработать()
+    assert db.live_next() is None
+
+
+def test_план_прогона_говорит_что_и_когда_придёт():
+    at = time.time() + 900
+    план = admin._test_plan(at)
+    assert u'через десять минут' in план and u'начался' in план
+    assert u'через час' not in план                    # до эфира меньше часа
+
+
+# ------------------------------------------ напоминания не врут о времени
+
+async def test_эфир_объявленный_поздно_не_шлёт_через_час():
+    u"""Анонс за двадцать минут: следом шло «эфир через час» — всем."""
+    _люди(1)
+    now = time.time()
+    at = now + 1200
+    db.live_add('https://t.me/x', u'', at, СВОЙ)
+    bot = FakeBot()
+
+    await live.announce(bot, 1, now=now)
+    assert await live.tick(bot, now=now + 30) == 0     # «через час» не уходит
+    assert await live.tick(bot, now=at - 590) == 1     # «через десять минут» — да
+
+    тексты = [p for k, c, p in bot.sent if c == 1]
+    assert not any(u'через час' in p for p in тексты)
+
+
+async def test_опоздавшее_напоминание_не_уходит():
+    u"""Бот пролежал выкладку: «через час» за пятьдесят минут — уже враньё."""
+    _люди(1)
+    at = _через(7200)
+    db.live_add('https://t.me/x', u'', at, СВОЙ)
+    db.live_status(1, 'going')
+    bot = FakeBot()
+
+    assert await live.tick(bot, now=at - 3600 + live.LATE + 60) == 0
+    assert _кому(bot) == []
+    assert db.live_reminded(1, 3600)                   # отмечено — не придёт и позже

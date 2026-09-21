@@ -11,6 +11,7 @@ import html
 import logging
 import os
 import re
+import time
 from datetime import datetime
 
 from aiogram import F, Router
@@ -42,7 +43,7 @@ def _is_admin(user_id: int) -> bool:
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'panel', 'пульт', 'рассылка', 'broadcast',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
-                  'меню', 'menu', 'дошли', 'stuck', 'эфир', 'live')
+                  'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream')
 
 
 def _command(message: Message) -> str:
@@ -104,8 +105,10 @@ async def _live_ask(message: Message) -> None:
     await message.answer(texts.LIVE_ASK)
 
 
-@router.message(Command('эфир', 'live'))
-async def on_live(message: Message):
+# Не /live: эта команда с 11.09 возвращает боевые сроки после /test, и
+# эфир, повешенный на неё же, её молча перехватывал (нашлось 21.09.2026).
+@router.message(Command('эфир', 'stream'))
+async def on_stream(message: Message):
     if not config.is_team(message.from_user.id):
         return
     await _live_ask(message)
@@ -166,8 +169,28 @@ async def on_live_button(call: CallbackQuery):
         await call.answer(u'Отменено')
         await call.message.answer(texts.BROADCAST_CANCELLED)
         return
+    if action == 'test':
+        # Весь эфир — анонс и напоминания по часам, — но только нажавшему.
+        db.live_only_for(live_id, [call.from_user.id])
+        await call.answer(u'Прогон пошёл')
+        await call.message.answer(texts.LIVE_TEST_STARTED.format(
+            plan=_test_plan(planned['at'])))
+        asyncio.create_task(live.announce(call.bot, live_id))
+        return
     await call.answer(u'Объявляю…')
     asyncio.create_task(live.announce(call.bot, live_id))
+
+
+def _test_plan(at: float, now: float | None = None) -> str:
+    u"""Какие напоминания придут при прогоне и во сколько (по Москве)."""
+    now = time.time() if now is None else now
+    lines = []
+    for left in live.REMINDERS:
+        if now < at - left:
+            moment = datetime.fromtimestamp(at - left, stats.MSK).strftime('%H:%M')
+            lines.append(u'• %s — %s' % (moment, texts.LIVE_NOW if left == 0 else
+                                          texts.LIVE_SOON.format(left=texts.LIVE_LEFT[left])))
+    return u'\n'.join(lines) or texts.LIVE_TEST_NOTHING_LEFT
 
 
 # --------------------------------------------- вопрос застрявшим
@@ -802,7 +825,8 @@ async def on_test(message: Message):
 
 
 @router.message(Command('live'))
-async def on_live(message: Message):
+async def on_live_speed(message: Message):
+    u"""Вернуть себе боевые сроки после /test."""
     if not _is_admin(message.from_user.id):
         return
     db.remember_user(message.from_user.id, message.from_user.username,
