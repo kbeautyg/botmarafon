@@ -242,6 +242,7 @@
     at.className = 'msg__at';
     at.textContent = when(message.at);
     row.appendChild(at);
+    if (message.file) { row.appendChild(fileTools(message)); }
 
     // Своё сообщение можно поправить или убрать у человека: нажатие
     // открывает под ним две кнопки (AleX 19.09.2026).
@@ -253,6 +254,93 @@
       });
     }
     return row;
+  }
+
+  /* ВЛОЖЕНИЕ ОТ ЧЕЛОВЕКА (AleX 21.09.2026: «человек скинул какой-то файл
+     в переписке с ботом, как посмотреть что это?»).
+
+     Картинку — фото или скриншот, присланный файлом, — показываем прямо в
+     диалоге. Всё остальное бот присылает вам в личку: там телеграм откроет
+     что угодно и любого размера. Кнопки видны сразу, без нажатия на
+     сообщение: пузырь «📎 файл» выглядел законченным, и догадаться, что на
+     него можно нажать, было нельзя. */
+  var VIEWABLE = { photo: true, document: true };
+
+  function fileTools(message) {
+    var box = document.createElement('div');
+    box.className = 'msg__tools';
+    if (VIEWABLE[message.kind]) {
+      box.appendChild(toolButton('Открыть', function (button) {
+        showFile(message, box, button);
+      }));
+    }
+    box.appendChild(toolButton(VIEWABLE[message.kind] ? 'Мне в Telegram' : 'Прислать мне в Telegram',
+      function (button) { sendFileToMe(message, button); }));
+    return box;
+  }
+
+  function toolButton(title, onClick) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'msg__tool';
+    button.textContent = title;
+    button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (button.disabled) { return; }
+      onClick(button);
+    });
+    return button;
+  }
+
+  /* Картинку забираем через POST и показываем из памяти (blob): подпись
+     Telegram, по которой пульт пускает, в адрес ссылки не попадает. */
+  function showFile(message, box, button) {
+    button.disabled = true;
+    button.textContent = 'Загружаю…';
+    fetch('/api/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData: initData, id: message.id, how: 'view' })
+    }).then(function (res) {
+      if (res.status === 415) {
+        // Не картинка — документ, архив, pdf: такое откроет только телеграм.
+        button.remove();
+        return sendFileToMe(message, null, 'Это не картинка — прислал вам в чат с ботом.');
+      }
+      if (!res.ok) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          throw new Error(data.error || ('ошибка ' + res.status));
+        });
+      }
+      return res.blob().then(function (blob) {
+        var img = document.createElement('img');
+        img.className = 'msg__img';
+        img.alt = 'вложение';
+        img.src = URL.createObjectURL(blob);
+        box.parentNode.insertBefore(img, box);
+        button.remove();
+      });
+    }).catch(function (err) {
+      button.disabled = false;
+      button.textContent = 'Открыть';
+      toast(err.message);
+    });
+  }
+
+  function sendFileToMe(message, button, done) {
+    if (button) { button.disabled = true; button.textContent = 'Отправляю…'; }
+    return api('file', { id: message.id, how: 'me' })
+      .then(function () {
+        toast(done || 'Прислал вам в чат с ботом — откройте там.');
+        if (button) { button.textContent = 'Прислал ✓'; }
+      })
+      .catch(function (err) {
+        toast(err.message);
+        if (button) {
+          button.disabled = false;
+          button.textContent = 'Прислать мне в Telegram';
+        }
+      });
   }
 
   function actionButton(title, onClick) {

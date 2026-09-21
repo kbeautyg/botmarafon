@@ -195,20 +195,60 @@ def _note(step: dict) -> str:
     return OFFER_NOTE
 
 
+# С 20.09.2026 кнопки «Да»/«Нет» уходят прямо под записью дня, и момент
+# вопроса пишется вместе с ней (delivery.open_poll) — на миллисекунды раньше
+# самой записи. В ленте это читалось задом наперёд: «бот спросил, посмотрел
+# ли первый день», а строкой ниже — «бот прислал запись первого дня» (AleX
+# 21.09.2026, скриншот диалога). Вопрос, совпавший с записью, — это кнопки
+# под ней, отдельной строкой его не показываем. Остаётся напоминание,
+# пришедшее позже, — его и правда присылали отдельно.
+SAME_MOMENT = 120
+
+
+def _steps(user_id: int) -> list[dict]:
+    u"""Шаги воронки для ленты — без вопроса, ушедшего вместе с записью."""
+    steps = db.timeline(user_id)
+    days = {}
+    for step in steps:
+        if step['kind'] == 'day':
+            days.setdefault(step['ref'], []).append(step['at'])
+    out = []
+    for step in steps:
+        if step['kind'] == 'poll':
+            sent = days.get(step['ref'].replace('day', ''), ())
+            if any(abs(step['at'] - at) <= SAME_MOMENT for at in sent):
+                continue
+        out.append(step)
+    return out
+
+
+# Что из присланного человеком пульт покажет прямо в диалоге. Остальное —
+# видео, голосовые, кружки, документы — бот пришлёт админу в личку: там
+# телеграм откроет что угодно и любого размера, а пульту для этого пришлось
+# бы качать файл целиком через себя.
+IMAGE_TYPES = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+               '.webp': 'image/webp', '.gif': 'image/gif'}
+# Больше этого Telegram боту файл не отдаёт вовсе (Bot API, getFile).
+MAX_VIEW = 20 * 1024 * 1024
+
+
 def _messages(user_id: int) -> list[dict]:
     u"""Лента диалога: сообщения вперемешку с шагами воронки, по времени.
 
     Внутренние id отправителя и вложения наружу не отдаём — пульту они не
     нужны, а любое лишнее поле в ответе рано или поздно где-нибудь всплывёт.
+    Про вложение пульт знает одно: есть ли оно (file) — открыть его можно
+    только по номеру сообщения, через /api/file.
     """
     lines = [{'id': m['id'], 'kind': m['kind'], 'text': m['text'], 'at': m['at'],
               'mine': m['side'] == 'out',
+              'file': bool(m.get('file_id') and not str(m['file_id']).startswith('http')),
               # править и удалять можно только своё и только текстовое
               'can_edit': bool(m['side'] == 'out' and m['tg_id'] and m['kind'] == 'text'),
               'can_drop': bool(m['side'] == 'out' and m['tg_id'])}
              for m in db.chat_history(user_id)]
     lines += [{'id': 0, 'note': True, 'text': _note(step), 'at': step['at'],
-               'kind': 'text', 'mine': False} for step in db.timeline(user_id)]
+               'kind': 'text', 'mine': False} for step in _steps(user_id)]
     return sorted(lines, key=lambda line: line['at'])
 
 
@@ -420,6 +460,74 @@ async def api_send(request, user):
                     author=int(user['id']), tg_id=getattr(sent, 'message_id', None))
     log.info(u'пульт: %s написал(а) человеку %s', user['id'], user_id)
     return web.json_response({'messages': _messages(user_id)})
+
+
+# Каким вызовом слать вложение по его виду. Всё уходит по file_id: сам
+# файл через пульт не едет, и размер не важен — это тот же файл, что уже
+# лежит у Telegram.
+SEND_BY_KIND = {
+    'photo': ('send_photo', 'photo'),
+    'video': ('send_video', 'video'),
+    'video_note': ('send_video_note', 'video_note'),
+    'voice': ('send_voice', 'voice'),
+    'audio': ('send_audio', 'audio'),
+    'document': ('send_document', 'document'),
+    'sticker': ('send_sticker', 'sticker'),
+    'animation': ('send_animation', 'animation'),
+}
+
+
+@route
+async def api_file(request, user):
+    u"""Открыть вложение из переписки (AleX 21.09.2026: «человек скинул какой-то
+    файл в переписке с ботом, как посмотреть что это?»).
+
+    how='view' — картинку отдаём прямо в пульт. how='me' — бот присылает
+    вложение в личку тому, кто нажал: там телеграм откроет любое.
+
+    Открываем только по номеру сообщения из нашей же базы, а не по file_id
+    из запроса: пульт не должен уметь вытащить из бота чужое вложение.
+    """
+    body = request['body']
+    line = db.message(int(body.get('id') or 0))
+    file_id = (line or {}).get('file_id') or ''
+    if not line or line.get('gone') or not file_id or file_id.startswith('http'):
+        return web.json_response({'error': u'вложения в этом сообщении нет'}, status=404)
+    bot = request.app['bot']
+
+    if body.get('how') == 'view':
+        if line['kind'] not in ('photo', 'document'):
+            return web.json_response({'error': u'это не картинка'}, status=415)
+        info = await bot.get_file(file_id)
+        kind = IMAGE_TYPES.get(os.path.splitext(info.file_path or '')[1].lower())
+        if not kind or (info.file_size or 0) > MAX_VIEW:
+            return web.json_response({'error': u'это не картинка'}, status=415)
+        data = await bot.download_file(info.file_path)
+        raw = data.read() if hasattr(data, 'read') else data
+        log.info(u'пульт: %s смотрит вложение сообщения %s', user['id'], line['id'])
+        return web.Response(body=raw, content_type=kind,
+                            headers={'Cache-Control': 'private, no-store'})
+
+    method, field = SEND_BY_KIND.get(line['kind'], ('send_document', 'document'))
+    person = db.get_user(line['user_id']) or {}
+    who = person.get('first_name') or u'человек'
+    if person.get('username'):
+        who += u' @' + person['username']
+    head = u'📎 Вложение от %s (ID %s), %s' % (
+        who, line['user_id'], time.strftime('%d.%m %H:%M', time.localtime(line['at'])))
+    if line.get('text'):
+        head += u'\n\n' + line['text']
+    admin = int(user['id'])
+    try:
+        await bot.send_message(admin, head, parse_mode=None)
+        await getattr(bot, method)(admin, **{field: file_id})
+    except Exception as err:
+        log.warning(u'пульт: вложение %s не переслали %s: %s', line['id'], admin, err)
+        return web.json_response(
+            {'error': u'не смог прислать: напишите боту /start в личке и попробуйте снова'},
+            status=502)
+    log.info(u'пульт: вложение сообщения %s прислали %s', line['id'], admin)
+    return web.json_response({'sent': True})
 
 
 @route
@@ -742,6 +850,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/edit', api_edit)
     app.router.add_post('/api/drop', api_drop)
     app.router.add_post('/api/ban', api_ban)
+    app.router.add_post('/api/file', api_file)
     app.router.add_get('/static/{name}', _static)
     return app
 

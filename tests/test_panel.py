@@ -334,6 +334,118 @@ async def test_посторонний_выбранным_не_напишет(п�
     assert пульт.bot.sent == []
 
 
+# ------------------------------------------------ вложения от человека
+#
+# AleX 21.09.2026: «человек скинул какой-то файл в переписке с ботом, как
+# посмотреть что это?». В пульте был пузырь «📎 файл» и больше ничего.
+
+class Файлы(FakeBot):
+    u"""Телеграм, который отдаёт файл по file_id и умеет слать вложения."""
+
+    def __init__(self, path='photos/file_1.jpg', size=1000, data=b'JPEG-DATA'):
+        super().__init__()
+        self.path, self.size, self.data = path, size, data
+
+    async def get_file(self, file_id):
+        from types import SimpleNamespace
+        return SimpleNamespace(file_path=self.path, file_size=self.size)
+
+    async def download_file(self, path):
+        import io as _io
+        return _io.BytesIO(self.data)
+
+    async def send_document(self, chat_id, document, **kw):
+        return await self._record('document', chat_id, document)
+
+    async def send_voice(self, chat_id, voice, **kw):
+        return await self._record('voice', chat_id, voice)
+
+
+def _вложение(uid, kind='photo', file_id='AgACAgIAAxk'):
+    _человек(uid, u'Tetiana')
+    return db.save_message(uid, 'in', kind, None, file_id)
+
+
+async def test_пульт_знает_что_у_сообщения_есть_вложение(пульт):
+    _вложение(81)
+    данные = await (await пульт.post('/api/chat', json={'initData': подпись(), 'id': 81})).json()
+    сообщение = [m for m in данные['messages'] if not m.get('note')][0]
+    assert сообщение['file'] is True
+    # сам file_id наружу не уходит — открыть можно только по номеру сообщения
+    assert 'AgACAgIAAxk' not in str(данные)
+
+
+async def test_картинку_пульт_показывает_прямо_в_диалоге(пульт):
+    номер = _вложение(82)
+    пульт.app['bot'] = Файлы()
+    ответ = await пульт.post('/api/file', json={'initData': подпись(), 'id': номер, 'how': 'view'})
+    assert ответ.status == 200
+    assert ответ.headers['Content-Type'].startswith('image/jpeg')
+    assert await ответ.read() == b'JPEG-DATA'
+
+
+async def test_скриншот_присланный_файлом_тоже_картинка(пульт):
+    номер = _вложение(83, kind='document')
+    пульт.app['bot'] = Файлы(path='documents/file_7.png')
+    ответ = await пульт.post('/api/file', json={'initData': подпись(), 'id': номер, 'how': 'view'})
+    assert ответ.status == 200 and ответ.headers['Content-Type'].startswith('image/png')
+
+
+async def test_pdf_пульт_не_показывает_а_честно_говорит(пульт):
+    номер = _вложение(84, kind='document')
+    пульт.app['bot'] = Файлы(path='documents/file_8.pdf')
+    ответ = await пульт.post('/api/file', json={'initData': подпись(), 'id': номер, 'how': 'view'})
+    assert ответ.status == 415
+
+
+async def test_любое_вложение_бот_присылает_админу_в_личку(пульт):
+    номер = _вложение(85, kind='voice', file_id='AwACAgIAAxkBAAI')
+    бот = Файлы()
+    пульт.app['bot'] = бот
+    ответ = await пульт.post('/api/file', json={'initData': подпись(), 'id': номер, 'how': 'me'})
+    assert (await ответ.json()) == {'sent': True}
+    # сначала подпись — чьё это, потом само вложение, и всё — тому, кто нажал
+    (вид1, кому1, текст), (вид2, кому2, файл) = бот.sent
+    assert (вид1, кому1) == ('text', СВОЙ) and u'Tetiana' in текст and u'85' in текст
+    assert (вид2, кому2, файл) == ('voice', СВОЙ, 'AwACAgIAAxkBAAI')
+
+
+async def test_чужое_вложение_по_подложному_номеру_не_отдаём(пульт):
+    ответ = await пульт.post('/api/file', json={'initData': подпись(), 'id': 999999, 'how': 'me'})
+    assert ответ.status == 404
+
+
+async def test_посторонний_вложение_не_откроет(пульт):
+    номер = _вложение(86)
+    пульт.app['bot'] = Файлы()
+    ответ = await пульт.post('/api/file', json={
+        'initData': подпись(user_id=ЧУЖОЙ), 'id': номер, 'how': 'view'})
+    assert ответ.status == 403
+
+
+# ------------------------------------------- порядок строк в ленте
+
+def test_вопрос_ушедший_вместе_с_записью_отдельной_строкой_не_виден(база):
+    u"""Кнопки под записью пишутся на миллисекунды раньше самой записи — лента
+    читалась задом наперёд: «бот спросил», а строкой ниже «бот прислал
+    запись» (скриншот AleX 21.09.2026)."""
+    _человек(91)
+    db.log_event(91, 'poll', 'day1')                 # кнопки под записью
+    db.log_event(91, 'day', 1)                       # сама запись
+    строки = [m['text'] for m in web._messages(91)]
+    assert строки == [u'Бот прислал запись первого дня']
+
+
+def test_напоминание_через_два_часа_видно_отдельной_строкой(база):
+    _человек(92)
+    db.log_event(92, 'day', 1)
+    db.log_event(92, 'poll', 'day1')
+    db._run("UPDATE events SET at = at + 9000 WHERE user_id=92 AND kind='poll'")
+    строки = [m['text'] for m in web._messages(92)]
+    assert строки == [u'Бот прислал запись первого дня',
+                      u'Бот спросил: посмотрел первый день?']
+
+
 # --------------------------------------------------------- чёрный список
 
 async def test_чёрный_список_из_пульта_и_обратно(пульт):
@@ -551,7 +663,11 @@ async def test_в_ленте_видно_шаги_воронки_а_не_толь
     _человек(55)
     db.log_event(55, 'day', 1)
     db.log_event(55, 'poll', 'day1')
+    # вопрос-напоминание приходит через два с половиной часа после записи;
+    # совпавший с ней по времени — это кнопки под записью, их лента не дублирует
+    db._run("UPDATE events SET at = at + 9000 WHERE user_id=55 AND kind='poll'")
     db.save_answer(55, 'day1', 'yes')
+    db._run("UPDATE answers SET answered = answered + 9100 WHERE user_id=55")
 
     ответ = await пульт.post('/api/chat', json={'initData': подпись(), 'id': 55})
     строки = [m['text'] for m in (await ответ.json())['messages']]

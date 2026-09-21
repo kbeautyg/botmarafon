@@ -89,6 +89,35 @@ html, body {
   font-size: 12px;
 }
 
+/* ------------------------------------------------- вложение от человека */
+
+.msg__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.msg__tool {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  font-style: normal;          /* пузырь с вложением набран курсивом — кнопкам не нужно */
+  cursor: pointer;
+}
+.msg__tool:disabled { color: var(--muted); cursor: default; }
+.msg__img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  margin-top: 8px;
+  border-radius: 10px;
+}
+
 /* ------------------------------------------- выбрать нескольких и написать
 
    AleX 20.09.2026: «оповещения кидать всем либо выбранным из списка».
