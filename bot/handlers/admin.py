@@ -74,7 +74,28 @@ def from_admin(message: Message) -> bool:
         return False
     if _is_admin(message.from_user.id):
         return True
-    return _command(message) in STATS_COMMANDS and _can_stats(message)
+    if _command(message) in STATS_COMMANDS and _can_stats(message):
+        return True
+    # Начатый разговор: команда дала /рассылка или открыла эфир, и следующее
+    # сообщение — то, что рассылать, или дата эфира. Оно не команда, и без
+    # этой строки фильтр его не пускал: у всех, кроме админов, рассылка и
+    # эфир молча не работали — присланное уходило в службу заботы
+    # (AleX 23.09.2026: «рассылка всем участникам тоже не работает»).
+    return _waiting(message)
+
+
+def _waiting(message: Message) -> bool:
+    u"""Команда уже начала разговор с ботом и бот ждёт следующее сообщение."""
+    if not config.is_team(message.from_user.id):
+        return False
+    keys = (WAIT_KEY % message.from_user.id,
+            LIVE_KEY % message.chat.id,
+            LIVE_PICK_KEY % message.chat.id)
+    for key in keys:
+        stored = db.get_content(key)
+        if stored and stored[1]:
+            return True
+    return False
 
 
 router.message.filter(from_admin)

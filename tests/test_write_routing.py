@@ -89,3 +89,60 @@ async def test_live_возвращает_боевые_сроки_а_не_отк�
 async def test_эфир_открывается_своими_командами(dispatcher, command):
     calls = await _send(dispatcher, ALEX, command)
     assert any(texts.LIVE_ASK == (c[2] or u'') for c in calls)
+
+
+# Роутер админа пропускает не-админов только на командах из белого списка.
+# Следующее сообщение после /рассылка или после «Эфир» — не команда, и оно
+# уходило в службу заботы: у AleX и Павла рассылка и эфир не работали вовсе
+# (AleX 23.09.2026: «рассылка всем участникам тоже не работает»).
+
+def _photo(sender, caption, n=9):
+    return {'update_id': n, 'message': {
+        'message_id': n, 'date': 1_760_000_100, 'caption': caption,
+        'chat': {'id': sender, 'type': 'private'},
+        'from': {'id': sender, 'is_bot': False, 'first_name': 'A'},
+        'photo': [{'file_id': 'AgACphoto', 'file_unique_id': 'u1',
+                   'width': 1280, 'height': 720}],
+    }}
+
+
+def _plain(sender, text, n=10):
+    return {'update_id': n, 'message': {
+        'message_id': n, 'date': 1_760_000_100, 'text': text,
+        'chat': {'id': sender, 'type': 'private'},
+        'from': {'id': sender, 'is_bot': False, 'first_name': 'A'}}}
+
+
+async def _feed(dispatcher, update):
+    session = ЗаписьСессия()
+    bot = Bot('42:TEST', session=session)
+    await dispatcher.feed_raw_update(bot, update)
+    return u' '.join(getattr(c, 'text', None) or u'' for c in session.calls)
+
+
+@pytest.mark.parametrize('sender', [ALEX, PAVEL])
+async def test_картинка_для_рассылки_доходит_у_всей_команды(dispatcher, sender):
+    await _send(dispatcher, sender, u'/рассылка')
+    ответ = await _feed(dispatcher, _photo(sender, u'Друзья, эфир в 18:00'))
+    assert u'Разослать это всем' in ответ
+    assert texts.TEAM_HINT not in ответ
+
+
+@pytest.mark.parametrize('sender', [ALEX, PAVEL])
+async def test_текст_для_рассылки_доходит_у_всей_команды(dispatcher, sender):
+    await _send(dispatcher, sender, u'/рассылка')
+    ответ = await _feed(dispatcher, _plain(sender, u'Друзья, сегодня эфир'))
+    assert u'Разослать это всем' in ответ
+
+
+async def test_дата_эфира_доходит_у_не_админа(dispatcher):
+    await _send(dispatcher, ALEX, u'/эфир')
+    ответ = await _feed(dispatcher, _plain(ALEX, u'25.09 19:00 https://t.me/x?livestream'))
+    assert u'Объявить эфир?' in ответ
+
+
+async def test_обычному_человеку_админский_роутер_по_прежнему_закрыт(dispatcher):
+    u"""Фильтр роутера нужен именно для этого: иначе фото человека молча
+    пропадало бы в админских обработчиках, не доходя до заботы."""
+    ответ = await _feed(dispatcher, _photo(PERSON, u'вот мой скрин', n=11))
+    assert texts.TEAM_HINT not in ответ
