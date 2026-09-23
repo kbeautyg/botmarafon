@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=12">
+<link rel="stylesheet" href="/static/app.css?v=13">
 </head>
 <body>
 
@@ -18,12 +18,16 @@
     </div>
     <div class="bar__row bar__row--tabs">
       <button class="tab is-on" data-only="1" type="button">Переписки</button>
-      <button class="tab" data-only="0" type="button">Все участники</button>
+      <button class="tab" data-only="0" type="button">Все</button>
       <span id="count" class="count"></span>
       <!-- Выбрать нескольких и написать им одно и то же: AleX 20.09.2026
            «либо выбранным из списка, либо добавленным по никнейму». -->
       <button id="pick" class="tab tab--pick" type="button">Выбрать</button>
     </div>
+    <!-- Кому писать разом: все или отдельный шаг воронки.
+         AleX 23.09.2026: «пусть сверху будет галочка выбрать всех… или
+         оповестить всех, кто на первом/втором/третьем/четвёртом дне». -->
+    <div id="scopes" class="scopes" hidden></div>
   </header>
   <div id="people" class="people"></div>
   <p id="empty" class="empty" hidden>Никого не нашли</p>
@@ -51,9 +55,16 @@
     <div class="send__body">
       <input id="media" class="send__media" type="url" inputmode="url" hidden
              placeholder="Ссылка на фото, видео или подкаст" autocomplete="off">
+      <div id="attach" class="attach" hidden>
+        <span id="attach-name" class="attach__name"></span>
+        <button id="attach-drop" class="attach__drop" type="button" aria-label="Убрать файл">✕</button>
+      </div>
       <textarea id="text" class="send__text" rows="3" placeholder="Сообщение от имени бота"></textarea>
     </div>
     <div class="send__tools">
+      <!-- Файл с устройства: картинка, видео, аудио — что угодно. -->
+      <input id="file" type="file" hidden>
+      <button id="pin" class="send__clip" type="button" aria-label="Файл с устройства">📁</button>
       <button id="clip" class="send__clip" type="button" aria-label="Вложение по ссылке">📎</button>
       <button id="mic" class="send__clip" type="button" aria-label="Записать голосовое">🎤</button>
       <button id="cam" class="send__clip" type="button" aria-label="Записать кружок">⭕</button>
@@ -73,6 +84,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=12"></script>
+<script src="/static/app.js?v=13"></script>
 </body>
 </html>

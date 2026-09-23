@@ -9,13 +9,21 @@
 
   var REFRESH_MS = 15000;      // как часто подтягивать новое
   var TYPING_PAUSE = 350;      // пауза после ввода перед поиском
+  var PAGE = 60;               // столько людей приходит одной порцией
 
   /* picking — в списке включены галочки; picked — кого отметили; to —
      кому уйдёт следующее сообщение из окна переписки (пусто — одному,
-     тому, чей чат открыт). AleX 20.09.2026: «выбранным из списка». */
+     тому, чей чат открыт). AleX 20.09.2026: «выбранным из списка».
+
+     scope — выбрана целая группа: все участники или отдельный шаг
+     воронки. Тогда получателей считает бот, а не пульт: их сотни, и
+     список id из телефона устарел бы раньше, чем по нему нажали
+     (AleX 23.09.2026). file — файл с устройства, ждёт отправки. */
   var state = { id: null, onlyChats: true, query: '', busy: false, person: null,
                 editing: null, card: null, chats: null,
-                picking: false, picked: [], to: [] };
+                picking: false, picked: [], to: [],
+                offset: 0, total: 0, more: 0, loaded: 0, everyone: false,
+                scopes: null, scope: '', scopeTitle: '', scopeCount: 0, file: null };
 
   var $ = function (id) { return document.getElementById(id); };
   var listScreen = $('list');
@@ -51,12 +59,38 @@
     document.body.appendChild(box);
   }
 
-  function toast(message) {
+  /* sticky — сообщение висит, пока его не сменят: так показываем ход
+     выгрузки файла, которая на телефоне может идти минуту. */
+  function toast(message, sticky) {
     var box = $('toast');
     box.textContent = message;
     box.hidden = false;
     clearTimeout(box._timer);
-    box._timer = setTimeout(function () { box.hidden = true; }, 3200);
+    if (!sticky) { box._timer = setTimeout(function () { box.hidden = true; }, 3200); }
+  }
+
+  /* Отправка формы с файлом. Не fetch: у XHR виден ход выгрузки, а без
+     него сорок мегабайт с телефона уходят в тишину. */
+  function post(path, form, onProgress) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/' + path);
+      if (onProgress && xhr.upload) {
+        xhr.upload.onprogress = function (event) {
+          if (event.lengthComputable) {
+            onProgress(Math.round(event.loaded * 100 / event.total));
+          }
+        };
+      }
+      xhr.onload = function () {
+        var data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) { data = {}; }
+        if (xhr.status >= 200 && xhr.status < 300) { resolve(data); }
+        else { reject(new Error(data.error || ('ошибка ' + xhr.status))); }
+      };
+      xhr.onerror = function () { reject(new Error('связь оборвалась')); };
+      xhr.send(form);
+    });
   }
 
   // ------------------------------------------------------------- показ
@@ -165,6 +199,9 @@
   // ---------------------------------------------------------- выбор людей
 
   function togglePick(id, row) {
+    // Галочка и группа — разные способы выбрать: отметили человека
+    // руками, значит группу больше не шлём.
+    if (state.scope) { pickScope(state.scope); }
     var at = state.picked.indexOf(id);
     if (at > -1) { state.picked.splice(at, 1); } else { state.picked.push(id); }
     if (row) { row.classList.toggle('is-picked', at < 0); }
@@ -174,40 +211,137 @@
   function drawPicked() {
     var bar = $('picked');
     bar.hidden = !state.picking;
-    $('picked-count').textContent = 'Выбрано: ' + state.picked.length;
-    $('picked-write').disabled = state.picked.length === 0;
+    $('picked-count').textContent = state.scope
+      ? state.scopeTitle + ': ' + state.scopeCount + ' чел.'
+      : 'Выбрано: ' + state.picked.length;
+    $('picked-write').disabled = !state.scope && state.picked.length === 0;
   }
 
   function setPicking(on) {
     state.picking = on;
-    if (!on) { state.picked = []; }
+    if (!on) { state.picked = []; clearScope(); }
     $('pick').classList.toggle('is-on', on);
     $('pick').textContent = on ? 'Отмена' : 'Выбрать';
+    $('scopes').hidden = !on;
+    if (on) { loadScopes(); }
     drawPicked();
     loadPeople();
   }
 
-  function drawPeople(people, everyone) {
-    var box = $('people');
-    box.textContent = '';
-    // Переписка копится с 18.09.2026: пока её нет, показываем всех и
-    // говорим об этом, чтобы пустой список не выглядел поломкой.
-    if (everyone) {
-      var note = document.createElement('p');
-      note.className = 'hint';
-      note.textContent = 'Переписок пока нет — они копятся с того дня, как включили пульт. '
-        + 'Ниже все, кто заходил в бота: откройте любого и напишите первым.';
-      box.appendChild(note);
-    }
-    people.forEach(function (person) { box.appendChild(personRow(person)); });
-    $('empty').hidden = people.length > 0;
-    var waiting = people.filter(function (p) { return p.waiting; }).length;
-    $('count').textContent = waiting ? waiting + ' ждут ответа' : people.length + ' чел.';
+  // ------------------------------------------------------- выбор группы
+  //
+  // AleX 23.09.2026: «пусть сверху будет галочка выбрать всех, и чтобы
+  // действительно здесь все были в списке… или допустим захочется
+  // оповестить всех, кто: (и выбрать шаг: первый/второй/третий/четвёртый/
+  // купить)». Группу считает бот — здесь только кнопки.
+
+  /* Счёт спрашиваем каждый раз: пульт держат открытым весь день, а
+     воронка за день уходит вперёд. Прошлые числа показываем сразу, чтобы
+     кнопки не мигали, и тихо обновляем. */
+  function loadScopes() {
+    if (state.scopes) { drawScopes(); }
+    api('scopes', {})
+      .then(function (data) { state.scopes = data.scopes || []; drawScopes(); })
+      .catch(function () { /* без групп пульт всё равно работает */ });
   }
 
-  function loadPeople() {
-    return api('people', { query: state.query, onlyChats: state.onlyChats })
-      .then(function (data) { drawPeople(data.people || [], data.everyone); })
+  function drawScopes() {
+    var box = $('scopes');
+    box.textContent = '';
+    (state.scopes || []).forEach(function (item) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip' + (state.scope === item.key ? ' is-on' : '');
+      chip.disabled = !item.count;
+      chip.textContent = item.title + ' · ' + item.count;
+      chip.addEventListener('click', function () { pickScope(item.key); });
+      box.appendChild(chip);
+    });
+  }
+
+  /* Скольким уйдёт следующее сообщение: выбранным галочками или целой
+     группе. Ноль — одному человеку, чей диалог открыт. Считается в одном
+     месте, иначе счёт группы переживает её отмену. */
+  function manyCount() {
+    return state.to.length || (state.scope ? state.scopeCount : 0);
+  }
+
+  function clearScope() {
+    state.scope = '';
+    state.scopeTitle = '';
+    state.scopeCount = 0;
+  }
+
+  function pickScope(key) {
+    var item = (state.scopes || []).filter(function (s) { return s.key === key; })[0];
+    if (!item || !item.count) { return; }
+    var same = state.scope === key;
+    state.scope = same ? '' : key;
+    state.scopeTitle = same ? '' : item.title;
+    state.scopeCount = same ? 0 : item.count;
+    // Группа и галочки не складываются: иначе непонятно, кому уйдёт.
+    if (state.scope) { state.picked = []; }
+    drawScopes();
+    drawPicked();
+    loadPeople();
+  }
+
+  function drawPeople(people, append) {
+    var box = $('people');
+    if (!append) {
+      box.textContent = '';
+      state.loaded = 0;
+      // Переписка копится с 18.09.2026: пока её нет, показываем всех и
+      // говорим об этом, чтобы пустой список не выглядел поломкой.
+      if (state.everyone) {
+        var note = document.createElement('p');
+        note.className = 'hint';
+        note.textContent = 'Переписок пока нет — они копятся с того дня, как включили пульт. '
+          + 'Ниже все, кто заходил в бота: откройте любого и напишите первым.';
+        box.appendChild(note);
+      }
+    }
+    var old = box.querySelector('.more');
+    if (old) { box.removeChild(old); }          // кнопка всегда последняя
+    people.forEach(function (person) { box.appendChild(personRow(person)); });
+    if (state.more) { box.appendChild(moreRow()); }
+    state.loaded += people.length;
+    $('empty').hidden = state.loaded > 0;
+    var waiting = people.filter(function (p) { return p.waiting; }).length;
+    // В шапке тесно: четыре кнопки и счётчик. Поэтому коротко — сколько
+    // ждут ответа, а иначе сколько показано из скольких.
+    $('count').textContent = waiting ? waiting + ' ждут'
+      : (state.more ? state.loaded + '/' + state.total : state.total + ' чел.');
+  }
+
+  /* «Показать ещё» — последней строкой списка. Строим заново на каждую
+     отрисовку: список перед ней очищается целиком, и один и тот же узел
+     во второй раз уже не нашёлся бы. */
+  function moreRow() {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'more';
+    button.textContent = 'Показать ещё · осталось ' + state.more;
+    button.addEventListener('click', function () {
+      button.disabled = true;
+      button.textContent = 'Гружу…';
+      loadPeople(true);
+    });
+    return button;
+  }
+
+  function loadPeople(add) {
+    var offset = add ? state.offset : 0;
+    return api('people', { query: state.query, offset: offset,
+                           onlyChats: state.onlyChats && !state.everyone })
+      .then(function (data) {
+        var people = data.people || [];
+        if (!add) { state.everyone = !!data.everyone; }
+        state.offset = offset + people.length;
+        state.total = data.total || people.length;
+        state.more = data.more || 0;
+        drawPeople(people, add);
+      })
       .catch(function (err) {
         if (!initData) { return noEntry(); }
         toast(err.message);
@@ -482,8 +616,8 @@
      нет — они про одного человека, — а поле ввода, вложения, голосовое и
      кружок работают как обычно: одно и то же уйдёт каждому. */
   function openMany() {
-    if (!state.picked.length) { return; }
-    state.to = state.picked.slice();
+    if (!state.picked.length && !state.scope) { return; }
+    state.to = state.scope ? [] : state.picked.slice();
     state.id = null;
     state.person = null;
     listScreen.classList.add('is-behind');
@@ -492,14 +626,21 @@
     $('card').hidden = true;
     $('info').hidden = true;
     $('ban').hidden = true;
-    $('chat-name').textContent = 'Выбрано: ' + state.to.length;
-    $('chat-sub').textContent = 'напишем каждому одно и то же';
+    $('chat-name').textContent = state.scope ? state.scopeTitle
+      : 'Выбрано: ' + state.to.length;
+    $('chat-sub').textContent = state.scope
+      ? state.scopeCount + ' чел. — каждому отдельно'
+      : 'напишем каждому одно и то же';
     $('log').textContent = '';
     var hint = document.createElement('p');
     hint.className = 'hint';
-    hint.textContent = 'Сообщение придёт каждому из выбранных отдельно, '
-      + 'как обычное сообщение от бота — с уведомлением. '
-      + 'Переписку видно в карточке каждого.';
+    hint.textContent = state.scope
+      ? 'Сообщение придёт каждому отдельно, как обычное сообщение от бота — '
+        + 'с уведомлением. Сначала бот пришлёт его вам: так видно, что ушло людям. '
+        + 'Когда закончит — отчитается, сколько дошло.'
+      : 'Сообщение придёт каждому из выбранных отдельно, '
+        + 'как обычное сообщение от бота — с уведомлением. '
+        + 'Переписку видно в карточке каждого.';
     $('log').appendChild(hint);
     $('go').disabled = false;
     if (tg && tg.BackButton) { tg.BackButton.show(); }
@@ -507,6 +648,8 @@
 
   function openChat(id) {
     state.to = [];
+    clearScope();
+    dropFile();
     $('info').hidden = false;
     $('ban').hidden = false;
     state.id = id;
@@ -523,25 +666,44 @@
   function closeChat() {
     state.id = null;
     state.to = [];
+    clearScope();
+    dropFile();
     chatScreen.classList.remove('is-open');
     listScreen.classList.remove('is-behind');
     if (tg && tg.BackButton) { tg.BackButton.hide(); }
     loadPeople();
   }
 
+  /* Группе — только после подтверждения: кнопка «Написать» рядом, а
+     уйдёт это сотням людей, и обратно уже не соберёшь. */
+  function confirmGroup(next) {
+    if (!state.scope) { return next(); }
+    var ask = 'Отправить всем в группе «' + state.scopeTitle + '» — '
+      + state.scopeCount + ' чел.?';
+    if (tg && tg.showConfirm) { tg.showConfirm(ask, function (ok) { if (ok) { next(); } }); }
+    else if (window.confirm(ask)) { next(); }
+  }
+
   function send(event) {
     event.preventDefault();
+    var text = $('text').value.trim();
+    var media = $('media').value.trim();
+    if (state.busy || (!state.id && !manyCount())) { return; }
+    if (state.file) { return confirmGroup(sendFile); }
+    if (!text && !media) { return; }
+    confirmGroup(function () { reallySend(text, media); });
+  }
+
+  function reallySend(text, media) {
     var field = $('text');
     var link = $('media');
-    var text = field.value.trim();
-    var media = link.value.trim();
-    var many = state.to.length;
-    if ((!text && !media) || state.busy || (!state.id && !many)) { return; }
+    var many = manyCount();
     state.busy = true;
     $('go').disabled = true;
     var call = state.editing
       ? api('edit', { messageId: state.editing, text: text })
-      : api('send', { id: state.id, ids: state.to, text: text, media: media });
+      : api('send', { id: state.id, ids: state.to, scope: state.scope,
+                      text: text, media: media });
     call
       .then(function (data) {
         field.value = '';
@@ -562,6 +724,15 @@
   /* Итог отправки выбранным. Закрывшие бота и сбои названы отдельно:
      «ушло 18 из 20» без объяснения выглядит как поломка. */
   function doneMany(data) {
+    // Группе шлёт не пульт, а рассылка: она идёт минутами и в конце
+    // отчитывается в боте — здесь говорим только, что пошла.
+    if (data.started) {
+      toast('Рассылка пошла: ' + data.count + ' чел., примерно '
+            + data.minutes + ' мин. Отчёт придёт в бота.');
+      closeChat();
+      setPicking(false);
+      return;
+    }
     var parts = ['Отправлено: ' + (data.sent || 0)];
     if (data.gone) { parts.push('закрыли бота: ' + data.gone); }
     if (data.failed) { parts.push('не дошло: ' + data.failed); }
@@ -672,24 +843,19 @@
   }
 
   function uploadRecord(blob, kind) {
-    var many = state.to.length;
+    var many = manyCount();
     var form = new FormData();
     form.append('initData', initData);
     form.append('id', String(state.id || 0));
-    if (many) { form.append('ids', state.to.join(',')); }
+    if (state.to.length) { form.append('ids', state.to.join(',')); }
+    if (state.scope) { form.append('scope', state.scope); }
     form.append('kind', kind);
     form.append('text', $('text').value.trim());
     form.append('file', blob, kind === 'note' ? 'note.webm' : 'voice.webm');
     state.busy = true;
     $('go').disabled = true;
     toast(kind === 'note' ? 'Отправляю кружок…' : 'Отправляю голосовое…');
-    fetch('/api/record', { method: 'POST', body: form })
-      .then(function (res) {
-        return res.json().catch(function () { return {}; }).then(function (data) {
-          if (!res.ok) { throw new Error(data.error || ('ошибка ' + res.status)); }
-          return data;
-        });
-      })
+    post('record', form)
       .then(function (data) {
         $('text').value = '';
         grow($('text'));
@@ -703,6 +869,79 @@
       .catch(function (err) { toast(err.message); })
       .then(function () { state.busy = false; $('go').disabled = false; });
   }
+
+  // ------------------------------------------------- файл с устройства
+  //
+  // AleX 23.09.2026: «нужно иметь возможность прикрепить и картинку с
+  // устройства, и видео с устройства, и аудио если потребуется». Файл
+  // уходит той же дорогой, что запись: одним запросом с подписью.
+
+  var MAX_FILE_MB = 45;               // столько Телеграм берёт от бота
+
+  function sizeOf(bytes) {
+    return bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1) + ' МБ'
+                                : Math.max(1, Math.round(bytes / 1024)) + ' КБ';
+  }
+
+  function chooseFile(file) {
+    if (!file) { return; }
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      toast('Файл тяжелее ' + MAX_FILE_MB + ' МБ — столько Телеграм от бота не берёт. '
+            + 'Пришлите ссылкой по кнопке 📎.');
+      return;
+    }
+    state.file = file;
+    $('attach').hidden = false;
+    $('attach-name').textContent = (file.name || 'файл') + ' · ' + sizeOf(file.size);
+    $('pin').classList.add('is-on');
+    $('text').focus();
+  }
+
+  function dropFile() {
+    state.file = null;
+    $('file').value = '';
+    $('attach').hidden = true;
+    $('pin').classList.remove('is-on');
+  }
+
+  function sendFile() {
+    var file = state.file;
+    if (!file || state.busy) { return; }
+    var many = manyCount();
+    var form = new FormData();
+    form.append('initData', initData);
+    form.append('id', String(state.id || 0));
+    if (state.to.length) { form.append('ids', state.to.join(',')); }
+    if (state.scope) { form.append('scope', state.scope); }
+    // kind и mime — раньше самого файла: по ним бот понимает, сколько
+    // можно принять и чем это отправлять.
+    form.append('kind', 'file');
+    form.append('mime', file.type || '');
+    form.append('text', $('text').value.trim());
+    form.append('file', file, file.name || 'file');
+    state.busy = true;
+    $('go').disabled = true;
+    toast('Отправляю файл…', true);
+    post('record', form, function (percent) {
+      toast(percent < 100 ? 'Отправляю файл… ' + percent + '%'
+                          : 'Файл ушёл боту, он рассылает…', true);
+    })
+      .then(function (data) {
+        $('text').value = '';
+        grow($('text'));
+        dropFile();
+        if (many) { doneMany(data); return; }
+        toast('Отправлено');
+        drawChat({ person: state.person, card: state.card, chats: state.chats,
+                   messages: data.messages || [] });
+      })
+      .catch(function (err) { toast(err.message); })
+      .then(function () { state.busy = false; $('go').disabled = false; });
+  }
+
+  $('pin').addEventListener('click', function () { $('file').click(); });
+  $('file').addEventListener('change', function () { chooseFile(this.files[0]); });
+  $('attach-drop').addEventListener('click', dropFile);
 
   $('mic').addEventListener('click', function () { startRecord('voice'); });
   $('cam').addEventListener('click', function () { startRecord('note'); });
@@ -767,6 +1006,7 @@
         other.classList.toggle('is-on', other === tab);
       });
       state.onlyChats = tab.dataset.only === '1';
+      state.everyone = false;
       loadPeople();
     });
   });
@@ -790,7 +1030,9 @@
     if (document.hidden) { return; }
     if (state.id) {
       api('chat', { id: state.id }).then(drawChat).catch(function () { /* сеть моргнула */ });
-    } else {
+    } else if (!state.picking && state.offset <= PAGE) {
+      // Пока выбирают получателей или догрузили вторую сотню, список не
+      // трогаем: он переставился бы прямо под пальцем.
       loadPeople();
     }
   }, REFRESH_MS);

@@ -73,8 +73,8 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  /* Кнопок в ряду четыре, и на узком телефоне «Все участники» ломалось
-     надвое. Не переносим: лучше подвинуть счётчик. */
+  /* Кнопок в ряду четыре, и на узком телефоне длинное название ломалось
+     надвое и съедало счётчик. Не переносим и держим подписи короткими. */
   white-space: nowrap;
   flex: none;
 }
@@ -177,6 +177,56 @@ html, body {
 .picked__clear { background: var(--card); color: var(--muted); }
 .picked__write { margin-left: auto; background: var(--accent); color: var(--on-accent); }
 .picked__write:disabled { opacity: .45; cursor: default; }
+
+/* Группы: «все участники» и шаги воронки (AleX 23.09.2026). Ряд едет
+   вбок — шесть кнопок в ширину телефона не влезают, а переносить их
+   значит отдать под шапку треть экрана. */
+.scopes {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.scopes[hidden] { display: none; }
+.scopes::-webkit-scrollbar { display: none; }
+
+.chip {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.chip:disabled { opacity: .4; cursor: default; }
+
+/* «Показать ещё» — последней строкой списка, во всю ширину. */
+.more {
+  display: block;
+  width: 100%;
+  padding: 14px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.more[hidden] { display: none; }
 
 /* ------------------------------------------------------------- люди */
 
@@ -383,6 +433,33 @@ html, body {
   cursor: pointer;
 }
 .send__clip.is-on { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* Файл с устройства, выбранный и готовый уйти. */
+.attach {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  font-size: 13px;
+}
+.attach[hidden] { display: none; }
+.attach__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.attach__drop {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
 
 .send__text {
   /* Ширину задаёт колонка, а высоту — сам текст. flex здесь стоять не

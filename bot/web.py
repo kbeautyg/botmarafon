@@ -49,6 +49,16 @@ CHATS_IN_CARD = 8
 # кружка — единицы мегабайт; двадцать даём с запасом на длинные записи и
 # щедрые кодеки телефонов.
 MAX_UPLOAD = 20 * 1024 * 1024
+# Файл с телефона (AleX 23.09.2026: «прикрепить картинку, видео, аудио с
+# устройства»). Телеграм берёт от бота до пятидесяти мегабайт — просим
+# меньше, чтобы отказ пришёл от нас и по-человечески, а не от Телеграма.
+MAX_FILE = 45 * 1024 * 1024
+# Фотографией Телеграм принимает только до десяти мегабайт. Что тяжелее —
+# уходит файлом: лучше так, чем отказ на ровном месте.
+MAX_PHOTO = 10 * 1024 * 1024
+# Длиннее Телеграм подпись к файлу не берёт. Обрезать молча нельзя:
+# человек бы даже не узнал, что конец его текста никуда не ушёл.
+MAX_CAPTION = 1024
 
 
 class Denied(Exception):
@@ -163,12 +173,48 @@ async def api_people(request, user):
     body = await _body(request)
     query = str(body.get('query') or '')[:64]
     only_chats = bool(body.get('onlyChats', True))
-    rows = db.people(query, PAGE_SIZE, only_chats=only_chats)
+    offset = max(0, min(int(body.get('offset') or 0), 100000))
+    rows = db.people(query, PAGE_SIZE, only_chats=only_chats, offset=offset)
     everyone = False
-    if only_chats and not rows and not query.strip():
+    if only_chats and not rows and not query.strip() and not offset:
         rows = db.people('', PAGE_SIZE, only_chats=False)
         everyone = bool(rows)
-    return web.json_response({'people': [_person(r) for r in rows], 'everyone': everyone})
+        only_chats = not everyone
+    total = db.people_count(query, only_chats=only_chats)
+    return web.json_response({
+        'people': [_person(r) for r in rows],
+        'everyone': everyone,
+        'total': total,
+        # Сколько ещё осталось за экраном: пульт рисует «показать ещё»
+        # только когда есть что показывать (AleX 23.09.2026).
+        'more': max(0, total - offset - len(rows)),
+    })
+
+
+# Как назвать группу людям. Дни — это где человек сейчас: получил свой
+# день и не получил следующий, — поэтому «на 2 дне», а не «дошёл до 2».
+SCOPES = (
+    ('all', u'Все участники'),
+    ('day1', u'Сейчас на 1 дне'),
+    ('day2', u'Сейчас на 2 дне'),
+    ('day3', u'Сейчас на 3 дне'),
+    ('day4', u'Дошли до 4 дня'),
+    ('bought', u'Нажали «Купить»'),
+)
+
+
+@route
+async def api_scopes(request, user):
+    u"""Группы для кнопок «кому писать» и сколько в каждой человек.
+
+    AleX 23.09.2026: «пусть сверху будет галочка выбрать всех… или
+    оповестить всех, кто на первом, втором, третьем, четвёртом дне или
+    нажал купить».
+    """
+    counts = db.audience_counts()
+    return web.json_response({'scopes': [
+        {'key': key, 'title': title, 'count': counts.get(key, 0)}
+        for key, title in SCOPES]})
 
 
 # Как назвать шаг воронки в ленте диалога.
@@ -410,6 +456,51 @@ async def to_each(ids: list, one) -> web.Response:
     return web.json_response({'sent': sent, 'gone': gone, 'failed': failed})
 
 
+def scope_title(scope: str) -> str:
+    return dict(SCOPES).get(scope, scope)
+
+
+async def spread(request, user, scope: str, compose) -> web.Response:
+    u"""Отправить одно и то же целой группе — через обычную рассылку.
+
+    Группа — это сотни человек и минуты отправки: держать ради этого
+    открытым запрос из пульта нельзя. Поэтому собираем сообщение у автора
+    в личке и отдаём его движку рассылки (bot/broadcast.py): он идёт с
+    нужной скоростью, ведёт счёт, продолжает после перезапуска и в конце
+    докладывает. Заодно автор видит у себя ровно то, что ушло людям.
+    """
+    ids = db.audience(scope)
+    if not ids:
+        return web.json_response({'error': u'в этой группе сейчас никого'}, status=400)
+    author = int(user['id'])
+    try:
+        origin = await compose(author)
+    except delivery.Gone:
+        return web.json_response(
+            {'error': u'напишите боту /start в личке — рассылку он собирает у вас'},
+            status=409)
+    message_id = getattr(origin, 'message_id', None)
+    if not message_id:
+        return web.json_response({'error': u'не смог собрать сообщение'}, status=502)
+    # «Все» — это и есть обычная рассылка: списком её не перечисляем, иначе
+    # в базу лёг бы километровый перечень id.
+    targets = None if scope == 'all' else ids
+    task = db.broadcast_add(author, message_id, author, targets)
+    asyncio.create_task(broadcast.run(request.app['bot'], task))
+    log.info(u'пульт: %s шлёт группе «%s» — %d чел.', author, scope, len(ids))
+    return web.json_response({
+        'started': True, 'count': len(ids), 'scope': scope,
+        'title': scope_title(scope),
+        'minutes': max(1, int(len(ids) * broadcast.PAUSE / 60 + 0.5)),
+    })
+
+
+def wanted_scope(source) -> str:
+    u"""Какую группу выбрали в пульте. Пусто — не группу, а людей поимённо."""
+    scope = str(source.get('scope') or '').strip()
+    return scope if scope in db.AUDIENCES else ''
+
+
 @route
 async def api_send(request, user):
     u"""Отправить человеку сообщение от имени бота."""
@@ -429,6 +520,15 @@ async def api_send(request, user):
             status=400)
 
     bot = request.app['bot']
+    scope = wanted_scope(body)
+    if scope:
+        async def compose(uid):
+            if media:
+                return (await send_media(bot, uid, media, text))[1]
+            return await delivery._guard(bot.send_message(uid, text, parse_mode=None))
+
+        return await spread(request, user, scope, compose)
+
     chosen = picked_ids(body)
     if chosen:
         async def one(uid):
@@ -606,14 +706,20 @@ async def api_record(request):
                 return web.json_response({'error': u'этот пульт — для команды проекта'},
                                          status=403)
             name = part.filename or 'record'
+            # Предел свой у записи и свой у файла с телефона; вид приходит
+            # полем kind — пульт шлёт его раньше самого файла.
+            big = fields.get('kind') == 'file'
+            limit = MAX_FILE if big else MAX_UPLOAD
             while True:
                 chunk = await part.read_chunk()
                 if not chunk:
                     break
                 blob += chunk
-                if len(blob) > MAX_UPLOAD:
-                    return web.json_response(
-                        {'error': u'запись длиннее, чем бот принимает — запишите короче'},
+                if len(blob) > limit:
+                    return web.json_response({'error': (
+                        u'файл больше %d МБ — столько Телеграм от бота не принимает'
+                        % (limit // (1024 * 1024)) if big else
+                        u'запись длиннее, чем бот принимает — запишите короче')},
                         status=413)
         else:
             fields[part.name] = (await part.read(decode=True)).decode('utf-8', 'replace')
@@ -625,11 +731,22 @@ async def api_record(request):
         return web.json_response({'error': u'пустая запись'}, status=400)
 
     user_id = int(fields.get('id') or 0)
-    kind = 'note' if fields.get('kind') == 'note' else 'voice'
-    caption = (fields.get('text') or '').strip()[:1024]
+    kind = fields.get('kind') if fields.get('kind') in ('note', 'file') else 'voice'
+    caption = (fields.get('text') or '').strip()
+    if len(caption) > MAX_CAPTION:
+        return web.json_response({'error': (
+            u'подпись длиннее %d знаков — столько Телеграм к файлу не берёт. '
+            u'Длинный текст лучше отправить отдельным сообщением.' % MAX_CAPTION)},
+            status=400)
+
+    # Картинка, видео или аудио прямо с телефона — их не перекодируют, у
+    # них своя дорога (AleX 23.09.2026).
+    if kind == 'file':
+        return await _file_out(request, user, fields, blob, name, caption)
 
     chosen = picked_ids(fields)
-    if chosen:
+    scope = wanted_scope(fields)
+    if chosen or scope:
         bot = request.app['bot']
         # Перекодируем один раз на всех: ffmpeg на каждого из двадцати —
         # это полминуты ожидания на ровном месте.
@@ -639,6 +756,9 @@ async def api_record(request):
             log.exception(u'пульт: запись выбранным не собралась')
             return web.json_response({'error': str(err)[:300]}, status=500)
         try:
+            if scope:
+                return await spread(request, user, scope, lambda uid: _put_record(
+                    bot, uid, saved, ready, name, caption))
             log.info(u'пульт: %s шлёт %s %d выбранным', user['id'], saved, len(chosen))
             return await to_each(chosen, lambda uid: _push_record(
                 bot, uid, saved, ready, name, caption, int(user['id'])))
@@ -657,6 +777,107 @@ async def api_record(request):
     except Exception as err:
         log.exception(u'пульт: запись не ушла')
         return web.json_response({'error': str(err)[:300]}, status=500)
+
+
+# Чем отправлять файл с телефона. Телеграм различает картинку, видео,
+# музыку и всё прочее: от этого зависит, увидит человек фотографию или
+# значок файла, который ещё надо скачать.
+FILE_BY_MIME = (('image/gif', 'animation'), ('image/', 'photo'),
+                ('video/', 'video'), ('audio/', 'audio'))
+FILE_BY_EXT = {
+    '.jpg': 'photo', '.jpeg': 'photo', '.png': 'photo', '.webp': 'photo',
+    '.gif': 'animation',
+    '.mp4': 'video', '.mov': 'video', '.m4v': 'video', '.webm': 'video',
+    '.mp3': 'audio', '.m4a': 'audio', '.ogg': 'audio', '.wav': 'audio', '.aac': 'audio',
+}
+
+
+def file_kind(mime: str, name: str, size: int = 0) -> str:
+    u"""Чем отправлять: фотографией, видео, музыкой или файлом.
+
+    Смотрим на то, что сказал телефон, а если он промолчал — на
+    расширение. Незнакомое уходит файлом: так дойдёт что угодно.
+    """
+    head = (mime or '').split(';')[0].strip().lower()
+    kind = ''
+    for start, how in FILE_BY_MIME:
+        if head.startswith(start):
+            kind = how
+            break
+    if not kind:
+        kind = FILE_BY_EXT.get(os.path.splitext(name or '')[1].lower(), 'document')
+    # Фотографией Телеграм берёт только до десяти мегабайт. Что тяжелее —
+    # отправляем файлом: так дойдёт целиком и без пережатия.
+    if kind == 'photo' and size > MAX_PHOTO:
+        return 'document'
+    return kind
+
+
+async def _send_file(bot, user_id: int, kind: str, body, name: str, caption: str):
+    u"""Файл одному человеку. body — байты или file_id уже залитого файла."""
+    from aiogram.types import BufferedInputFile
+
+    method, field = SEND_BY_KIND.get(kind, ('send_document', 'document'))
+    ready = body if isinstance(body, str) else BufferedInputFile(body, name or 'file')
+    keys = {field: ready}
+    if kind != 'video_note':
+        keys['caption'] = caption or None
+    return await delivery._guard(getattr(bot, method)(user_id, **keys))
+
+
+def _file_id(sent, kind: str) -> str:
+    u"""file_id только что отправленного — чтобы не заливать файл заново."""
+    piece = getattr(sent, kind, None)
+    if kind == 'photo':
+        piece = piece[-1] if piece else None     # самый крупный из размеров
+    return getattr(piece, 'file_id', '') or ''
+
+
+async def _file_out(request, user, fields: dict, blob: bytes, name: str, caption: str):
+    u"""Файл с устройства: одному, выбранным или целой группе."""
+    bot = request.app['bot']
+    author = int(user['id'])
+    kind = file_kind(fields.get('mime') or '', name, len(blob))
+
+    scope = wanted_scope(fields)
+    if scope:
+        return await spread(request, user, scope,
+                            lambda uid: _send_file(bot, uid, kind, blob, name, caption))
+
+    chosen = picked_ids(fields)
+    if chosen:
+        # Заливаем один раз — себе, — и остальным уходит тот же самый файл
+        # по его номеру у Телеграма: сорок мегабайт двадцать раз подряд не
+        # нужны ни нам, ни телефону.
+        shared, saved_id = blob, ''
+        try:
+            first = await _send_file(bot, author, kind, blob, name, caption)
+            saved_id = _file_id(first, kind)
+            shared = saved_id or blob
+        except Exception as err:
+            log.warning(u'пульт: файл не лёг автору %s: %s', author, err)
+
+        async def one(uid):
+            sent = await _send_file(bot, uid, kind, shared, name, caption)
+            db.save_message(uid, 'out', kind, caption or None, saved_id or None,
+                            author, getattr(sent, 'message_id', None))
+
+        log.info(u'пульт: %s шлёт %s %d выбранным', author, kind, len(chosen))
+        return await to_each(chosen, one)
+
+    user_id = int(fields.get('id') or 0)
+    if not db.get_user(user_id):
+        return web.json_response({'error': u'человека нет в базе'}, status=404)
+    try:
+        sent = await _send_file(bot, user_id, kind, blob, name, caption)
+    except delivery.Gone:
+        db.mark_blocked(user_id)
+        return web.json_response({'error': u'человек закрыл бота — писать ему нельзя'},
+                                 status=409)
+    db.save_message(user_id, 'out', kind, caption or None, _file_id(sent, kind) or None,
+                    author, getattr(sent, 'message_id', None))
+    log.info(u'пульт: %s отправил(а) %s человеку %s', author, kind, user_id)
+    return web.json_response({'messages': _messages(user_id), 'kind': kind})
 
 
 def _who_safe(fields: dict):
@@ -701,6 +922,16 @@ async def _make_record(kind: str, blob: bytes, name: str):
 async def _push_record(bot, user_id: int, saved: str, ready, name: str,
                        caption: str, author: int):
     u"""Отправить готовую запись одному человеку и записать в переписку."""
+    sent = await _put_record(bot, user_id, saved, ready, name, caption)
+    db.save_message(user_id, 'out', saved, caption or None, None, author,
+                    getattr(sent, 'message_id', None))
+    log.info(u'пульт: %s отправил(а) %s человеку %s', author, saved, user_id)
+    return sent
+
+
+async def _put_record(bot, user_id: int, saved: str, ready, name: str, caption: str):
+    u"""Отправить готовую запись — и всё. В переписку её кладёт _push_record,
+    а рассылке группе она там ни к чему: людей сотни, а сообщение одно."""
     from aiogram.types import BufferedInputFile
 
     data = ready[0]
@@ -714,9 +945,6 @@ async def _push_record(bot, user_id: int, saved: str, ready, name: str,
         sent = await delivery._guard(bot.send_document(
             user_id, BufferedInputFile(data, name or 'record.webm'),
             caption=caption or None))
-    db.save_message(user_id, 'out', saved, caption or None, None, author,
-                    getattr(sent, 'message_id', None))
-    log.info(u'пульт: %s отправил(а) %s человеку %s', author, saved, user_id)
     return sent
 
 
@@ -844,6 +1072,7 @@ def build(bot) -> web.Application:
     app.router.add_get('/', _index)
     app.router.add_get('/health', _health)
     app.router.add_post('/api/people', api_people)
+    app.router.add_post('/api/scopes', api_scopes)
     app.router.add_post('/api/chat', api_chat)
     app.router.add_post('/api/send', api_send)
     app.router.add_post('/api/record', api_record)

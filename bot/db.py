@@ -822,14 +822,8 @@ _WAITING = (
     "                     WHERE o.user_id = u.user_id AND o.side = 'out'), 0)")
 
 
-def people(query: str = '', limit: int = 60, only_chats: bool = False) -> list[dict]:
-    u"""Люди для пульта админа: свежая переписка сверху.
-
-    Пустой поиск — те, с кем переписка уже есть (кому отвечать), иначе
-    последние пришедшие. Поиск ищет по всей базе: по нику, по имени и по
-    id, кусочком и без учёта регистра, — AleX 16.09.2026 просил не искать
-    id руками.
-    """
+def _people_where(query: str, only_chats: bool) -> tuple:
+    u"""Условие отбора людей для списка пульта и мерки к нему."""
     like = u'%%%s%%' % query.strip().lstrip('@').lower()
     where = []
     args: list = []
@@ -840,6 +834,23 @@ def people(query: str = '', limit: int = 60, only_chats: bool = False) -> list[d
         args += [like, like, like]
     elif only_chats:
         where.append('m.id IS NOT NULL')
+    return ('WHERE ' + ' AND '.join(where) + ' ' if where else ''), args
+
+
+def people(query: str = '', limit: int = 60, only_chats: bool = False,
+           offset: int = 0) -> list[dict]:
+    u"""Люди для пульта админа: свежая переписка сверху.
+
+    Пустой поиск — те, с кем переписка уже есть (кому отвечать), иначе
+    последние пришедшие. Поиск ищет по всей базе: по нику, по имени и по
+    id, кусочком и без учёта регистра, — AleX 16.09.2026 просил не искать
+    id руками.
+
+    offset — «показать ещё»: людей больше, чем влезает в один экран, и
+    список догружается порциями (AleX 23.09.2026: «больше 60 человек не
+    отображается в списке, из которого нужно выбрать»).
+    """
+    tail, args = _people_where(query, only_chats)
     rows = _conn.execute(
         'SELECT u.user_id, u.username, u.first_name, u.started_at, u.launched_at, '
         "       u.poll, u.blocked_at, COALESCE(u.source, '') AS source, "
@@ -847,13 +858,70 @@ def people(query: str = '', limit: int = 60, only_chats: bool = False) -> list[d
         '       (' + _WAITING + ') AS waiting, '
         '       (SELECT COUNT(*) FROM blacklist b WHERE b.user_id = u.user_id '
         '        AND b.removed_at IS NULL) AS banned '
-        'FROM users u LEFT JOIN messages m ON m.id = (' + _LAST_MESSAGE + ') '
-        + ('WHERE ' + ' AND '.join(where) + ' ' if where else '') +
+        'FROM users u LEFT JOIN messages m ON m.id = (' + _LAST_MESSAGE + ') ' + tail +
         # Второй ключ — номер сообщения: два сообщения могут лечь в одну и ту
         # же долю секунды, и без него порядок людей в списке плавал бы.
         'ORDER BY COALESCE(m.at, u.started_at) DESC, m.id DESC, u.user_id DESC '
-        'LIMIT ?', tuple(args) + (limit,)).fetchall()
+        'LIMIT ? OFFSET ?', tuple(args) + (limit, offset)).fetchall()
     return [dict(r) for r in rows]
+
+
+def people_count(query: str = '', only_chats: bool = False) -> int:
+    u"""Сколько всего людей под этот отбор — чтобы пульт знал, сколько ещё."""
+    tail, args = _people_where(query, only_chats)
+    return _conn.execute(
+        'SELECT COUNT(*) FROM users u '
+        'LEFT JOIN messages m ON m.id = (' + _LAST_MESSAGE + ') ' + tail,
+        tuple(args)).fetchone()[0]
+
+
+# ------------------------------------------------------- кого позвать разом
+#
+# AleX 23.09.2026: «пусть сверху будет галочка выбрать всех… или допустим
+# захочется оповестить всех, кто на первом, втором, третьем, четвёртом дне
+# или нажал купить». Группы считает сервер, а не телефон: людей сотни,
+# выбирать их галочками по одному — не работа, а мучение.
+#
+# Дни — это где человек сейчас: получил свой день и не получил следующий.
+# Группы не пересекаются, и «на втором дне» значит ровно то, что сказано,
+# а не «дошёл когда-то до второго».
+
+_GOT_DAY = ("EXISTS (SELECT 1 FROM events e WHERE e.user_id = u.user_id "
+            "AND e.kind = 'day' AND e.ref = '%s')")
+_STEP = _GOT_DAY + ' AND NOT ' + _GOT_DAY
+
+AUDIENCES = {
+    'all': '',
+    'day1': _STEP % ('1', '2'),
+    'day2': _STEP % ('2', '3'),
+    'day3': _STEP % ('3', '4'),
+    'day4': _GOT_DAY % '4',
+    'bought': 'EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = u.user_id)',
+}
+
+
+def _audience_where(scope: str) -> str:
+    u"""Отбор группы. Здесь же отсеиваем тех, кому бот писать не может:
+    закрывших бота и чёрный список. Пульт обещает столько, сколько уйдёт."""
+    extra = AUDIENCES[scope]
+    return ('WHERE u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN
+            + ((' AND ' + extra) if extra else '') + ' ')
+
+
+def audience(scope: str) -> list[int]:
+    u"""Кому уйдёт сообщение, если выбрать эту группу."""
+    if scope not in AUDIENCES:
+        return []
+    rows = _conn.execute('SELECT u.user_id FROM users u ' + _audience_where(scope)
+                         + 'ORDER BY u.user_id').fetchall()
+    return [r[0] for r in rows]
+
+
+def audience_counts() -> dict:
+    u"""Сколько человек в каждой группе — для кнопок в пульте."""
+    return {scope: _conn.execute('SELECT COUNT(*) FROM users u '
+                                 + _audience_where(scope)).fetchone()[0]
+            for scope in AUDIENCES}
 
 
 # ------------------------------------------------------- шаги и уходы
