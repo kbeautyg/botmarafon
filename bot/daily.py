@@ -24,6 +24,9 @@ log = logging.getLogger(__name__)
 DAY = 86400
 # Сколько дней показывать в календаре под отчётом.
 CALENDAR_DAYS = 14
+# Сколько нажавших «купить» называть в отчёте поимённо. Больше — это уже
+# не отчёт, а список: для него есть /заявки.
+BUYS_IN_REPORT = 15
 WEEKDAYS = (u'пн', u'вт', u'ср', u'чт', u'пт', u'сб', u'вс')
 
 
@@ -91,7 +94,20 @@ def report(days: list[int]) -> str:
     sources = sorted(data['sources'].items(), key=lambda pair: (-pair[1], pair[0]))
     source_lines = u'\n'.join(u'   • %s — %d' % (stats.label(src), n) for src, n in sources)
     buys = sum(data['buys'].values())
+    # Кто именно нажал: одно число Павлу ничего не даёт — ему звонить
+    # этим людям (23.09.2026).
+    bought = []
+    for number in days:
+        since, until = bounds(number)
+        bought += db.purchases_list(since, until, BUYS_IN_REPORT)
+    bought.sort(key=lambda row: row['at'], reverse=True)
+    # Календарём можно выбрать сразу две недели: без ограничения отчёт
+    # перерос бы четыре тысячи знаков и не ушёл вовсе.
+    who = stats.purchase_lines(bought[:BUYS_IN_REPORT])
+    if len(bought) > BUYS_IN_REPORT:
+        who += texts.DAILY_BUYS_MORE % (len(bought) - BUYS_IN_REPORT)
     return texts.DAILY_REPORT.format(
+        who=who,
         when=when,
         came=data['came'],
         launched=data['launched'],

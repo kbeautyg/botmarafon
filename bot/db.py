@@ -752,6 +752,29 @@ def add_purchase(user_id: int, product: str) -> int:
                 (user_id, product, time.time())).lastrowid
 
 
+def purchases_list(since: float = 0, until: float | None = None,
+                   limit: int = 30) -> list[dict]:
+    u"""Нажатия «купить» с именами — кому перезванивать.
+
+    Павел 23.09.2026: «где блин эти заявки, что нажали купить?». Числа в
+    отчёте были, а людей за ними — нет.
+
+    prev_at — когда этот же человек жал ту же кнопку до этого: если в
+    пределах суток, менеджерам заявку не слали (bot/handlers/purchase.py,
+    REPEAT_WINDOW), и в списке это надо назвать, иначе число в отчёте и
+    число заявок в личке не сходятся.
+    """
+    rows = _conn.execute(
+        'SELECT p.id, p.user_id, p.product, p.at, '
+        '       u.username, u.first_name, u.blocked_at, '
+        '       (SELECT MAX(q.at) FROM purchases q WHERE q.user_id = p.user_id '
+        '        AND q.product = p.product AND q.id < p.id) AS prev_at '
+        'FROM purchases p LEFT JOIN users u ON u.user_id = p.user_id '
+        'WHERE p.at >= ? AND (? IS NULL OR p.at < ?) '
+        'ORDER BY p.at DESC LIMIT ?', (since, until, until, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def purchase_presses(user_id: int, product: str) -> list[dict]:
     u"""Все нажатия человека на эту кнопку покупки, старые первыми."""
     rows = _conn.execute('SELECT id, at FROM purchases WHERE user_id=? AND product=? '

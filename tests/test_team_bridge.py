@@ -398,3 +398,31 @@ async def test_ник_без_текста_и_чужой_ник_не_отправ
     незнакомый = _команда(u'@nobody_here привет', bot)
     await support.on_nick_message(незнакомый)
     assert u'Не нашёл в боте' in незнакомый.answers[-1]
+
+
+async def test_человек_закрыл_бота_объясняем_по_русски():
+    u"""Павел 23.09.2026 ответил человеку и получил «Forbidden: bot was
+    blocked by the user» — и спросил, что с ботом. С ботом всё в порядке."""
+    bot = FakeBot()
+    await support.to_support(FakeMessage(text=u'вопрос', user=FakeUser(7, 'nick', u'Инна'),
+                                         bot=bot))
+    уведомление = _последнее_в(bot, ALEX)
+
+    class Закрыл(FakeBot):
+        u"""Бот не может писать только этому человеку, остальным может."""
+
+        async def copy_message(self, chat_id, *a, **kw):
+            if chat_id == 7:
+                from bot import delivery
+                raise delivery.Gone()
+            return await super().copy_message(chat_id, *a, **kw)
+
+    bot.__class__ = Закрыл
+    ответ = FakeMessage(text=u'Смотрите марафон', user=FakeUser(ALEX), bot=bot,
+                        reply_to=уведомление)
+    await support.from_team(ответ)
+
+    сказали = ответ.replies[-1]
+    assert u'Инна' in сказали and u'закрыл' in сказали
+    assert u'Forbidden' not in сказали and u'bot was blocked' not in сказали
+    assert db.get_user(7)['blocked_at'] is not None

@@ -31,6 +31,14 @@ def _who(user):
     return contact.line(user.id, user.full_name, user.username)
 
 
+def _name(user_id: int) -> str:
+    u"""«Наталья @nick» — как назвать человека в ответе команде."""
+    person = db.get_user(user_id) or {}
+    name = person.get('first_name') or u'человек'
+    return html.escape(name) + (u' @' + html.escape(person['username'])
+                                if person.get('username') else u'')
+
+
 def _team_reply(message: Message) -> bool:
     u"""Реплай команды в личке с ботом — это ответ человеку, а не вопрос."""
     return (message.chat.type == 'private' and message.reply_to_message is not None
@@ -45,10 +53,20 @@ async def _relay(message: Message) -> None:
                             u'на уведомление о нём или на его заявку — по ним бот и находит, '
                             u'кому отправить.')
         return
+    # Павел 23.09.2026 получил в ответ «Forbidden: bot was blocked by the
+    # user» и спросил, что с ботом. С ботом всё в порядке — человек его
+    # закрыл; так и говорим, по-русски.
+    who = _name(user_id)
     try:
-        copy = await message.bot.copy_message(user_id, message.chat.id, message.message_id)
+        copy = await delivery._guard(message.bot.copy_message(
+            user_id, message.chat.id, message.message_id))
+    except delivery.Gone:
+        db.mark_blocked(user_id)
+        await message.reply(texts.WRITE_GONE.format(who=who))
+        return
     except Exception as err:
-        await message.reply(u'Не доставили: %s' % html.escape(str(err))[:300])
+        await message.reply(texts.WRITE_FAILED.format(
+            who=who, why=html.escape(str(err))[:300]))
         return
     chatlog.save(message, user_id, 'out', message.from_user.id,
                  getattr(copy, 'message_id', None))

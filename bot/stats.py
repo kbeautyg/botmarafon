@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 
-from . import config, contact, db
+from . import config, contact, db, texts
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +67,59 @@ def parse_source(payload: str | None) -> str:
     if not raw or not all(ch.isalnum() or ch in '_-' for ch in raw) or len(raw) > 32:
         return ''
     return ALIASES.get(raw, raw)
+
+
+# Сутки: столько же держит окно повтора в bot/handlers/purchase.py.
+REPEAT_WINDOW = 24 * 3600
+PRODUCT_NAMES = {'gym': u'Энерго спортзал', 'course': u'Обучение'}
+
+
+def _again(row: dict) -> bool:
+    u"""Та же кнопка в пределах суток: заявку менеджерам по ней не слали."""
+    return bool(row.get('prev_at')) and row['at'] - row['prev_at'] < REPEAT_WINDOW
+
+
+def _product(row: dict) -> str:
+    return PRODUCT_NAMES.get(row['product'], html.escape(str(row['product'])))
+
+
+def _who(row: dict) -> str:
+    return contact.line(row['user_id'], row.get('first_name'), row.get('username'))
+
+
+def purchase_lines(rows: list) -> str:
+    u"""Кто нажал «купить» — короткими строками под число в отчёте.
+
+    Павел 23.09.2026: «где блин эти заявки, что нажали купить?». Число в
+    отчёте было, а людей за ним — нет.
+    """
+    if not rows:
+        return u''
+    lines = []
+    for row in rows:
+        when = datetime.fromtimestamp(row['at'], MSK).strftime('%H:%M')
+        lines.append(u'   • %s · %s, %s%s' % (
+            _who(row), _product(row), when, u' (повтор)' if _again(row) else u''))
+    return u'\n' + u'\n'.join(lines)
+
+
+def purchases_report(rows: list, days: int) -> str:
+    u"""Кто нажал «купить»: имя, ник, что выбрал и когда — команда /заявки.
+
+    Повторные нажатия помечаем: заявку по ним менеджерам не слали, и без
+    пометки список не сошёлся бы с числом в отчёте.
+    """
+    if not rows:
+        return texts.BUYS_NONE.format(days=days)
+    lines = [texts.BUYS_LINE.format(
+        when=datetime.fromtimestamp(row['at'], MSK).strftime('%d.%m %H:%M'),
+        who=_who(row), product=_product(row),
+        note=(texts.BUYS_AGAIN if _again(row) else
+              (texts.BUYS_GONE if row.get('blocked_at') else u'')))
+        for row in rows]
+    fresh = sum(1 for row in rows if not _again(row))
+    return (texts.BUYS_HEAD.format(count=len(rows), days=days, fresh=fresh)
+            + u'\n'.join(lines) + texts.BUYS_TAIL)
 
 
 def label(source: str) -> str:

@@ -42,6 +42,7 @@ def _is_admin(user_id: int) -> bool:
 # /рассылка и /отчёт до него не доходили вовсе: роутер их не пропускал.
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'panel', 'пульт', 'рассылка', 'broadcast',
+                  'заявки', 'zayavki', 'купили',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
                   'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream')
 
@@ -424,6 +425,10 @@ async def on_menu_button_pressed(call: CallbackQuery):
             await call.message.answer(part)
     elif what == 'live':
         await _live_ask(call.message)
+    elif what == 'buys':
+        rows = db.purchases_list(time.time() - BUYS_DAYS * 86400, None, BUYS_LIMIT)
+        await call.message.answer(stats.purchases_report(rows, BUYS_DAYS),
+                                  reply_markup=keyboards.panel_only(call.message.chat.id))
     elif what == 'stuck':
         await _stuck_preview(call.message)
     elif what == 'ban':
@@ -785,15 +790,36 @@ async def on_who(message: Message, command: CommandObject):
         await message.answer(chunk)
 
 
-@router.message(Command('zayavki', 'заявки'))
-async def on_leads(message: Message):
-    u"""Кто пришёл по заявке с сайта и марафон не получал — и кнопка отправить
-    (AleX 14.09.2026, подтвердил Sharp; см. bot/leads.py)."""
-    if not _is_admin(message.from_user.id):
+# За сколько дней показывать нажавших «купить» и сколько называть.
+BUYS_DAYS = 7
+BUYS_LIMIT = 40
+
+
+@router.message(Command('заявки', 'zayavki', 'купили'))
+async def on_buys(message: Message, command: CommandObject | None = None):
+    u"""Кто нажал «купить» — кому звонить.
+
+    Павел 23.09.2026: «где блин эти заявки, что нажали купить?». Заявка на
+    каждое нажатие уходит ему и AleX в личку сразу, но среди уведомлений о
+    каждом входе её не найти, а в отчёте стояло одно число.
+
+    Команда открыта всей команде: Павел и AleX не админы, и до 23.09.2026
+    «/заявки» у них молча не работала вовсе.
+    """
+    if not _can_stats(message):
         return
-    people = leads.pending()
-    await message.answer(leads.report(people),
-                         reply_markup=keyboards.leads_launch(len(people)) if people else None)
+    asked = ((command.args if command else None) or '').strip()
+    days = int(asked) if asked.isdigit() and 0 < int(asked) <= 90 else BUYS_DAYS
+    rows = db.purchases_list(time.time() - days * 86400, None, BUYS_LIMIT)
+    await message.answer(stats.purchases_report(rows, days),
+                         reply_markup=keyboards.panel_only(message.chat.id))
+    # Люди с сайта, которым марафон не уходил, — отдельная история и
+    # только для админа: по кнопке им уйдёт марафон (bot/leads.py).
+    if _is_admin(message.from_user.id):
+        people = leads.pending()
+        if people:
+            await message.answer(leads.report(people),
+                                 reply_markup=keyboards.leads_launch(len(people)))
 
 
 @router.callback_query(F.data == 'leads:launch')

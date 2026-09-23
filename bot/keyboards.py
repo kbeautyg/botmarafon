@@ -145,6 +145,13 @@ def stuck(count: int) -> InlineKeyboardMarkup:
                               callback_data='stuck:go')]])
 
 
+def panel_only(chat_id: int | None = None) -> InlineKeyboardMarkup | None:
+    u"""Одна кнопка пульта — под списком, где дальше надо написать человеку.
+    В группе мини-приложение Telegram не принимает, там кнопки нет."""
+    button = panel_button() if chat_id is None or chat_id > 0 else None
+    return InlineKeyboardMarkup(inline_keyboard=[[button]]) if button else None
+
+
 def menu(chat_id: int | None = None) -> InlineKeyboardMarkup:
     u"""Меню команды: всё, что умеет бот, — кнопками.
 
@@ -167,7 +174,8 @@ def menu(chat_id: int | None = None) -> InlineKeyboardMarkup:
                  InlineKeyboardButton(text=texts.MENU_WHO, callback_data='mn:who')])
     rows.append([InlineKeyboardButton(text=texts.MENU_LIVE, callback_data='mn:live'),
                  InlineKeyboardButton(text=texts.MENU_STUCK, callback_data='mn:stuck')])
-    rows.append([InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
+    rows.append([InlineKeyboardButton(text=texts.MENU_BUYS, callback_data='mn:buys'),
+                 InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
     rows.append([InlineKeyboardButton(text=texts.MENU_LINKS, callback_data='mn:links'),
                  InlineKeyboardButton(text=texts.MENU_CHATS, callback_data='mn:chats')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
