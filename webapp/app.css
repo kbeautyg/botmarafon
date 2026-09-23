@@ -154,6 +154,23 @@ html, body {
 .tick--off { border-style: dashed; opacity: .5; }
 .person.is-off { opacity: .55; cursor: default; }
 
+/* Подсказка над полосой выбора: кому из группы уже писали руками. */
+.already {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--wait) 22%, transparent);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.already[hidden] { display: none; }
+
 /* Полоса выбора прижата к низу списка: её видно и когда список пролистан. */
 .picked {
   display: flex;

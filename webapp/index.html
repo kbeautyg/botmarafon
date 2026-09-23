@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=13">
+<link rel="stylesheet" href="/static/app.css?v=14">
 </head>
 <body>
 
@@ -31,6 +31,9 @@
   </header>
   <div id="people" class="people"></div>
   <p id="empty" class="empty" hidden>Никого не нашли</p>
+  <!-- Кому из группы уже писали руками: снять у них галочки одним
+       нажатием (AleX 23.09.2026). -->
+  <button id="already" class="already" type="button" hidden></button>
   <div id="picked" class="picked" hidden>
     <span id="picked-count" class="picked__count">Выбрано: 0</span>
     <button id="picked-clear" class="picked__clear" type="button">Снять</button>
@@ -84,6 +87,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=13"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>

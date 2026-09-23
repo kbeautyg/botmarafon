@@ -18,12 +18,15 @@
      scope — выбрана целая группа: все участники или отдельный шаг
      воронки. Тогда получателей считает бот, а не пульт: их сотни, и
      список id из телефона устарел бы раньше, чем по нему нажали
-     (AleX 23.09.2026). file — файл с устройства, ждёт отправки. */
+     (AleX 23.09.2026). skip — кому из группы не писать: галочки стоят у
+     всех, и снять их можно у тех, кому сообщение уже ушло.
+     file — файл с устройства, ждёт отправки. */
   var state = { id: null, onlyChats: true, query: '', busy: false, person: null,
                 editing: null, card: null, chats: null,
                 picking: false, picked: [], to: [],
                 offset: 0, total: 0, more: 0, loaded: 0, everyone: false,
-                scopes: null, scope: '', scopeTitle: '', scopeCount: 0, file: null };
+                scopes: null, scope: '', scopeTitle: '', scopeCount: 0, skip: [],
+                rows: [], file: null };
 
   var $ = function (id) { return document.getElementById(id); };
   var listScreen = $('list');
@@ -178,10 +181,14 @@
     /* В режиме выбора строка не открывает переписку, а ставит галочку:
        промахнуться пальцем и вместо отметки уйти в чужой диалог, потеряв
        весь набранный список, слишком легко. */
-    if (state.picking && !person.banned) {
-      var mark = document.createElement('span');
-      mark.className = 'tick';
-      row.insertBefore(mark, ava);
+    if (state.picking && state.scope) {
+      /* В группе отмечены все: список показывает ровно тех, кто получит
+         сообщение. Нажатие снимает галочку — этому не уйдёт. */
+      row.insertBefore(tickMark(), ava);
+      row.classList.toggle('is-picked', state.skip.indexOf(person.id) < 0);
+      row.addEventListener('click', function () { toggleSkip(person.id, row); });
+    } else if (state.picking && !person.banned) {
+      row.insertBefore(tickMark(), ava);
       row.classList.toggle('is-picked', state.picked.indexOf(person.id) > -1);
       row.addEventListener('click', function () { togglePick(person.id, row); });
     } else if (state.picking) {
@@ -198,6 +205,20 @@
 
   // ---------------------------------------------------------- выбор людей
 
+  function tickMark() {
+    var mark = document.createElement('span');
+    mark.className = 'tick';
+    return mark;
+  }
+
+  /* Снять галочку у человека из группы — и вернуть обратно. */
+  function toggleSkip(id, row) {
+    var at = state.skip.indexOf(id);
+    if (at > -1) { state.skip.splice(at, 1); } else { state.skip.push(id); }
+    if (row) { row.classList.toggle('is-picked', at > -1); }
+    drawPicked();
+  }
+
   function togglePick(id, row) {
     // Галочка и группа — разные способы выбрать: отметили человека
     // руками, значит группу больше не шлём.
@@ -211,10 +232,42 @@
   function drawPicked() {
     var bar = $('picked');
     bar.hidden = !state.picking;
+    drawAlready();
     $('picked-count').textContent = state.scope
-      ? state.scopeTitle + ': ' + state.scopeCount + ' чел.'
+      ? state.scopeTitle + ': ' + manyCount() + ' чел.'
+        + (state.skip.length ? ' (сняли ' + state.skip.length + ')' : '')
       : 'Выбрано: ' + state.picked.length;
-    $('picked-write').disabled = !state.scope && state.picked.length === 0;
+    $('picked-write').disabled = manyCount() === 0 && state.picked.length === 0;
+  }
+
+  /* Кому из показанных уже писали руками за сутки: бот сам такие
+     сообщения не пишет, в переписке они только от команды и от службы
+     заботы. Значит, это и есть «уже отправили». */
+  var DAY = 24 * 3600;
+
+  function alreadyWritten() {
+    if (!state.picking || !state.scope) { return []; }
+    var since = Date.now() / 1000 - DAY;
+    return state.rows.filter(function (person) {
+      return person.last_side === 'out' && person.last_at > since
+        && state.skip.indexOf(person.id) < 0;
+    }).map(function (person) { return person.id; });
+  }
+
+  function drawAlready() {
+    var ids = alreadyWritten();
+    var button = $('already');
+    button.hidden = !ids.length;
+    button.textContent = 'Снять галочки у тех, кому уже писали: ' + ids.length;
+  }
+
+  function dropAlready() {
+    var ids = alreadyWritten();
+    if (!ids.length) { return; }
+    state.skip = state.skip.concat(ids);
+    drawPeople(state.rows.slice(), false);   // перерисовать галочки на месте
+    drawPicked();
+    toast('Сняли: ' + ids.length + '. Им сообщение не уйдёт.');
   }
 
   function setPicking(on) {
@@ -223,6 +276,7 @@
     $('pick').classList.toggle('is-on', on);
     $('pick').textContent = on ? 'Отмена' : 'Выбрать';
     $('scopes').hidden = !on;
+    if (!on) { $('already').hidden = true; }
     if (on) { loadScopes(); }
     drawPicked();
     loadPeople();
@@ -263,24 +317,30 @@
      группе. Ноль — одному человеку, чей диалог открыт. Считается в одном
      месте, иначе счёт группы переживает её отмену. */
   function manyCount() {
-    return state.to.length || (state.scope ? state.scopeCount : 0);
+    if (state.to.length) { return state.to.length; }
+    if (!state.scope) { return 0; }
+    return Math.max(0, state.scopeCount - state.skip.length);
   }
 
   function clearScope() {
     state.scope = '';
     state.scopeTitle = '';
     state.scopeCount = 0;
+    state.skip = [];
   }
 
   function pickScope(key) {
     var item = (state.scopes || []).filter(function (s) { return s.key === key; })[0];
     if (!item || !item.count) { return; }
     var same = state.scope === key;
-    state.scope = same ? '' : key;
-    state.scopeTitle = same ? '' : item.title;
-    state.scopeCount = same ? 0 : item.count;
-    // Группа и галочки не складываются: иначе непонятно, кому уйдёт.
-    if (state.scope) { state.picked = []; }
+    clearScope();
+    if (!same) {
+      state.scope = key;
+      state.scopeTitle = item.title;
+      state.scopeCount = item.count;
+      // Группа и отметки поимённо не складываются: иначе непонятно, кому уйдёт.
+      state.picked = [];
+    }
     drawScopes();
     drawPicked();
     loadPeople();
@@ -305,8 +365,10 @@
     if (old) { box.removeChild(old); }          // кнопка всегда последняя
     people.forEach(function (person) { box.appendChild(personRow(person)); });
     if (state.more) { box.appendChild(moreRow()); }
+    state.rows = append ? state.rows.concat(people) : people.slice();
     state.loaded += people.length;
     $('empty').hidden = state.loaded > 0;
+    drawAlready();
     var waiting = people.filter(function (p) { return p.waiting; }).length;
     // В шапке тесно: четыре кнопки и счётчик. Поэтому коротко — сколько
     // ждут ответа, а иначе сколько показано из скольких.
@@ -332,7 +394,7 @@
 
   function loadPeople(add) {
     var offset = add ? state.offset : 0;
-    return api('people', { query: state.query, offset: offset,
+    return api('people', { query: state.query, offset: offset, scope: state.scope,
                            onlyChats: state.onlyChats && !state.everyone })
       .then(function (data) {
         var people = data.people || [];
@@ -629,7 +691,7 @@
     $('chat-name').textContent = state.scope ? state.scopeTitle
       : 'Выбрано: ' + state.to.length;
     $('chat-sub').textContent = state.scope
-      ? state.scopeCount + ' чел. — каждому отдельно'
+      ? manyCount() + ' чел. — каждому отдельно'
       : 'напишем каждому одно и то же';
     $('log').textContent = '';
     var hint = document.createElement('p');
@@ -678,8 +740,9 @@
      уйдёт это сотням людей, и обратно уже не соберёшь. */
   function confirmGroup(next) {
     if (!state.scope) { return next(); }
-    var ask = 'Отправить всем в группе «' + state.scopeTitle + '» — '
-      + state.scopeCount + ' чел.?';
+    var ask = 'Отправить группе «' + state.scopeTitle + '» — '
+      + manyCount() + ' чел.?'
+      + (state.skip.length ? ' Снятым (' + state.skip.length + ') не уйдёт.' : '');
     if (tg && tg.showConfirm) { tg.showConfirm(ask, function (ok) { if (ok) { next(); } }); }
     else if (window.confirm(ask)) { next(); }
   }
@@ -703,7 +766,7 @@
     var call = state.editing
       ? api('edit', { messageId: state.editing, text: text })
       : api('send', { id: state.id, ids: state.to, scope: state.scope,
-                      text: text, media: media });
+                      except: state.skip, text: text, media: media });
     call
       .then(function (data) {
         field.value = '';
@@ -849,6 +912,7 @@
     form.append('id', String(state.id || 0));
     if (state.to.length) { form.append('ids', state.to.join(',')); }
     if (state.scope) { form.append('scope', state.scope); }
+    if (state.skip.length) { form.append('except', state.skip.join(',')); }
     form.append('kind', kind);
     form.append('text', $('text').value.trim());
     form.append('file', blob, kind === 'note' ? 'note.webm' : 'voice.webm');
@@ -913,6 +977,7 @@
     form.append('id', String(state.id || 0));
     if (state.to.length) { form.append('ids', state.to.join(',')); }
     if (state.scope) { form.append('scope', state.scope); }
+    if (state.skip.length) { form.append('except', state.skip.join(',')); }
     // kind и mime — раньше самого файла: по ним бот понимает, сколько
     // можно принять и чем это отправлять.
     form.append('kind', 'file');
@@ -954,6 +1019,7 @@
   $('pick').addEventListener('click', function () { setPicking(!state.picking); });
   drawPicked();                      // полоса выбора закрыта, «Написать» погашено
   $('picked-clear').addEventListener('click', function () { setPicking(false); });
+  $('already').addEventListener('click', dropAlready);
   $('picked-write').addEventListener('click', openMany);
   // Вложение — ссылкой: файл уходит от Telegram напрямую, минуя пульт.
   $('clip').addEventListener('click', function () {

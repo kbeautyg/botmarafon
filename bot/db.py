@@ -822,23 +822,30 @@ _WAITING = (
     "                     WHERE o.user_id = u.user_id AND o.side = 'out'), 0)")
 
 
-def _people_where(query: str, only_chats: bool) -> tuple:
-    u"""Условие отбора людей для списка пульта и мерки к нему."""
+def _people_where(query: str, only_chats: bool, scope: str = '') -> tuple:
+    u"""Условие отбора людей для списка пульта и мерки к нему.
+
+    scope — показывать только выбранную группу: тогда в списке ровно те,
+    кто получит сообщение, и галочки у них значат то, что значат
+    (AleX 23.09.2026: «выбрать всех, а потом снять у тех, кому уже ушло»).
+    """
     like = u'%%%s%%' % query.strip().lstrip('@').lower()
     where = []
     args: list = []
+    if scope in AUDIENCES:
+        where += _audience_terms(scope)
     if query.strip():
         where.append('(rulower(COALESCE(u.username, ' "''" ')) LIKE ? '
                      'OR rulower(COALESCE(u.first_name, ' "''" ')) LIKE ? '
                      'OR CAST(u.user_id AS TEXT) LIKE ?)')
         args += [like, like, like]
-    elif only_chats:
+    elif only_chats and scope not in AUDIENCES:
         where.append('m.id IS NOT NULL')
     return ('WHERE ' + ' AND '.join(where) + ' ' if where else ''), args
 
 
 def people(query: str = '', limit: int = 60, only_chats: bool = False,
-           offset: int = 0) -> list[dict]:
+           offset: int = 0, scope: str = '') -> list[dict]:
     u"""Люди для пульта админа: свежая переписка сверху.
 
     Пустой поиск — те, с кем переписка уже есть (кому отвечать), иначе
@@ -850,7 +857,7 @@ def people(query: str = '', limit: int = 60, only_chats: bool = False,
     список догружается порциями (AleX 23.09.2026: «больше 60 человек не
     отображается в списке, из которого нужно выбрать»).
     """
-    tail, args = _people_where(query, only_chats)
+    tail, args = _people_where(query, only_chats, scope)
     rows = _conn.execute(
         'SELECT u.user_id, u.username, u.first_name, u.started_at, u.launched_at, '
         "       u.poll, u.blocked_at, COALESCE(u.source, '') AS source, "
@@ -866,9 +873,9 @@ def people(query: str = '', limit: int = 60, only_chats: bool = False,
     return [dict(r) for r in rows]
 
 
-def people_count(query: str = '', only_chats: bool = False) -> int:
+def people_count(query: str = '', only_chats: bool = False, scope: str = '') -> int:
     u"""Сколько всего людей под этот отбор — чтобы пульт знал, сколько ещё."""
-    tail, args = _people_where(query, only_chats)
+    tail, args = _people_where(query, only_chats, scope)
     return _conn.execute(
         'SELECT COUNT(*) FROM users u '
         'LEFT JOIN messages m ON m.id = (' + _LAST_MESSAGE + ') ' + tail,
@@ -900,12 +907,17 @@ AUDIENCES = {
 }
 
 
-def _audience_where(scope: str) -> str:
-    u"""Отбор группы. Здесь же отсеиваем тех, кому бот писать не может:
+def _audience_terms(scope: str) -> list:
+    u"""Условия группы. Здесь же отсеиваем тех, кому бот писать не может:
     закрывших бота и чёрный список. Пульт обещает столько, сколько уйдёт."""
-    extra = AUDIENCES[scope]
-    return ('WHERE u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN
-            + ((' AND ' + extra) if extra else '') + ' ')
+    terms = ['u.blocked_at IS NULL', 'NOT ' + ACTIVE_BAN]
+    if AUDIENCES.get(scope):
+        terms.append(AUDIENCES[scope])
+    return terms
+
+
+def _audience_where(scope: str) -> str:
+    return 'WHERE ' + ' AND '.join(_audience_terms(scope)) + ' '
 
 
 def audience(scope: str) -> list[int]:

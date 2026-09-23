@@ -59,6 +59,9 @@ MAX_PHOTO = 10 * 1024 * 1024
 # Длиннее Телеграм подпись к файлу не берёт. Обрезать молча нельзя:
 # человек бы даже не узнал, что конец его текста никуда не ушёл.
 MAX_CAPTION = 1024
+# Скольких можно вычеркнуть из группы руками. Больше — это уже не
+# «снять тех, кому уже ушло», а другая группа.
+MAX_SKIPPED = 2000
 
 
 class Denied(Exception):
@@ -174,13 +177,17 @@ async def api_people(request, user):
     query = str(body.get('query') or '')[:64]
     only_chats = bool(body.get('onlyChats', True))
     offset = max(0, min(int(body.get('offset') or 0), 100000))
-    rows = db.people(query, PAGE_SIZE, only_chats=only_chats, offset=offset)
+    # Выбрана группа — показываем её, и только её: тогда галочки в списке
+    # значат ровно то, что значат, и снять их можно у кого угодно из неё
+    # (AleX 23.09.2026).
+    scope = wanted_scope(body)
+    rows = db.people(query, PAGE_SIZE, only_chats=only_chats, offset=offset, scope=scope)
     everyone = False
-    if only_chats and not rows and not query.strip() and not offset:
+    if only_chats and not scope and not rows and not query.strip() and not offset:
         rows = db.people('', PAGE_SIZE, only_chats=False)
         everyone = bool(rows)
         only_chats = not everyone
-    total = db.people_count(query, only_chats=only_chats)
+    total = db.people_count(query, only_chats=only_chats, scope=scope)
     return web.json_response({
         'people': [_person(r) for r in rows],
         'everyone': everyone,
@@ -189,6 +196,32 @@ async def api_people(request, user):
         # только когда есть что показывать (AleX 23.09.2026).
         'more': max(0, total - offset - len(rows)),
     })
+
+
+def wanted_scope(source) -> str:
+    u"""Какую группу выбрали в пульте. Пусто — не группу, а людей поимённо."""
+    scope = str(source.get('scope') or '').strip()
+    return scope if scope in db.AUDIENCES else ''
+
+
+def skipped_ids(source) -> list:
+    u"""У кого сняли галочку в группе — этим не шлём.
+
+    AleX 23.09.2026: «выбрать всех, а потом рукой убрать галочку у тех,
+    кому уже отправилось, — чтобы дважды одно и то же не отправлять».
+    """
+    raw = source.get('except')
+    if isinstance(raw, str):
+        raw = raw.split(',')
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for item in raw[:MAX_SKIPPED]:
+        try:
+            out.append(int(str(item).strip()))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 # Как назвать группу людям. Дни — это где человек сейчас: получил свой
@@ -460,7 +493,7 @@ def scope_title(scope: str) -> str:
     return dict(SCOPES).get(scope, scope)
 
 
-async def spread(request, user, scope: str, compose) -> web.Response:
+async def spread(request, user, scope: str, compose, skip=()) -> web.Response:
     u"""Отправить одно и то же целой группе — через обычную рассылку.
 
     Группа — это сотни человек и минуты отправки: держать ради этого
@@ -472,6 +505,11 @@ async def spread(request, user, scope: str, compose) -> web.Response:
     ids = db.audience(scope)
     if not ids:
         return web.json_response({'error': u'в этой группе сейчас никого'}, status=400)
+    if skip:
+        ids = [user_id for user_id in ids if user_id not in set(skip)]
+        if not ids:
+            return web.json_response(
+                {'error': u'галочки сняты у всех — писать некому'}, status=400)
     author = int(user['id'])
     try:
         origin = await compose(author)
@@ -493,12 +531,6 @@ async def spread(request, user, scope: str, compose) -> web.Response:
         'title': scope_title(scope),
         'minutes': max(1, int(len(ids) * broadcast.PAUSE / 60 + 0.5)),
     })
-
-
-def wanted_scope(source) -> str:
-    u"""Какую группу выбрали в пульте. Пусто — не группу, а людей поимённо."""
-    scope = str(source.get('scope') or '').strip()
-    return scope if scope in db.AUDIENCES else ''
 
 
 @route
@@ -527,7 +559,7 @@ async def api_send(request, user):
                 return (await send_media(bot, uid, media, text))[1]
             return await delivery._guard(bot.send_message(uid, text, parse_mode=None))
 
-        return await spread(request, user, scope, compose)
+        return await spread(request, user, scope, compose, skipped_ids(body))
 
     chosen = picked_ids(body)
     if chosen:
@@ -758,7 +790,7 @@ async def api_record(request):
         try:
             if scope:
                 return await spread(request, user, scope, lambda uid: _put_record(
-                    bot, uid, saved, ready, name, caption))
+                    bot, uid, saved, ready, name, caption), skipped_ids(fields))
             log.info(u'пульт: %s шлёт %s %d выбранным', user['id'], saved, len(chosen))
             return await to_each(chosen, lambda uid: _push_record(
                 bot, uid, saved, ready, name, caption, int(user['id'])))
@@ -842,7 +874,8 @@ async def _file_out(request, user, fields: dict, blob: bytes, name: str, caption
     scope = wanted_scope(fields)
     if scope:
         return await spread(request, user, scope,
-                            lambda uid: _send_file(bot, uid, kind, blob, name, caption))
+                            lambda uid: _send_file(bot, uid, kind, blob, name, caption),
+                            skipped_ids(fields))
 
     chosen = picked_ids(fields)
     if chosen:
