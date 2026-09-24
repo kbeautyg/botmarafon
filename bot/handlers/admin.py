@@ -18,7 +18,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import (backup, broadcast, config, daily, db, delivery, funnel, insights,
+from .. import (backup, broadcast, chatlog, config, daily, db, delivery, funnel, insights,
                 keyboards, leads, live, scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
@@ -554,8 +554,9 @@ async def on_broadcast_message(message: Message):
     picked = [int(piece) for piece in ((stored[1] if stored else '') or '').split(',')
               if piece.strip().lstrip('-').isdigit()]
     db.put_content(PICK_KEY % message.from_user.id, 'picked', '')
+    kind, text, file_id = chatlog.parts(message)
     task_id = db.broadcast_add(message.chat.id, message.message_id,
-                               message.from_user.id, picked)
+                               message.from_user.id, picked, kind, text, file_id)
     task = db.broadcast(task_id)
     await message.reply(broadcast.preview(task),
                         reply_markup=keyboards.broadcast(task_id,

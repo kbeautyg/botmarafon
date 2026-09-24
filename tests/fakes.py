@@ -88,6 +88,17 @@ class FakeBot(object):
         self.sent.append(('unban', chat_id, (user_id, kw.get('only_if_banned'))))
         return True
 
+    # Прошлая рассылка: прочитать, что в ней было (bot/broadcast.content).
+    async def forward_message(self, chat_id, from_chat_id, message_id, **kw):
+        original = self.by_id.get(message_id)
+        sent = await self._record('forward', chat_id, (from_chat_id, message_id))
+        sent.text = getattr(original, 'text', None)
+        return sent
+
+    async def delete_message(self, chat_id, message_id, **kw):
+        self.sent.append(('delete', chat_id, message_id))
+        return True
+
     # Закреп у админа — хранилище записей дней (bot/backup.py).
     async def get_chat(self, chat_id):
         return SimpleNamespace(pinned_message=self.pinned.get(chat_id))

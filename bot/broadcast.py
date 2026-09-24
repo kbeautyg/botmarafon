@@ -9,6 +9,11 @@ AleX 18.09.2026: «одной кнопкой написать абсолютно
 команды: так уходит всё разом — текст, фото, видео, кружок, подпись,
 жирный шрифт и рабочие ссылки, — и ничего не теряется по дороге.
 
+Каждому получателю рассылка ложится в его переписку в пульте, пометкой
+«рассылка» (AleX 24.09.2026: рассылки ушли, а в пульте у всех последним
+висело сообщение из самого пульта — казалось, что не дошло). Прошлые
+рассылки, до этого не записанные, дописывает backfill при запуске.
+
 Рассылка идёт в базе, а не в памяти. Тысяча человек — это минута работы, и
 за эту минуту бот может перезапуститься (деплой, сбой связи). Поэтому
 помним, докуда дошли: после перезапуска рассылка продолжается сама, а не
@@ -18,7 +23,7 @@ import asyncio
 import logging
 import time
 
-from . import config, db, delivery, texts
+from . import chatlog, config, db, delivery, texts
 
 log = logging.getLogger(__name__)
 
@@ -30,17 +35,51 @@ PAUSE = 1.0 / PER_SECOND
 REPORT_EVERY = 200
 
 
-async def send_one(bot, user_id: int, chat_id: int, message_id: int) -> str:
-    u"""Копия сообщения одному человеку. 'ok' | 'gone' | 'fail'."""
+async def _copy(bot, user_id: int, chat_id: int, message_id: int) -> tuple:
+    u"""Копия сообщения одному человеку: (итог, номер сообщения у него)."""
     try:
-        await delivery._guard(bot.copy_message(user_id, chat_id, message_id))
+        sent = await delivery._guard(bot.copy_message(user_id, chat_id, message_id))
     except delivery.Gone:
         db.mark_blocked(user_id)
-        return 'gone'
+        return 'gone', None
     except Exception as err:
         log.warning(u'рассылка %s: %s не ушло: %s', user_id, chat_id, err)
-        return 'fail'
-    return 'ok'
+        return 'fail', None
+    return 'ok', getattr(sent, 'message_id', None)
+
+
+async def send_one(bot, user_id: int, chat_id: int, message_id: int) -> str:
+    u"""Копия сообщения одному человеку. 'ok' | 'gone' | 'fail'."""
+    return (await _copy(bot, user_id, chat_id, message_id))[0]
+
+
+def _remember(task: dict, user_id: int, tg_id) -> None:
+    u"""Рассылку — в переписку получателя. Сбой записи рассылку не роняет."""
+    try:
+        db.save_message(user_id, 'out', task.get('kind') or 'text', task.get('text'),
+                        task.get('file_id'), task['author'], tg_id, mass=True)
+    except Exception as err:
+        log.warning(u'рассылка %s: в переписку %s не записали: %s', task['id'], user_id, err)
+
+
+async def content(bot, task: dict) -> tuple:
+    u"""Что в рассылке, если при заведении это не записали (до 24.09.2026).
+
+    Прочитать сообщение по номеру Bot API не даёт, а переслать — даёт, и
+    пересланное приходит целиком. Пересылаем автору рассылки без звука и
+    тут же удаляем. Не вышло — пишем в переписку честную заглушку.
+    """
+    try:
+        copy = await bot.forward_message(task['author'], task['chat_id'], task['message_id'],
+                                         disable_notification=True)
+    except Exception as err:
+        log.warning(u'рассылка %s: текст не прочитали: %s', task['id'], err)
+        return 'text', texts.BROADCAST_LOST, None
+    try:
+        await bot.delete_message(task['author'], copy.message_id)
+    except Exception as err:
+        log.warning(u'рассылка %s: служебную пересылку не удалили: %s', task['id'], err)
+    return chatlog.parts(copy)
 
 
 async def run(bot, broadcast_id: int) -> dict:
@@ -49,6 +88,11 @@ async def run(bot, broadcast_id: int) -> dict:
     if not task or task['status'] not in ('ready', 'going'):
         return {}
     db.broadcast_status(broadcast_id, 'going')
+    if not task.get('kind'):
+        # заведена до 24.09.2026 и продолжается после перезапуска
+        db.broadcast_content(broadcast_id, *(await content(bot, task)))
+        db.broadcast_logged(broadcast_id)
+        task = db.broadcast(broadcast_id)
 
     picked = db.broadcast_picked(task)
     while True:
@@ -56,7 +100,9 @@ async def run(bot, broadcast_id: int) -> dict:
         if not people:
             break
         for user_id in people:
-            result = await send_one(bot, user_id, task['chat_id'], task['message_id'])
+            result, tg_id = await _copy(bot, user_id, task['chat_id'], task['message_id'])
+            if result == 'ok':
+                _remember(task, user_id, tg_id)
             task = db.broadcast_step(broadcast_id, user_id, result)
             if task['sent'] and task['sent'] % REPORT_EVERY == 0:
                 await _progress(bot, task)
@@ -86,6 +132,38 @@ async def _finish(bot, task: dict) -> None:
             continue
     log.info(u'рассылка %s закончена: ушло %s, закрыли бота %s, сбоев %s',
              task['id'], task['sent'], task['gone'], task['failed'])
+
+
+# Расхождение восстановленного списка со счётом рассылки, при котором
+# прошлую рассылку в переписку не дописываем: лучше не показать, чем
+# показать человеку сообщение, которого он, может быть, не получал.
+GUESS_SLACK = 0.02
+
+
+async def backfill(bot) -> int:
+    u"""Дописать в переписку рассылки, прошедшие до 24.09.2026. Сколько дописали.
+
+    Поимённо тогда не записывали — получателей восстанавливает
+    db.broadcast_recipients_guess. Совпал их счёт со счётом рассылки —
+    дописываем; нет — пропускаем и пишем в журнал.
+    """
+    done = 0
+    for task in db.broadcasts_unlogged():
+        people = db.broadcast_recipients_guess(task)
+        if abs(len(people) - task['sent']) > max(2, task['sent'] * GUESS_SLACK):
+            log.warning(u'рассылка %s: восстановили %d получателей, а ушло %d — '
+                        u'в переписку не дописываем', task['id'], len(people), task['sent'])
+            db.broadcast_logged(task['id'])
+            continue
+        kind, text, file_id = ((task['kind'], task['text'], task['file_id'])
+                               if task.get('kind') else await content(bot, task))
+        db.broadcast_content(task['id'], kind, text, file_id)
+        db.save_mass([(uid, kind, text, file_id, task['author'], task['at'] + i * PAUSE)
+                      for i, uid in enumerate(people)])
+        db.broadcast_logged(task['id'])
+        log.info(u'рассылка %s дописана в переписку: %d чел.', task['id'], len(people))
+        done += 1
+    return done
 
 
 async def resume(bot) -> int:

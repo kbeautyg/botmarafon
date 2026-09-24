@@ -90,6 +90,13 @@ async def run():
     resumed = await broadcast.resume(bot)
     if resumed:
         log.info(u'продолжены прерванные рассылки: %d', resumed)
+    # Рассылки до 24.09.2026 — в переписку пульта. Сбой не мешает запуску.
+    try:
+        filled = await broadcast.backfill(bot)
+        if filled:
+            log.info(u'прошлые рассылки дописаны в переписку: %d', filled)
+    except Exception as err:
+        log.warning(u'прошлые рассылки в переписку не дописали: %s', err)
     panel = await web.serve(bot)
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())

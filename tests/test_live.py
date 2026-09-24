@@ -341,3 +341,15 @@ async def test_кнопки_эфира_стоят_под_читаемым_соо
     надписи = [b.text for row in сообщение.markups[-1].inline_keyboard for b in row]
     assert len(set(надписи)) == len(надписи)           # все кнопки разные
     assert any(u'всем' in n for n in надписи)          # видно, какая — по-настоящему
+
+
+async def test_анонс_эфира_виден_в_переписке_и_не_считается_ответом():
+    u"""AleX 24.09.2026: всё, что ушло людям, должно быть видно в пульте."""
+    _люди(1)
+    db.save_message(1, 'in', 'text', u'Во сколько эфир?')
+    db.live_add('https://t.me/x', u'', _через(7200), СВОЙ)
+    await live.announce(FakeBot(), 1)
+    [вопрос, анонс] = db.chat_history(1)
+    assert анонс['side'] == 'out' and анонс['mass'] == 1 and 'https://t.me/x' in анонс['text']
+    assert '<b>' not in анонс['text']                  # пульт показывает текст как есть
+    assert db.people('', 60, only_chats=True)[0]['waiting'] == 1

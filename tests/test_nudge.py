@@ -79,3 +79,10 @@ async def test_если_вопрос_уже_закрыт_кнопок_не_да�
 
     await nudge.run_once(bot, time.time())
     assert bot.keys_sent == [] or bot.keys_sent[0] is None
+
+
+async def test_дожим_виден_в_переписке_пульта():
+    _молчун(1, day=1)
+    await nudge.run_once(FakeBot(), time.time())
+    [m] = db.chat_history(1)
+    assert (m['side'], m['text'], m['mass']) == ('out', texts.NUDGE_DAY1, 1)

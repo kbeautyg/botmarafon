@@ -17,7 +17,9 @@ u"""Эфир: бот собирает людей и приводит их на �
 пережить.
 """
 import asyncio
+import html
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -86,6 +88,13 @@ def announce_text(live: dict, left: int | None = None) -> str:
     return head + ((u'\n\n' + own) if own else u'')
 
 
+def _for_panel(text: str, url: str) -> str:
+    u"""Анонс для переписки в пульте: без HTML-разметки и со ссылкой —
+    у человека она на кнопке, в пульте кнопок нет."""
+    plain = html.unescape(re.sub(r'<[^>]+>', '', text or ''))
+    return plain + (u'\n🔗 ' + url if url else u'')
+
+
 async def _spread(bot, live: dict, left: int | None) -> dict:
     u"""Разослать анонс или напоминание всем, кому бот ещё может писать.
     У прогона на себе список получателей свой — только проверяющий."""
@@ -101,7 +110,8 @@ async def _spread(bot, live: dict, left: int | None) -> dict:
         for user_id in people:
             after = user_id
             try:
-                await delivery._guard(bot.send_message(user_id, text, reply_markup=keys))
+                sent_msg = await delivery._guard(bot.send_message(user_id, text,
+                                                                  reply_markup=keys))
             except delivery.Gone:
                 db.mark_blocked(user_id)
                 gone += 1
@@ -111,6 +121,13 @@ async def _spread(bot, live: dict, left: int | None) -> dict:
                 failed += 1
                 continue
             sent += 1
+            # в переписку пульта — как рассылку: видно, что эфир человеку ушёл
+            try:
+                db.save_message(user_id, 'out', 'text', _for_panel(text, live.get('url')),
+                                None, live.get('author'),
+                                getattr(sent_msg, 'message_id', None), mass=True)
+            except Exception as err:
+                log.warning(u'эфир: в переписку %s не записали: %s', user_id, err)
             await asyncio.sleep(1.0 / PER_SECOND)
     log.info(u'эфир %s: ушло %d, закрыли бота %d, сбоев %d',
              live['id'], sent, gone, failed)

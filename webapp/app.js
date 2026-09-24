@@ -127,7 +127,10 @@
     var body = person.last_kind && person.last_kind !== 'text'
       ? (KINDS[person.last_kind] || 'вложение')
       : person.last_text;
-    return (person.last_side === 'out' ? 'Вы: ' : '') + (body || '');
+    // Рассылка, эфир, дожим — не личное сообщение: помечаем, чтобы не путать
+    // с ответом человеку (AleX 24.09.2026).
+    var who = person.last_side === 'out' ? (person.last_mass ? '📢 ' : 'Вы: ') : '';
+    return who + (body || '');
   }
 
   function initials(name) {
@@ -436,7 +439,7 @@
     row.textContent = body;
     var at = document.createElement('span');
     at.className = 'msg__at';
-    at.textContent = when(message.at);
+    at.textContent = (message.mass ? '📢 рассылка · ' : '') + when(message.at);
     row.appendChild(at);
     if (message.file) { row.appendChild(fileTools(message)); }
 

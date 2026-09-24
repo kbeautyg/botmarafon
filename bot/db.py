@@ -107,7 +107,11 @@ CREATE TABLE IF NOT EXISTS messages (
   file_id TEXT,                  -- медиа, если было
   at      REAL NOT NULL,
   tg_id   INTEGER,               -- номер сообщения в Telegram: по нему правим и удаляем
-  gone    INTEGER NOT NULL DEFAULT 0   -- удалено из переписки
+  gone    INTEGER NOT NULL DEFAULT 0,  -- удалено из переписки
+  -- Не личный ответ, а общее: рассылка, эфир, дожим, письмо группе. В
+  -- переписке видно, но ответом на вопрос человека не считается — иначе
+  -- одна рассылка стёрла бы из «ждут ответа» всех, кто спросил (24.09.2026).
+  mass    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS messages_user ON messages(user_id, at);
 
@@ -126,7 +130,13 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   gone       INTEGER NOT NULL DEFAULT 0,   -- закрыли бота
   failed     INTEGER NOT NULL DEFAULT 0,
   status     TEXT NOT NULL DEFAULT 'ready', -- ready | going | done | cancelled
-  targets    TEXT                          -- кому именно; пусто — всем
+  targets    TEXT,                         -- кому именно; пусто — всем
+  -- Что разослали — для переписки в пульте (24.09.2026): каждому
+  -- получателю рассылка ложится в его диалог. logged — записана ли уже.
+  kind       TEXT,
+  text       TEXT,
+  file_id    TEXT,
+  logged     INTEGER NOT NULL DEFAULT 0
 );
 
 -- Эфиры (Павел 20.09.2026). Бот не ведёт трансляцию — он собирает на неё
@@ -225,10 +235,19 @@ def connect(path: str) -> sqlite3.Connection:
         _conn.execute('ALTER TABLE messages ADD COLUMN tg_id INTEGER')
     if message_columns and 'gone' not in message_columns:
         _conn.execute('ALTER TABLE messages ADD COLUMN gone INTEGER NOT NULL DEFAULT 0')
+    # 24.09.2026: общее (рассылка, эфир, дожим) — не ответ на вопрос человека.
+    if message_columns and 'mass' not in message_columns:
+        _conn.execute('ALTER TABLE messages ADD COLUMN mass INTEGER NOT NULL DEFAULT 0')
     # 19.09.2026: рассылка не всем, а выбранным — список получателей.
     broadcast_columns = [row[1] for row in _conn.execute('PRAGMA table_info(broadcasts)')]
     if broadcast_columns and 'targets' not in broadcast_columns:
         _conn.execute('ALTER TABLE broadcasts ADD COLUMN targets TEXT')
+    # 24.09.2026: рассылка ложится в переписку каждого получателя. Прошлые
+    # рассылки получают logged=0 — их допишет broadcast.backfill.
+    for column, kind in (('kind', 'TEXT'), ('text', 'TEXT'), ('file_id', 'TEXT'),
+                         ('logged', 'INTEGER NOT NULL DEFAULT 0')):
+        if broadcast_columns and column not in broadcast_columns:
+            _conn.execute('ALTER TABLE broadcasts ADD COLUMN %s %s' % (column, kind))
     # 21.09.2026: эфир можно прогнать на себе — анонс и напоминания только
     # тому, кто проверяет.
     live_columns = [row[1] for row in _conn.execute('PRAGMA table_info(lives)')]
@@ -529,12 +548,73 @@ def day_stats(since: float, until: float) -> dict:
 # ------------------------------------------------------------- рассылка
 
 def broadcast_add(chat_id: int, message_id: int, author: int,
-                  targets: list | None = None) -> int:
-    u"""Новая рассылка. targets — кому именно; пусто (None) — всем."""
+                  targets: list | None = None, kind: str | None = None,
+                  text: str | None = None, file_id: str | None = None) -> int:
+    u"""Новая рассылка. targets — кому именно; пусто (None) — всем.
+
+    kind/text/file_id — что в ней: каждому получателю рассылка ляжет в
+    переписку пульта сразу, как уйдёт (logged=1).
+    """
     listed = ','.join(str(int(uid)) for uid in targets) if targets else None
-    return _run('INSERT INTO broadcasts (chat_id, message_id, author, at, targets) '
-                'VALUES (?, ?, ?, ?, ?)',
-                (chat_id, message_id, author, time.time(), listed)).lastrowid
+    return _run('INSERT INTO broadcasts (chat_id, message_id, author, at, targets, '
+                'kind, text, file_id, logged) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
+                (chat_id, message_id, author, time.time(), listed,
+                 kind or 'text', text, file_id)).lastrowid
+
+
+def broadcast_content(broadcast_id: int, kind: str, text: str | None,
+                      file_id: str | None) -> None:
+    _run('UPDATE broadcasts SET kind=?, text=?, file_id=? WHERE id=?',
+         (kind, text, file_id, broadcast_id))
+
+
+def broadcast_logged(broadcast_id: int) -> None:
+    _run('UPDATE broadcasts SET logged=1 WHERE id=?', (broadcast_id,))
+
+
+def broadcasts_unlogged() -> list[dict]:
+    u"""Законченные рассылки, которых нет в переписке: до 24.09.2026 рассылка
+    туда не писалась вовсе."""
+    rows = _conn.execute("SELECT * FROM broadcasts WHERE status='done' AND logged=0 "
+                         'AND sent > 0 ORDER BY id').fetchall()
+    return [dict(r) for r in rows]
+
+
+def broadcast_recipients_guess(task: dict) -> list[int]:
+    u"""Кому ушла прошлая рассылка — восстанавливаем по базе.
+
+    Поимённо тогда не записывали, только счёт. Восстанавливаем тем же
+    отбором, каким рассылка шла: по порядку id до курсора, кто уже был в
+    боте, не был в чёрном списке и не закрыл бота до неё. Закрывших бота
+    во время рассылки (их бот отметил тогда же) — первые по времени
+    закрытия после её начала, ровно столько, сколько насчитала рассылка.
+    Совпадёт ли итог со счётом рассылки, проверяет вызывающий.
+    """
+    at = task['at']
+    picked = broadcast_picked(task)
+    where = ('u.user_id <= ? AND u.started_at <= ? '
+             'AND (u.blocked_at IS NULL OR u.blocked_at >= ?) '
+             'AND NOT EXISTS (SELECT 1 FROM blacklist b WHERE b.user_id = u.user_id '
+             '    AND b.added_at <= ? AND (b.removed_at IS NULL OR b.removed_at > ?)) ')
+    args = [task['cursor'], at, at, at, at]
+    if picked:
+        where += 'AND u.user_id IN (%s) ' % ','.join('?' * len(picked))
+        args += picked
+    rows = _conn.execute('SELECT u.user_id, u.blocked_at FROM users u WHERE ' + where +
+                         'ORDER BY u.user_id', tuple(args)).fetchall()
+    closed = sorted((r['blocked_at'], r['user_id']) for r in rows if r['blocked_at'])
+    gone = {user_id for _, user_id in closed[:int(task.get('gone') or 0)]}
+    return [r['user_id'] for r in rows if r['user_id'] not in gone]
+
+
+def save_mass(rows: list) -> None:
+    u"""Записать пачку общих сообщений в переписку разом: (user_id, kind,
+    text, file_id, author, at)."""
+    _conn.executemany(
+        'INSERT INTO messages (user_id, side, author, kind, text, file_id, at, mass) '
+        "VALUES (?, 'out', ?, ?, ?, ?, ?, 1)",
+        [(uid, author, kind, text, file_id, at) for uid, kind, text, file_id, author, at in rows])
+    _conn.commit()
 
 
 def broadcast_picked(task: dict) -> list:
@@ -799,15 +879,16 @@ def care_target(chat_id: int, message_id: int) -> int | None:
 
 def save_message(user_id: int, side: str, kind: str = 'text', text: str | None = None,
                  file_id: str | None = None, author: int | None = None,
-                 tg_id: int | None = None) -> int:
+                 tg_id: int | None = None, mass: bool = False) -> int:
     u"""Записать сообщение переписки: side — 'in' от человека, 'out' от команды.
 
     tg_id — номер сообщения в самом Telegram: без него отправленное нельзя
     ни поправить, ни удалить у человека (AleX 19.09.2026).
     """
-    return _run('INSERT INTO messages (user_id, side, author, kind, text, file_id, at, tg_id) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (user_id, side, author, kind, text, file_id, time.time(), tg_id)).lastrowid
+    return _run('INSERT INTO messages (user_id, side, author, kind, text, file_id, at, tg_id, '
+                'mass) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (user_id, side, author, kind, text, file_id, time.time(), tg_id,
+                 1 if mass else 0)).lastrowid
 
 
 def message(message_id: int) -> dict | None:
@@ -827,7 +908,7 @@ def drop_message(message_id: int) -> None:
 def chat_history(user_id: int, limit: int = 200) -> list[dict]:
     u"""Переписка с человеком, старые сверху — как в обычном чате."""
     rows = _conn.execute(
-        'SELECT id, side, author, kind, text, file_id, at, tg_id FROM messages '
+        'SELECT id, side, author, kind, text, file_id, at, tg_id, mass FROM messages '
         'WHERE user_id=? AND gone=0 ORDER BY at DESC, id DESC LIMIT ?',
         (user_id, limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
@@ -842,7 +923,8 @@ _WAITING = (
     "SELECT COUNT(*) FROM messages i WHERE i.user_id = u.user_id AND i.side = 'in' "
     'AND i.gone = 0 '
     "AND i.at > COALESCE((SELECT MAX(o.at) FROM messages o "
-    "                     WHERE o.user_id = u.user_id AND o.side = 'out'), 0)")
+    "                     WHERE o.user_id = u.user_id AND o.side = 'out' "
+    "                     AND o.mass = 0 AND o.gone = 0), 0)")
 
 
 def _people_where(query: str, only_chats: bool, scope: str = '') -> tuple:
@@ -885,13 +967,17 @@ def people(query: str = '', limit: int = 60, only_chats: bool = False,
         'SELECT u.user_id, u.username, u.first_name, u.started_at, u.launched_at, '
         "       u.poll, u.blocked_at, COALESCE(u.source, '') AS source, "
         '       m.at AS last_at, m.side AS last_side, m.kind AS last_kind, m.text AS last_text, '
+        '       m.mass AS last_mass, '
         '       (' + _WAITING + ') AS waiting, '
         '       (SELECT COUNT(*) FROM blacklist b WHERE b.user_id = u.user_id '
         '        AND b.removed_at IS NULL) AS banned '
         'FROM users u LEFT JOIN messages m ON m.id = (' + _LAST_MESSAGE + ') ' + tail +
-        # Второй ключ — номер сообщения: два сообщения могут лечь в одну и ту
-        # же долю секунды, и без него порядок людей в списке плавал бы.
-        'ORDER BY COALESCE(m.at, u.started_at) DESC, m.id DESC, u.user_id DESC '
+        # Ждущие ответа — сверху: рассылка ложится в переписку всем, и без
+        # этого вопрос человека уезжал бы под сотни рассылочных (24.09.2026).
+        # Дальше — свежее сверху; номер сообщения — чтобы два сообщения в одну
+        # долю секунды не заставляли порядок людей плавать.
+        'ORDER BY (waiting > 0) DESC, COALESCE(m.at, u.started_at) DESC, m.id DESC, '
+        'u.user_id DESC '
         'LIMIT ? OFFSET ?', tuple(args) + (limit, offset)).fetchall()
     return [dict(r) for r in rows]
 

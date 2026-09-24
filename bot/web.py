@@ -25,7 +25,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import blacklist, broadcast, config, db, delivery, record
+from . import blacklist, broadcast, chatlog, config, db, delivery, record
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +161,7 @@ def _person(row: dict) -> dict:
         'last_side': row.get('last_side') or '',
         'last_text': (row.get('last_text') or '')[:120],
         'last_kind': row.get('last_kind') or '',
+        'last_mass': bool(row.get('last_mass')),
     }
 
 
@@ -322,9 +323,13 @@ def _messages(user_id: int) -> list[dict]:
     lines = [{'id': m['id'], 'kind': m['kind'], 'text': m['text'], 'at': m['at'],
               'mine': m['side'] == 'out',
               'file': bool(m.get('file_id') and not str(m['file_id']).startswith('http')),
-              # править и удалять можно только своё и только текстовое
-              'can_edit': bool(m['side'] == 'out' and m['tg_id'] and m['kind'] == 'text'),
-              'can_drop': bool(m['side'] == 'out' and m['tg_id'])}
+              # править и удалять можно только своё и только текстовое. Общее
+              # (рассылка, эфир, дожим) не правим: правка простым текстом сняла
+              # бы с него кнопки и ссылки — удалить у человека можно.
+              'can_edit': bool(m['side'] == 'out' and m['tg_id'] and m['kind'] == 'text'
+                               and not m.get('mass')),
+              'can_drop': bool(m['side'] == 'out' and m['tg_id']),
+              'mass': bool(m.get('mass'))}
              for m in db.chat_history(user_id)]
     lines += [{'id': 0, 'note': True, 'text': _note(step), 'at': step['at'],
                'kind': 'text', 'mine': False} for step in _steps(user_id)]
@@ -523,7 +528,7 @@ async def spread(request, user, scope: str, compose, skip=()) -> web.Response:
     # «Все» — это и есть обычная рассылка: списком её не перечисляем, иначе
     # в базу лёг бы километровый перечень id.
     targets = None if scope == 'all' else ids
-    task = db.broadcast_add(author, message_id, author, targets)
+    task = db.broadcast_add(author, message_id, author, targets, *chatlog.parts(origin))
     asyncio.create_task(broadcast.run(request.app['bot'], task))
     log.info(u'пульт: %s шлёт группе «%s» — %d чел.', author, scope, len(ids))
     return web.json_response({
@@ -569,8 +574,10 @@ async def api_send(request, user):
             else:
                 kind = 'text'
                 sent = await delivery._guard(bot.send_message(uid, text, parse_mode=None))
+            # нескольким разом — общее, а не личный ответ: из «ждут» не убирает
             db.save_message(uid, 'out', kind, text or media, media or None,
-                            author=int(user['id']), tg_id=getattr(sent, 'message_id', None))
+                            author=int(user['id']), tg_id=getattr(sent, 'message_id', None),
+                            mass=len(chosen) > 1)
 
         log.info(u'пульт: %s пишет %d выбранным', user['id'], len(chosen))
         return await to_each(chosen, one)
@@ -668,7 +675,7 @@ async def api_edit(request, user):
     body = await _body(request)
     line = db.message(int(body.get('messageId') or 0))
     text = str(body.get('text') or '').strip()
-    if not line or line['side'] != 'out' or not line['tg_id']:
+    if not line or line['side'] != 'out' or not line['tg_id'] or line.get('mass'):
         return web.json_response({'error': u'это сообщение править нельзя'}, status=400)
     if not text or len(text) > MAX_TEXT:
         return web.json_response({'error': u'пустое или слишком длинное сообщение'}, status=400)

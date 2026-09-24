@@ -71,8 +71,8 @@ def keys(user_id: int, poll: str):
 async def _push(bot, user_id: int, text: str, mark, label: str, poll: str) -> bool:
     u"""Отправить дожим и отметить его. False — не ушёл."""
     try:
-        await delivery._guard(bot.send_message(user_id, text,
-                                               reply_markup=keys(user_id, poll)))
+        sent = await delivery._guard(bot.send_message(user_id, text,
+                                                      reply_markup=keys(user_id, poll)))
     except delivery.Gone:
         db.mark_blocked(user_id)
         mark()
@@ -81,6 +81,11 @@ async def _push(bot, user_id: int, text: str, mark, label: str, poll: str) -> bo
         log.warning(u'дожим (%s) %s не ушёл: %s', label, user_id, err)
         return False
     mark()
+    try:                              # в переписку пульта — видно, что дожим был
+        db.save_message(user_id, 'out', 'text', text, None, None,
+                        getattr(sent, 'message_id', None), mass=True)
+    except Exception as err:
+        log.warning(u'дожим %s: в переписку не записали: %s', user_id, err)
     log.info(u'дожим «заходи на марафон» (%s) ушёл %s', label, user_id)
     return True
 
