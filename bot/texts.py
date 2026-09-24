@@ -467,7 +467,10 @@ BROADCAST_PICKED_NONE = (
 BROADCAST_GO = u'📢 Разослать всем ({count})'
 BROADCAST_CANCEL = u'Отменить'
 BROADCAST_STARTED = u'Начал рассылку. Доложу по ходу и в конце.'
-BROADCAST_PROGRESS = u'📢 Рассылка идёт: ушло {sent}, закрыли бота {gone}, сбоев {failed}.'
+# Промежуточный доклад, каждые 200 отправленных. Без «из скольких» его
+# читали как итог: «ушло 200» при 321 получателе (AleX 24.09.2026).
+BROADCAST_PROGRESS = (u'📢 Рассылка идёт: ушло {sent} из {total}, закрыли бота {gone}, '
+                      u'сбоев {failed}. Итог пришлю, когда закончится.')
 BROADCAST_DONE = (
     u'✅ <b>Рассылка закончена</b>\n'
     u'Получили: {sent}\n'

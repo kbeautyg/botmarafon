@@ -347,3 +347,14 @@ def test_пульт_помечает_рассылку_в_списке_и_в_ди
     assert web._person(человек)['last_mass'] is True
     assert web._messages(1)[0]['mass'] is True
     assert web._messages(1)[0]['can_edit'] is False      # правка сняла бы кнопки
+
+
+async def test_промежуточный_доклад_говорит_из_скольких(monkeypatch):
+    u"""AleX 24.09.2026: «ушло 200» читали как итог при 321 получателе."""
+    monkeypatch.setattr(broadcast, 'REPORT_EVERY', 2)
+    _люди(1, 2, 3)
+    bot = FakeBot()
+    await _подготовить(bot)
+    await broadcast.run(bot, 1)
+    доклады = [p for k, c, p in bot.sent if k == 'text' and u'Рассылка идёт' in (p or u'')]
+    assert доклады and u'ушло 2 из 3' in доклады[0]

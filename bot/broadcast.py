@@ -115,9 +115,11 @@ async def run(bot, broadcast_id: int) -> dict:
 
 
 async def _progress(bot, task: dict) -> None:
+    done = task['sent'] + task['gone'] + task['failed']
+    total = done + db.broadcast_left(task['cursor'], db.broadcast_picked(task))
     try:
         await bot.send_message(task['author'], texts.BROADCAST_PROGRESS.format(
-            sent=task['sent'], gone=task['gone'], failed=task['failed']))
+            sent=task['sent'], total=total, gone=task['gone'], failed=task['failed']))
     except Exception:
         pass                                   # доклад о ходе — не повод падать
 
