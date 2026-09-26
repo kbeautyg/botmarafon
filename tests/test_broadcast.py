@@ -358,3 +358,27 @@ async def test_промежуточный_доклад_говорит_из_ск�
     await broadcast.run(bot, 1)
     доклады = [p for k, c, p in bot.sent if k == 'text' and u'Рассылка идёт' in (p or u'')]
     assert доклады and u'ушло 2 из 3' in доклады[0]
+
+
+async def test_итог_раскладывает_всех_кто_в_боте():
+    u"""AleX 26.09.2026: «в боте ~450, а ушло 370 с чем-то» — итог обязан
+    сходиться с числом людей в боте."""
+    _люди(1, 2, 3, 4, 5, 6)
+    db.mark_blocked(3)                                # закрыл бота давно
+    db._run('UPDATE users SET blocked_at=? WHERE user_id=3', (1.0,))
+    db.ban_add(4, 'u4', u'Тролль', u'AleX')          # в чёрном списке
+
+    class ЗакрылВоВремя(FakeBot):
+        async def copy_message(self, chat_id, *a, **kw):
+            if chat_id == 6:
+                from bot import delivery
+                raise delivery.Gone()
+            return await super().copy_message(chat_id, *a, **kw)
+
+    bot = ЗакрылВоВремя()
+    await _подготовить(bot)
+    await broadcast.run(bot, 1)
+    итог = [p for k, c, p in bot.sent if k == 'text' and u'Рассылка закончена' in (p or u'')][-1]
+    assert u'Получили: 3' in итог and u'Закрыли бота (не доставлено): 1' in итог
+    assert u'Всего в боте: 6' in итог
+    assert u'закрыли бота раньше — 1' in итог and u'в чёрном списке — 1' in итог

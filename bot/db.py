@@ -667,6 +667,30 @@ def broadcast_left(after: int = 0, picked: list | None = None) -> int:
                          (after,)).fetchone()[0]
 
 
+def broadcast_breakdown(task: dict) -> dict:
+    u"""Кому рассылка не отправлялась и почему — для итога.
+
+    AleX 26.09.2026: «в боте ~450, а ушло 370 с чем-то» — итог называл, сколько
+    получили, но не называл, сколько в боте и кого пропустили. total — все,
+    кто заходил в бота (у выбранной рассылки — выбранные); closed — закрыли
+    бота ещё до рассылки (писать им Telegram не даёт); banned — в чёрном
+    списке. Закрывшие бота во время рассылки — в самой рассылке (gone).
+    """
+    picked = broadcast_picked(task)
+    where, args = '', ()
+    if picked:
+        where = 'WHERE u.user_id IN (%s) ' % ','.join('?' * len(picked))
+        args = tuple(picked)
+    row = _conn.execute(
+        'SELECT COUNT(*) AS total, '
+        '  SUM(CASE WHEN ' + ACTIVE_BAN + ' THEN 1 ELSE 0 END) AS banned, '
+        '  SUM(CASE WHEN NOT ' + ACTIVE_BAN + ' AND u.blocked_at IS NOT NULL '
+        '      AND u.blocked_at < ? THEN 1 ELSE 0 END) AS closed '
+        'FROM users u ' + where, (task['at'],) + args).fetchone()
+    return {'total': row['total'] or 0, 'banned': row['banned'] or 0,
+            'closed': row['closed'] or 0, 'picked': bool(picked)}
+
+
 def broadcast_step(broadcast_id: int, user_id: int, result: str) -> dict:
     u"""Отметить одного получателя и подвинуть курсор — чтобы перезапуск не
     заставил слать заново тем, кто уже получил."""

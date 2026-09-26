@@ -127,6 +127,13 @@ async def _progress(bot, task: dict) -> None:
 async def _finish(bot, task: dict) -> None:
     text = texts.BROADCAST_DONE.format(sent=task['sent'], gone=task['gone'],
                                        failed=task['failed'])
+    try:
+        left = db.broadcast_breakdown(task)
+        text += texts.BROADCAST_BREAKDOWN.format(
+            whom=texts.BROADCAST_WHOM_PICKED if left['picked'] else texts.BROADCAST_WHOM_ALL,
+            total=left['total'], closed=left['closed'], banned=left['banned'])
+    except Exception as err:          # раскладка — пояснение, итог уходит и без неё
+        log.warning(u'рассылка %s: раскладку не посчитали: %s', task['id'], err)
     for chat in dict.fromkeys((task['author'],) + config.purchase_recipients()):
         try:
             await bot.send_message(chat, text)

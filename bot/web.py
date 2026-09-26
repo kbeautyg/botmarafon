@@ -526,8 +526,10 @@ async def spread(request, user, scope: str, compose, skip=()) -> web.Response:
     if not message_id:
         return web.json_response({'error': u'не смог собрать сообщение'}, status=502)
     # «Все» — это и есть обычная рассылка: списком её не перечисляем, иначе
-    # в базу лёг бы километровый перечень id.
-    targets = None if scope == 'all' else ids
+    # в базу лёг бы километровый перечень id. Но если галочки сняты, «все»
+    # уже не все — тогда только списком: 26.09.2026 снятые в «Все участники»
+    # получали сообщение наравне с остальными.
+    targets = None if scope == 'all' and not skip else ids
     task = db.broadcast_add(author, message_id, author, targets, *chatlog.parts(origin))
     asyncio.create_task(broadcast.run(request.app['bot'], task))
     log.info(u'пульт: %s шлёт группе «%s» — %d чел.', author, scope, len(ids))
