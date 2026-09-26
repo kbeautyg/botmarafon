@@ -52,7 +52,14 @@ LABELS = {
     # ссылку ?start=tgADS. Без расшифровки в отчёте стояло бы «tgads», и
     # переходы с рекламы искали под «Telegram» — где их нет.
     'tgads': u'Telegram Ads',
+    # Реклама в Яндекс Директе ведёт на сайт с utm_source=yandex (15.09.2026):
+    # в боте такой человек — «Сайт ← Яндекс Директ», а не «Сайт ← yandex».
+    'yandex': u'Яндекс Директ',
 }
+# Всплывающее окно «Забирай марафон» на сайте ведёт в бота с меткой
+# site_popup_<источник>. Читалось как «Сайт ← popup_ig» (AleX 26.09.2026:
+# «неразбериха») — теперь «Сайт, окно ← Instagram».
+POPUP = u'Сайт, окно'
 # Полные имена, которые приходят из utm-меток сайта, — к коротким.
 ALIASES = {
     'instagram': 'ig', 'insta': 'ig', 'facebook': 'fb', 'meta': 'fb',
@@ -132,6 +139,12 @@ def label(source: str) -> str:
     """
     if not source:
         return DIRECT
+    if source == 'site_popup':
+        return POPUP
+    if source.startswith('site_popup_'):
+        tail = source[len('site_popup_'):]
+        tail = ALIASES.get(tail, tail)
+        return u'%s ← %s' % (POPUP, LABELS.get(tail, tail))
     if '_' in source:
         head, tail = source.split('_', 1)
         head = ALIASES.get(head, head)

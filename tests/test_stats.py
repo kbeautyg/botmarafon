@@ -174,3 +174,13 @@ def test_реклама_в_telegram_ads_видна_под_своим_имене�
     assert stats.parse_source('tgADS') == 'tgads'
     assert stats.label('tgads') == u'Telegram Ads'
     assert stats.label('tgads_story2') == u'Telegram Ads ← story2'
+
+
+def test_метки_сайта_читаются_по_человечески():
+    u"""AleX 26.09.2026: «пришли список всех меток… неразбериха»."""
+    assert stats.label('site_popup_ig') == u'Сайт, окно ← Instagram'
+    assert stats.label('site_popup_fb') == u'Сайт, окно ← Facebook'
+    assert stats.label('site_popup') == u'Сайт, окно'
+    assert stats.label('site_yandex') == u'Сайт ← Яндекс Директ'
+    assert stats.label('site_ig') == u'Сайт ← Instagram'
+    assert stats.label('site_telegram') == u'Сайт ← Telegram'
