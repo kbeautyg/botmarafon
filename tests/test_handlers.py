@@ -472,12 +472,13 @@ async def test_stats_показывает_источники():
     message = админ_сообщение(text='/stats')
     await admin.on_stats(message)
     text = message.answers[-1]
-    assert u'Instagram 2' in text and u'Сайт ← Facebook 1' in text and u'напрямую 1' in text
+    assert u'Instagram 2' in text and u'Мариус — Facebook, через сайт 1' in text
+    assert u'напрямую 1' in text
     assert u'Всё время:</b> 4 человек, запустили 4' in text
 
     assert stats.hourly() is not None and u'+4' in stats.hourly()
     assert stats.parse_source('Instagram') == 'ig'
-    assert stats.label('site_instagram') == u'Сайт ← Instagram'
+    assert stats.label('site_instagram') == u'Мариус — Instagram, через сайт'
 
 
 # ------------------------------------------------ подробная статистика

@@ -138,7 +138,8 @@ def test_источники_считают_каждую_ссылку_отдел�
     db.log_event(40, 'day', 4)
     _человек(43, source='ig')
     text = insights.render('src', '7', now=NOW)
-    assert u'Telegram ← storis5</b> — пришли 3' in text
+    assert u'Telegram — storis5</b> — пришли 3' in text
+    assert u'По каналам' in text and u'Telegram — пришли 3' in text
     assert u'Instagram</b> — пришли 1' in text
 
 

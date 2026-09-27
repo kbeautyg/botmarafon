@@ -26,14 +26,14 @@ def база(tmp_path):
 # ------------------------------------------------------------------ метки
 
 def test_метка_рассылки_читается_целиком():
-    u"""tg_storis5 — это «Telegram ← storis5», а не «неизвестно»."""
-    assert stats.label('tg_storis5') == u'Telegram ← storis5'
-    assert stats.label('tg_1') == u'Telegram ← 1'
+    u"""tg_storis5 — это «Telegram — storis5», а не «неизвестно»."""
+    assert stats.label('tg_storis5') == u'Telegram — storis5'
+    assert stats.label('tg_1') == u'Telegram — рассылка 1'
 
 
 def test_известные_источники_называются_по_человечески():
     assert stats.label('ig') == u'Instagram'
-    assert stats.label('site_fb') == u'Сайт ← Facebook'
+    assert stats.label('site_fb') == u'Мариус — Facebook, через сайт'
     assert stats.label('zayavka') == u'Заявка с сайта'
     assert stats.label('') == stats.DIRECT
 
@@ -94,7 +94,7 @@ def test_в_сводке_видно_и_проценты_и_названия_ра
     _человек(2, 'tg_storis5')
 
     текст = stats.funnel_lines(0)
-    assert u'Telegram ← storis5' in текст
+    assert u'Telegram — storis5' in текст
     assert u'пришло 2' in текст
     assert u'запустили 1 (50%)' in текст
 
@@ -111,7 +111,7 @@ def test_список_зашедших_показывает_ник_источн�
 
     текст = stats.who_report()
     assert u'@u1' in текст and u'@u2' in текст
-    assert u'Telegram ← 1' in текст and u'Instagram' in текст
+    assert u'Telegram — рассылка 1' in текст and u'Instagram' in текст
     assert u'марафон не запущен' in текст
 
 
@@ -159,8 +159,9 @@ def test_готовые_ссылки_содержат_имя_бота_и_мет�
 
 def test_короткие_метки_alex_понятны_в_статистике():
     u"""AleX 14.09.2026 раздаёт ссылки ?start=az, ls, nc, tg_ads1."""
-    понятно = {'az': u'Автообзвон', 'ls': u'Рассылка в ЛС', 'nc': u'Нейрокомментинг',
-               'tg_ads1': u'Telegram ← ads1', 'nc_2': u'Нейрокомментинг ← 2'}
+    понятно = {'az': u'Автообзвон', 'ls': u'Telegram — рассылка в ЛС',
+               'nc': u'Telegram — нейрокомментинг', 'tg_ads1': u'Telegram Ads — ads1',
+               'nc_2': u'Telegram — нейрокомментинг 2'}
     for метка, подпись in понятно.items():
         assert stats.label(stats.parse_source(метка)) == подпись
     ссылки = stats.links_report('finish_marafon_bot')
@@ -172,15 +173,38 @@ def test_реклама_в_telegram_ads_видна_под_своим_имене�
     u"""AleX 21.09.2026: объявление ведёт на ?start=tgADS, а в отчёте
     переходы искали под «Telegram» — там их не было, стояло «tgads»."""
     assert stats.parse_source('tgADS') == 'tgads'
-    assert stats.label('tgads') == u'Telegram Ads'
-    assert stats.label('tgads_story2') == u'Telegram Ads ← story2'
+    assert stats.label('tgads') == u'Telegram Ads — прямо в бота'
+    assert stats.label('tgads_story2') == u'Telegram Ads — story2'
 
 
 def test_метки_сайта_читаются_по_человечески():
     u"""AleX 26.09.2026: «пришли список всех меток… неразбериха»."""
-    assert stats.label('site_popup_ig') == u'Сайт, окно ← Instagram'
-    assert stats.label('site_popup_fb') == u'Сайт, окно ← Facebook'
-    assert stats.label('site_popup') == u'Сайт, окно'
-    assert stats.label('site_yandex') == u'Сайт ← Яндекс Директ'
-    assert stats.label('site_ig') == u'Сайт ← Instagram'
-    assert stats.label('site_telegram') == u'Сайт ← Telegram'
+    assert stats.label('site_popup_ig') == u'Мариус — Instagram, окно на сайте'
+    assert stats.label('site_popup_fb') == u'Мариус — Facebook, окно на сайте'
+    assert stats.label('site_popup') == u'Сайт — без рекламной метки, окно'
+    assert stats.label('site_yandex') == u'Яндекс Директ — через сайт'
+    assert stats.label('site_ig') == u'Мариус — Instagram, через сайт'
+    assert stats.label('site_telegram') == u'Telegram Ads — через сайт'
+    assert stats.label('site') == u'Сайт — без рекламной метки'
+
+
+def test_у_каждой_метки_первым_словом_канал():
+    u"""AleX 26.09.2026: «пусть у каждой ссылки будет написано Мариус,
+    Телеграм АДС, Телеграм, Яндекс»."""
+    каналы = {
+        'site_ig': u'Мариус', 'site_fb': u'Мариус', 'site_popup_ig': u'Мариус',
+        'site_an': u'Мариус', 'site_msg': u'Мариус',
+        'site_telegram': u'Telegram Ads', 'tgads': u'Telegram Ads', 'tg_ads1': u'Telegram Ads',
+        'tg_1': u'Telegram', 'tg_kanal': u'Telegram', 'chat_7': u'Telegram', 'ls': u'Telegram',
+        'nc': u'Telegram', 'site_tgorg': u'Telegram',
+        'site_yandex': u'Яндекс Директ', 'site_popup_yandex': u'Яндекс Директ',
+        'site_igorg': u'Instagram', 'ig_direct': u'Instagram', 'ig_bio': u'Instagram', 'ig': u'Instagram',
+        'site': u'Сайт', 'zayavka': u'Заявка с сайта', 'az': u'Автообзвон', '': stats.DIRECT,
+        'vebinar': u'Другое',
+    }
+    for метка, канал in каналы.items():
+        assert stats.channel(метка) == канал, метка
+    assert stats.label('site_igorg') == u'Instagram — через сайт, не реклама'
+    assert stats.label('ig_direct') == u'Instagram — автоответ в директ'
+    assert stats.label('chat_7') == u'Telegram — рабочий чат 7'
+    assert stats.label('tg_kanal') == u'Telegram — свой канал'

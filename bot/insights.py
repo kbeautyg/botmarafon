@@ -481,6 +481,18 @@ def section_src(m: dict, period: str, now: float) -> str:
              u'Проценты — от запустивших.', u'']
     if not ordered:
         lines.append(u'За этот срок никто не заходил.')
+    else:
+        # AleX 26.09.2026: «не понятно, что именно в бота зашло от Мариуса» —
+        # сначала итог по каналам, ниже каждая ссылка отдельно.
+        channels = {}
+        for src, group in ordered:
+            channels.setdefault(stats.channel(src), []).extend(group)
+        lines.append(u'<b>По каналам</b>')
+        for name, group in sorted(channels.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            sc = reach_counts(group)
+            lines.append(u'%s — пришли %d, запустили %d, д4 %d, 🛒 %d'
+                         % (_esc(name), sc[0], sc[1], sc[5], sc[7]))
+        lines += [u'', u'<b>По ссылкам</b>']
     for src, group in ordered[:15]:
         sc = reach_counts(group)
         lines.append(u'<b>%s</b> — пришли %d' % (_esc(stats.label(src)), sc[0]))

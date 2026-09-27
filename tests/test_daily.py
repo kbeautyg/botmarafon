@@ -72,7 +72,7 @@ def test_отчёт_считает_только_свои_сутки():
     текст = daily.report([ВЧЕРА])
     assert u'Пришли в бота: <b>2</b>' in текст
     assert u'Запустили марафон: <b>2</b>' in текст
-    assert u'Рабочий чат ← 7 — 1' in текст and u'Instagram — 1' in текст
+    assert u'Telegram — рабочий чат 7 — 1' in текст and u'Instagram — 1' in текст
 
 
 def test_в_отчёте_видно_да_нет_и_молчунов_по_каждому_дню():

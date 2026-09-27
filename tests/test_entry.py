@@ -156,7 +156,7 @@ async def test_новый_запуск_уходит_лично_команде(mo
     await start.on_start(сообщение)
     for chat in (SHARP, PAVEL, ALEX):
         (текст,) = _в_чат(сообщение.bot, chat)
-        assert u'Новый запуск марафона' in текст and u'Telegram ← storis5' in текст
+        assert u'Новый запуск марафона' in текст and u'Telegram — storis5' in текст
 
 
 async def test_заявка_с_сайта_команде_со_своим_заголовком(monkeypatch):

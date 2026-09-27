@@ -53,13 +53,9 @@ LABELS = {
     # переходы с рекламы искали под «Telegram» — где их нет.
     'tgads': u'Telegram Ads',
     # Реклама в Яндекс Директе ведёт на сайт с utm_source=yandex (15.09.2026):
-    # в боте такой человек — «Сайт ← Яндекс Директ», а не «Сайт ← yandex».
+    # в боте такой человек — «Яндекс Директ — через сайт», а не «yandex».
     'yandex': u'Яндекс Директ',
 }
-# Всплывающее окно «Забирай марафон» на сайте ведёт в бота с меткой
-# site_popup_<источник>. Читалось как «Сайт ← popup_ig» (AleX 26.09.2026:
-# «неразбериха») — теперь «Сайт, окно ← Instagram».
-POPUP = u'Сайт, окно'
 # Полные имена, которые приходят из utm-меток сайта, — к коротким.
 ALIASES = {
     'instagram': 'ig', 'insta': 'ig', 'facebook': 'fb', 'meta': 'fb',
@@ -129,29 +125,124 @@ def purchases_report(rows: list, days: int) -> str:
             + u'\n'.join(lines) + texts.BUYS_TAIL)
 
 
-def label(source: str) -> str:
-    u"""«Сайт ← Instagram» для site_ig, «Telegram ← рассылка1» для tg_рассылка1.
+# ------------------------------------------------------------ каналы
+#
+# AleX 26.09.2026: «у нас огромный список, и не понятно, что именно в бота
+# зашло от Мариуса. Пусть у каждой ссылки будет написано Мариус, Телеграм
+# АДС, Телеграм, Яндекс». Поэтому подпись метки — «Канал — подробность»:
+# канал всегда первым словом, и в любом списке видно, чьё это.
+#
+# С сайта метка приходит как site_<откуда> (site_popup_<откуда> — из
+# всплывающего окна). «Откуда» решает сайт (gym-landing/js/adsource.js):
+# ig/fb/msg/an — реклама Meta, которую ведёт Мариус; igorg/fborg/tgorg —
+# те же соцсети без признаков объявления; telegram — Telegram Ads;
+# yandex — Яндекс Директ. До 27.09.2026 сайт не отличал рекламу Мариуса от
+# обычных ссылок из Instagram с utm_source=ig — у тех людей метка site_ig
+# осталась (по журналу сайта таких около 3 %).
 
-    Хвост после подчёркивания — название конкретной рассылки или
-    объявления: AleX 09.09.2026 гоняет их несколько разом и сравнивает
-    между собой. Имя после подчёркивания произвольное, поэтому если оно
-    не из известных — показываем как есть, а не прячем.
-    """
+MARIUS = u'Мариус'
+TG_ADS = u'Telegram Ads'
+TELEGRAM = u'Telegram'
+YANDEX = u'Яндекс Директ'
+SITE = u'Сайт'
+OTHER = u'Другое'
+
+# хвост метки с сайта → (канал, что за площадка)
+SITE_TAILS = {
+    'ig': (MARIUS, u'Instagram'),
+    'fb': (MARIUS, u'Facebook'),
+    'msg': (MARIUS, u'Messenger'),
+    'an': (MARIUS, u'Audience Network'),
+    'tg': (TG_ADS, u''),
+    'yandex': (YANDEX, u''),
+    'igorg': (u'Instagram', u'не реклама'),
+    'fborg': (u'Facebook/Instagram', u'не реклама'),
+    'tgorg': (TELEGRAM, u'не реклама'),
+    'vk': (u'ВКонтакте', u''),
+    'yt': (u'YouTube', u''),
+    'tt': (u'TikTok', u''),
+}
+# прямые ссылки на бота: начало метки → (канал, что это)
+DIRECT_HEADS = {
+    'tgads': (TG_ADS, u'прямо в бота'),
+    'tg': (TELEGRAM, u''),
+    'chat': (TELEGRAM, u'рабочий чат'),
+    'ls': (TELEGRAM, u'рассылка в ЛС'),
+    'nc': (TELEGRAM, u'нейрокомментинг'),
+    'az': (u'Автообзвон', u''),
+    'ig': (u'Instagram', u''),
+    'fb': (u'Facebook', u''),
+    'yt': (u'YouTube', u''),
+    'vk': (u'ВКонтакте', u''),
+    'tt': (u'TikTok', u''),
+    'zayavka': (u'Заявка с сайта', u''),
+}
+IG_TAILS = {'direct': u'автоответ в директ', 'bio': u'ссылка в профиле'}
+
+
+def _join(*bits) -> str:
+    return u', '.join(b for b in bits if b)
+
+
+def _site(source: str) -> tuple[str, str] | None:
+    u"""(канал, подробность) для меток с сайта; None — метка не с сайта."""
+    if source != 'site' and not source.startswith('site_'):
+        return None
+    rest = source[len('site_'):] if source.startswith('site_') else ''
+    popup = rest == 'popup' or rest.startswith('popup_')
+    if popup:
+        rest = rest[len('popup_'):] if rest.startswith('popup_') else ''
+    where = u'окно на сайте' if popup else u'через сайт'
+    tail = ALIASES.get(rest, rest)
+    if not tail:
+        return SITE, _join(u'без рекламной метки', u'окно' if popup else u'')
+    if tail in SITE_TAILS:
+        name, what = SITE_TAILS[tail]
+        if what == u'не реклама':
+            return name, _join(where, what)
+        return name, _join(what, where)
+    return SITE, _join(tail, where)
+
+
+def _direct(source: str) -> tuple[str, str] | None:
+    u"""(канал, подробность) для прямых ссылок на бота; None — незнакомая."""
+    head, _, tail = source.partition('_')
+    head = ALIASES.get(head, head)
+    if head == 'tg' and tail.startswith('ads'):
+        return TG_ADS, tail                     # tg_ads1 из /ссылки
+    if head not in DIRECT_HEADS:
+        return None
+    name, what = DIRECT_HEADS[head]
+    if head == 'tg' and tail:
+        if tail == 'kanal':
+            return name, u'свой канал'
+        return name, (u'рассылка %s' % tail) if tail.isdigit() else tail
+    if head == 'ig' and tail:
+        return name, IG_TAILS.get(tail, tail)
+    if head == 'tgads' and tail:
+        return name, tail
+    return name, u' '.join(b for b in (what, tail) if b)
+
+
+def channel(source: str) -> str:
+    u"""Канал метки: Мариус, Telegram Ads, Telegram, Яндекс Директ, Instagram…"""
     if not source:
         return DIRECT
-    if source == 'site_popup':
-        return POPUP
-    if source.startswith('site_popup_'):
-        tail = source[len('site_popup_'):]
-        tail = ALIASES.get(tail, tail)
-        return u'%s ← %s' % (POPUP, LABELS.get(tail, tail))
-    if '_' in source:
-        head, tail = source.split('_', 1)
-        head = ALIASES.get(head, head)
-        if head in LABELS:
-            tail = ALIASES.get(tail, tail)
-            return u'%s ← %s' % (LABELS[head], LABELS.get(tail, tail))
-    return LABELS.get(source, source)
+    found = _site(source) or _direct(source)
+    return found[0] if found else OTHER
+
+
+def label(source: str) -> str:
+    u"""«Мариус — Instagram, через сайт», «Telegram — рассылка 1», «Telegram Ads —
+    прямо в бота». Незнакомая метка показывается как есть, а не прячется:
+    иначе не узнать, что ссылка живая."""
+    if not source:
+        return DIRECT
+    found = _site(source) or _direct(source)
+    if not found:
+        return source
+    name, what = found
+    return u'%s — %s' % (name, what) if what else name
 
 
 def breakdown(pairs: list[tuple[str, int]]) -> str:
@@ -372,7 +463,7 @@ def chat_links_report(username: str, count: int = 20) -> str:
     rows = u'\n'.join(u'Чат %d\n<code>%s%d</code>' % (n, base, n)
                       for n in range(1, count + 1))
     return (u'🔗 <b>Ссылки для кнопок в рабочих чатах</b>\n\n%s\n\n'
-            u'В статистике они читаются как «Рабочий чат ← 1». Если удобнее '
+            u'В статистике они читаются как «Telegram — рабочий чат 1». Если удобнее '
             u'по названию, а не по номеру, — ставьте вместо цифры латиницу '
             u'без пробелов: <code>%ssadhu2</code>, <code>%smeditacii</code>. '
             u'Метка запоминается за человеком при первом входе.'
