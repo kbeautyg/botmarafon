@@ -17,6 +17,7 @@ Telegram отдаёт его первым сообщением /start ig, и б�
 import asyncio
 import html
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -204,8 +205,16 @@ def _site(source: str) -> tuple[str, str] | None:
     return SITE, _join(tail, where)
 
 
+# Кнопки рабочих чатов на деле размечены cht1…cht15 (без подчёркивания), а
+# не chat_1 из /ссылки: бот их не узнавал и писал «cht12» (AleX 28.09.2026).
+CHAT_TAG = re.compile(r'^(?:cht|chat)_?([a-z0-9-]+)$')
+
+
 def _direct(source: str) -> tuple[str, str] | None:
     u"""(канал, подробность) для прямых ссылок на бота; None — незнакомая."""
+    chat = CHAT_TAG.match(source)
+    if chat:
+        return TELEGRAM, u'рабочий чат %s' % chat.group(1)
     head, _, tail = source.partition('_')
     head = ALIASES.get(head, head)
     if head == 'tg' and tail.startswith('ads'):

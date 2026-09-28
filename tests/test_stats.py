@@ -208,3 +208,13 @@ def test_у_каждой_метки_первым_словом_канал():
     assert stats.label('ig_direct') == u'Instagram — автоответ в директ'
     assert stats.label('chat_7') == u'Telegram — рабочий чат 7'
     assert stats.label('tg_kanal') == u'Telegram — свой канал'
+
+
+def test_метки_рабочих_чатов_cht_узнаются():
+    u"""AleX 28.09.2026: кнопки в чатах размечены cht12, cht3 — а бот писал «cht12»."""
+    assert stats.label('cht12') == u'Telegram — рабочий чат 12'
+    assert stats.label('cht1') == u'Telegram — рабочий чат 1'
+    assert stats.label('chat_7') == u'Telegram — рабочий чат 7'
+    assert stats.label('cht_meditacii') == u'Telegram — рабочий чат meditacii'
+    assert stats.channel('cht14') == u'Telegram'
+    assert stats.label('chat') == u'Telegram — рабочий чат'
