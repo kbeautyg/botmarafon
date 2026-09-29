@@ -305,6 +305,22 @@ def may_open(user_id: int, poll: str) -> bool:
     return not (current and current > poll)
 
 
+def remember_day(user_id: int, day: int, sent, kind: str) -> None:
+    u"""Запомнить, в каком сообщении ушла запись дня.
+
+    Через три дня после кнопок покупки записи закрываются (bot/closing.py),
+    а своё сообщение бот правит только по его номеру. Сбой записи — не
+    повод рвать воронку: запись человек уже получил.
+    """
+    tg_id = getattr(sent, 'message_id', None)
+    if not tg_id:
+        return
+    try:
+        db.remember_day_message(user_id, day, tg_id, kind)
+    except Exception as err:
+        log.warning(u'не запомнили сообщение с записью дня %s у %s: %s', day, user_id, err)
+
+
 def open_poll(user_id: int, day: int) -> None:
     u"""Открыть вопрос дня — запись с кнопками уже ушла.
 
@@ -365,6 +381,7 @@ async def send_day(bot: Bot, user_id: int, day: int,
         sent = await _guard(bot.send_message(user_id, u'%s\n\n%s' % (stored[1], text),
                                              reply_markup=keyboards.day(day, stored[1])))
 
+    remember_day(user_id, day, sent, stored[0])
     open_poll(user_id, day)
     return sent
 
@@ -380,12 +397,13 @@ async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
         return False
     lead = texts.DAY_RESEND.format(day=day)
     if stored[0] == 'video':
-        await _guard(bot.send_video(user_id, stored[1], caption=lead, cover=day_cover(day),
-                                    supports_streaming=True,
-                                    reply_markup=keyboards.day(day)))
+        sent = await _guard(bot.send_video(user_id, stored[1], caption=lead, cover=day_cover(day),
+                                           supports_streaming=True,
+                                           reply_markup=keyboards.day(day)))
     else:
-        await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1]),
-                                      reply_markup=keyboards.day(day, stored[1])))
+        sent = await _guard(bot.send_message(user_id, u'%s\n\n%s' % (lead, stored[1]),
+                                             reply_markup=keyboards.day(day, stored[1])))
+    remember_day(user_id, day, sent, stored[0])
     db.clear_missed(user_id, day)
     # Тем, кому день ушёл без записи, это единственный способ продолжить:
     # кнопок под обещанием не было, и вопрос у них не открывался.

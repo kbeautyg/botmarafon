@@ -251,6 +251,31 @@ def offer() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=texts.OFFER_COURSE, callback_data='buy:course')]])
 
 
+def finish(place: str) -> InlineKeyboardMarkup:
+    u"""Кнопки после марафона: купить спортзал и сайт энергозала (AleX 29.09.2026).
+
+    place — где кнопки показаны: banner — под баннером после закрытия
+    записей, again — в ответ на /start того, кто марафон прошёл. Менеджер
+    видит это в заявке: так понятно, что сработало. Покупка — та же, что у
+    «Купить энерго спортзал», только без «по акции»: акция к этому времени
+    закончилась.
+    """
+    rows = [[InlineKeyboardButton(text=texts.FINISH_BUY, callback_data='buy:gym:%s' % place)]]
+    if config.GYM_SITE_URL:
+        rows.append([InlineKeyboardButton(text=texts.FINISH_SITE, url=config.GYM_SITE_URL)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def closing_switch(enabled: bool, due: int) -> InlineKeyboardMarkup:
+    u"""Включить или выключить закрытие записей (/баннер, только админам)."""
+    if enabled:
+        button = InlineKeyboardButton(text=texts.BANNER_OFF_BUTTON, callback_data='cl:off')
+    else:
+        button = InlineKeyboardButton(text=texts.BANNER_ON_BUTTON.format(due=due),
+                                      callback_data='cl:on')
+    return InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+
 # ---------------------------------------------------------- чёрный список
 #
 # Под уведомлениями команде (AleX 16.09.2026): «в одно касание в чёрный

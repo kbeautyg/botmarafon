@@ -8,8 +8,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import (backup, broadcast, config, daily, db, delivery, handlers, leads,
-               live, nudge, scheduler, stats, texts, web)
+from . import (backup, broadcast, closing, config, daily, db, delivery, handlers, history,
+               leads, live, nudge, scheduler, stats, texts, web)
 
 log = logging.getLogger('marathon')
 
@@ -29,6 +29,14 @@ async def run():
         # заявку, и заметит это только заказчик.
         raise SystemExit(u'Не заданы настройки:\n  ' + u'\n  '.join(missing))
 
+    # Копия базы — до того, как эта версия поменяет схему (29.09.2026: «на
+    # всякий случай сделай бэкап»). Не вышла — запуску это не мешает.
+    try:
+        copied = backup.before_start(config.DB_PATH)
+        if copied:
+            log.info(u'копия базы перед запуском: %s', copied)
+    except Exception as err:
+        log.warning(u'копию базы перед запуском не сделали: %s', err)
     db.connect(config.DB_PATH)
     if config.POLL_FALLBACK_HOURS > 0:
         stale = db.clear_stale_polls()
@@ -84,6 +92,10 @@ async def run():
     nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
     reporter_daily = asyncio.create_task(daily.loop(bot))  # отчёт за сутки ночью
     liver = asyncio.create_task(live.loop(bot))       # напоминания об эфире
+    # записи закрываются через три дня после кнопок покупки, приходит баннер
+    closer = asyncio.create_task(closing.loop(bot))
+    # один раз: найти записи дней в старых переписках, чтобы закрыть и их
+    finder = asyncio.create_task(history.run(bot))
     # Пульт админа поднимается рядом с ботом: та же база, тот же процесс.
     # Нет порта (машина разработчика) — бот работает как раньше, без пульта.
     # Рассылка, прерванная деплоем, продолжается с того же места.
@@ -106,6 +118,8 @@ async def run():
         nudger.cancel()
         reporter_daily.cancel()
         liver.cancel()
+        closer.cancel()
+        finder.cancel()
         if panel:
             await panel.cleanup()
         await bot.session.close()

@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import re
+import tempfile
 import time
 from datetime import datetime
 
@@ -20,14 +21,15 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import (backup, broadcast, chatlog, config, contact, daily, db, delivery, funnel,
-                insights, keyboards, leads, live, scheduler, stats, texts)
+from .. import (backup, broadcast, chatlog, closing, config, contact, daily, db, delivery,
+                funnel, insights, keyboards, leads, live, scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
 
 DAY_TAG = re.compile(r'^day([1-4])\b', re.I)
 REVIEW_TAG = re.compile(r'^review([1-9])\b', re.I)
+BANNER_TAG = re.compile(r'^(banner|баннер)\b', re.I)
 LINK = re.compile(r'https?://\S+')
 
 # Во сколько раз ускорить паузы в тестовом прогоне: два с половиной часа
@@ -47,7 +49,8 @@ STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'ответы', 'answers',
                   'заявки', 'zayavki', 'купили',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
-                  'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream')
+                  'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream',
+                  'баннер', 'banner')
 
 
 def _command(message: Message) -> str:
@@ -715,6 +718,93 @@ async def on_broadcast_button(call: CallbackQuery):
     asyncio.create_task(broadcast.run(call.bot, task_id))
 
 
+# ---------------------------------------------- баннер после марафона
+#
+# AleX 29.09.2026: через три дня после кнопок покупки записи закрываются, и
+# приходит баннер — короткое зацикленное видео Энергетического спортзала
+# (bot/closing.py). Видео админ присылает боту с подписью banner, как записи
+# дней. Обработчик стоит выше on_video: тот иначе забрал бы видео себе.
+
+@router.message(F.caption.regexp(BANNER_TAG), F.video | F.animation | F.document)
+async def on_banner(message: Message):
+    if not _is_admin(message.from_user.id):
+        return
+    if getattr(message, 'animation', None):
+        kind, media = 'animation', message.animation
+    else:
+        kind, media = 'video', message.video or message.document
+    db.put_content(closing.BANNER, kind, media.file_id)
+    await backup.save(message.bot)
+    log.info(u'админ %s задал баннер после марафона', message.from_user.id)
+    await _banner_screen(message.bot, message.chat.id, message.from_user.id)
+
+
+async def _banner_screen(bot, chat_id: int, user_id: int) -> None:
+    u"""Просмотр баннера и состояние закрытия; админу — кнопка включить/выключить."""
+    if not await closing.preview(bot, chat_id):
+        await bot.send_message(chat_id, texts.BANNER_NONE)
+        return
+    keys = (keyboards.closing_switch(closing.enabled(), len(closing.due()))
+            if _is_admin(user_id) else None)
+    await bot.send_message(chat_id, closing.state(), reply_markup=keys)
+
+
+@router.message(Command('баннер', 'banner'))
+async def on_banner_command(message: Message):
+    u"""Как человек увидит закрытую запись и баннер, и включено ли закрытие."""
+    if not _can_stats(message):
+        return
+    await _banner_screen(message.bot, message.chat.id, message.from_user.id)
+
+
+@router.callback_query(F.data.in_({'cl:on', 'cl:off'}))
+async def on_closing_switch(call: CallbackQuery):
+    u"""Включить закрытие — баннер сразу уйдёт всем, у кого три дня прошли.
+    Поэтому только админам и только отдельным нажатием после просмотра."""
+    if not _is_admin(call.from_user.id):
+        await call.answer(u'Включает закрытие админ бота')
+        return
+    on = call.data == 'cl:on'
+    if on and not closing.banner():
+        await call.answer(u'Сначала баннер: видео с подписью banner')
+        return
+    closing.switch(on)
+    log.info(u'админ %s %s закрытие записей', call.from_user.id,
+             u'включил' if on else u'выключил')
+    await call.answer(texts.BANNER_TURNED_ON if on else texts.BANNER_TURNED_OFF)
+    try:
+        await call.message.edit_text(
+            closing.state(), reply_markup=keyboards.closing_switch(on, len(closing.due())))
+    except Exception as err:                       # тот же текст — Telegram не правит
+        log.debug(u'состояние закрытия не переписали: %s', err)
+
+
+@router.message(Command('backup', 'копия'))
+async def on_backup(message: Message):
+    u"""Копия базы файлом — админу (29.09.2026: «сделай бэкап бота»)."""
+    if not _is_admin(message.from_user.id):
+        return
+    handle, path = tempfile.mkstemp(suffix='.db', prefix='marathon-')
+    os.close(handle)
+    try:
+        db.copy_to(path)
+        with open(path, 'rb') as file:
+            data = file.read()
+        when = datetime.fromtimestamp(time.time(), stats.MSK)
+        await message.bot.send_document(
+            message.chat.id,
+            BufferedInputFile(data, filename='marathon-%s.db' % when.strftime('%Y-%m-%d_%H-%M')),
+            caption=texts.BACKUP_CAPTION.format(when=when.strftime('%d.%m.%Y %H:%M')))
+    except Exception as err:
+        log.warning(u'копия базы не ушла: %s', err)
+        await message.answer(texts.BACKUP_FAILED.format(why=html.escape(str(err))[:300]))
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 @router.message(Command('day1', 'day2', 'day3', 'day4'))
 async def on_day_command(message: Message, command: CommandObject):
     u"""Ждать запись дня следующим сообщением.
@@ -823,6 +913,12 @@ def _content_report() -> list[str]:
     else:
         lines.append(u'• Кружки на месте: %d' % len(wanted))
 
+    if not closing.banner():
+        lines.append(u'• Баннер после марафона — <b>НЕ ЗАДАН</b> (видео с подписью banner)')
+    else:
+        lines.append(u'• Баннер после марафона — видео ✅, закрытие записей %s (/баннер)'
+                     % (u'включено' if closing.enabled() else u'<b>выключено</b>'))
+
     if config.on_railway():
         lines.append(u'• База на диске ✅' if config.db_persistent() else
                      u'• База <b>НЕ НА ДИСКЕ</b> — пропадёт при деплое '
@@ -841,6 +937,7 @@ async def on_status(message: Message):
                  % (counters['users'], counters['launched']))
     lines.append(u'Шагов в очереди: %d · нажали «купить»: %d (всего нажатий %d)'
                  % (counters['jobs'], counters['purchases'], counters['presses']))
+    lines.append(u'Записи закрыты, баннер ушёл: %d чел.' % counters['closed'])
     # Кого бот реально видит в доступе: правка переменных в Railway не
     # действует, пока её не применили деплоем, — отсюда это видно сразу.
     listed = lambda ids: u', '.join(str(i) for i in ids) or u'—'
@@ -1016,6 +1113,9 @@ async def on_resend(message: Message):
                    if funnel.day_delivered(db.pending_chains(uid), day)]
     else:
         targets = db.missed_users(day)
+    # Кому записи уже закрыты (bot/closing.py), досылать их нельзя: иначе
+    # досылка вернула бы человеку то, что закрыли намеренно.
+    targets = [uid for uid in targets if not (db.get_user(uid) or {}).get('closed_at')]
     if not targets:
         await message.answer(u'День %d досылать некому: пометок «ушёл без записи» '
                              u'нет. Всем, кто день уже прошёл: /resend %d всем' % (day, day))

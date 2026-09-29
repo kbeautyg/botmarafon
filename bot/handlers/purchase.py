@@ -34,6 +34,15 @@ PRODUCTS = {
 # вернулся к покупке, и это снова сигнал менеджеру.
 REPEAT_WINDOW = 24 * 3600
 
+# Где нажали «купить», если не под кнопками покупки после четвёртого дня
+# (buy:gym:<где>, keyboards.finish): менеджеру видно, что сработало.
+PLACES = {
+    'banner': u'Нажал под баннером: через три дня после марафона, записи закрыты',
+    'again': u'Нажал, вернувшись в бота после марафона',
+}
+# Кнопка в просмотре баннера командой (/баннер) — не заявка.
+PREVIEW = 'preview'
+
 
 def _who(user):
     u"""Как показать человека менеджеру: имя ссылкой на профиль, ник и id."""
@@ -83,10 +92,13 @@ async def _reply(call: CallbackQuery, toast: str, text: str, markup=None) -> Non
 
 @router.callback_query(F.data.startswith('buy:'))
 async def on_buy(call: CallbackQuery):
-    product = call.data.split(':', 1)[1]
+    product, _, place = call.data[len('buy:'):].partition(':')
     title = PRODUCTS.get(product)
     if not title:
         await call.answer()
+        return
+    if place == PREVIEW:
+        await call.answer(u'Это просмотр баннера — заявка не создаётся')
         return
 
     user_id = call.from_user.id
@@ -112,8 +124,9 @@ async def on_buy(call: CallbackQuery):
     again = (u'\n\nПовторная заявка: человек вернулся к кнопке, нажатие №%d' % (len(earlier) + 1)
              if earlier else u'')
     paid = u'\n%s' % texts.PAY_NOTE if pay_url else u''
-    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s%s\n\n%s' % (
-        number, _who(call.from_user), title, paid, again, texts.REPLY_HINT)
+    where = u'\n%s' % PLACES[place] if place in PLACES else u''
+    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s%s%s\n\n%s' % (
+        number, _who(call.from_user), title, where, paid, again, texts.REPLY_HINT)
     await _deliver(call.bot, number, note, user_id)
     if answer:
         await _reply(call, u'Открываю оплату', *answer)

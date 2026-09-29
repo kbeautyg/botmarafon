@@ -12,7 +12,9 @@ u"""Старт — и сразу воронка.
 
 1. Повторный /start. Воронку он не удваивает — но и молчать нельзя:
    человек, очистивший переписку, оставался ни с чем (AleX 09.09.2026).
-   Даём кнопку «пройти заново».
+   Даём кнопку «пройти заново». С 29.09.2026 — только до четвёртого дня:
+   дошедшему до него марафон заново не начать (AleX), ему — кнопки
+   Энергетического спортзала.
 
 2. Ссылка из заявки с сайта — ?start=zayavka57. С 14.09.2026 марафон
    запускается и такому человеку (AleX, Sharp); до этого он только ждал
@@ -107,6 +109,14 @@ async def _lead_arrived(message: Message, number: str, gift: bool = True) -> Non
 _launching: set[int] = set()
 
 
+def _passed(user_id: int) -> bool:
+    u"""«Пройти заново» закрыто: четвёртый день уже запущен (AleX 29.09.2026:
+    «тем, кто четвёртый шаг уже запускал, перезапустить бота чтобы нельзя
+    было»). Команды проекта это не касается — «кроме админов и разработчиков»:
+    ей прогонять марафон на себе нужно для проверок."""
+    return not config.is_team(user_id) and db.passed_marathon(user_id)
+
+
 def _repeat_start_text(user_id: int) -> str:
     u"""Ответ на повторный /start — по правде о том, что человеку предстоит.
 
@@ -165,6 +175,10 @@ async def on_start(message: Message, command: CommandObject | None = None):
 
     # Повторный /start воронку не удваивает: mark_launched проходит один раз.
     if not db.mark_launched(user_id):
+        if _passed(user_id):
+            # Марафон пройден: кнопки «пройти заново» нет — вместо неё спортзал.
+            await message.answer(texts.MARATHON_PASSED, reply_markup=keyboards.finish('again'))
+            return
         await message.answer(_repeat_start_text(user_id), reply_markup=keyboards.restart())
         return
 
@@ -197,6 +211,20 @@ async def on_start(message: Message, command: CommandObject | None = None):
 async def on_restart(call: CallbackQuery):
     u"""«Пройти заново»: снять старые шаги и запустить цепочку с первого дня."""
     user_id = call.from_user.id
+    if _passed(user_id):
+        # Кнопка осталась под давним ответом бота, а четвёртый день уже
+        # запущен: заново нельзя. Воронку и ответы не трогаем.
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception as err:                   # сообщение могли удалить
+            log.debug(u'клавиатуру перезапуска не убрали: %s', err)
+        try:
+            await call.answer(texts.RESTART_CLOSED)
+        except Exception as err:                   # запоздалое нажатие — не беда
+            log.debug(u'нажатие «заново» у %s не подтвердили: %s', user_id, err)
+        await call.message.answer(texts.MARATHON_PASSED, reply_markup=keyboards.finish('again'))
+        log.info(u'%s: «пройти заново» закрыто — четвёртый день уже был', user_id)
+        return
     db.reset_funnel(user_id)
     db.mark_launched(user_id)
     scheduler.start_chain(user_id, 'launch')

@@ -10,10 +10,17 @@ u"""Запас записей дней — в закрепе у админа.
 Диск это не заменяет: очередь отложенных шагов так не спасти. Но записи
 дней и отзывы-картинки больше не теряются, в каком бы порядке ни делали
 диск и загрузку.
+
+Здесь же копии самой базы (29.09.2026, «на всякий случай сделай бэкап»):
+перед каждым запуском бота — рядом с базой, на том же диске, пока новая
+версия ещё не тронула схему; и по /backup — файлом админу в Telegram.
 """
+import glob
 import json
 import logging
 import os
+import sqlite3
+import time
 
 from aiogram import Bot
 
@@ -23,12 +30,47 @@ log = logging.getLogger(__name__)
 
 # Записи дней, загруженные в обход админского чата (tools/upload_days_bot.py):
 # сам бот заливает файл через MTProto (там предел 2 ГБ, а не 50 МБ Bot API),
-# а file_id кладётся сюда и приезжает с деплоем.
+# а file_id кладётся сюда и приезжает с деплоем. Так же можно задать и
+# баннер после марафона (ключ banner).
 COMMITTED = os.path.join(config.ROOT, 'media', 'days.json')
 
 TAG = u'#хранилище'
-KEYS = tuple('day%d' % n for n in (1, 2, 3, 4)) + tuple('review%d' % n for n in range(1, 10))
-KINDS = ('video', 'link', 'photo')
+KEYS = (tuple('day%d' % n for n in (1, 2, 3, 4)) + tuple('review%d' % n for n in range(1, 10))
+        + ('banner',))
+KINDS = ('video', 'link', 'photo', 'animation')
+
+# Сколько копий базы «перед запуском» держать рядом с ней.
+KEEP_COPIES = 5
+
+
+def copy_db(source: str, target: str) -> None:
+    u"""Целая копия sqlite-базы — встроенным копированием sqlite, а не
+    копией файла: так она согласована и при журнале WAL."""
+    src = sqlite3.connect(source)
+    try:
+        out = sqlite3.connect(target)
+        try:
+            src.backup(out)
+        finally:
+            out.close()
+    finally:
+        src.close()
+
+
+def before_start(path: str, keep: int = KEEP_COPIES) -> str | None:
+    u"""Копия базы перед запуском: выкладка новой версии меняет схему уже на
+    старте, и если что-то пойдёт не так, вернуть данные можно из этой копии.
+    Держим последние keep; базы ещё нет — копировать нечего."""
+    if not os.path.exists(path):
+        return None
+    target = '%s.before-%s' % (path, time.strftime('%Y%m%d-%H%M%S', time.gmtime()))
+    copy_db(path, target)
+    for extra in sorted(glob.glob(glob.escape(path) + '.before-*'))[:-keep]:
+        try:
+            os.remove(extra)
+        except OSError as err:
+            log.warning(u'старую копию базы %s не удалили: %s', extra, err)
+    return target
 
 
 def dump() -> str:
@@ -99,7 +141,7 @@ def apply_committed(path: str = COMMITTED) -> list[str]:
         log.warning(u'media/days.json не прочитали: %s', err)
         return []
     changed = []
-    for key in ('day1', 'day2', 'day3', 'day4'):
+    for key in ('day1', 'day2', 'day3', 'day4', 'banner'):
         file_id = str((data or {}).get(key) or '').strip()
         if not file_id:
             continue

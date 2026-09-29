@@ -31,6 +31,9 @@ class FakeBot(object):
         self._next_id = 100
         self.by_id = {}        # message_id -> FakeMessage, чтобы править и закреплять
         self.pinned = {}       # chat_id -> закреплённое сообщение
+        # Правки уже отправленного: ('media' | 'text', chat_id, message_id,
+        # что поставили, клавиатура). Отдельно от sent — правка не новое сообщение.
+        self.edits = []
 
     async def _record(self, kind, chat_id, payload=None, keys=None):
         from bot import delivery
@@ -108,7 +111,18 @@ class FakeBot(object):
         self.pinned[chat_id] = self.by_id[message_id]
 
     async def edit_message_text(self, text, chat_id=None, message_id=None, **kw):
-        self.by_id[message_id].text = text
+        self.edits.append(('text', chat_id, message_id, text, kw.get('reply_markup')))
+        if message_id in self.by_id:
+            self.by_id[message_id].text = text
+
+    # Закрытие записей (bot/closing.py): видео в сообщении → картинка.
+    async def edit_message_media(self, media, chat_id=None, message_id=None, **kw):
+        from bot import delivery
+        if self.forbidden:
+            raise delivery.Gone()
+        self.edits.append(('media', chat_id, message_id, media, kw.get('reply_markup')))
+        return FakeMessage(message_id=message_id, bot=self, chat_id=chat_id,
+                           photo=[FakePhoto('closed-photo-id')])
 
 
 class FakeMessage(object):

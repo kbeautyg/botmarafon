@@ -128,3 +128,42 @@ def test_нет_файла_или_он_битый_ничего_не_ломает
     broken = tmp_path / 'broken.json'
     broken.write_text('{не json', encoding='utf-8')
     assert backup.apply_committed(str(broken)) == []
+
+
+# --------------------------------------- баннер и копии базы (29.09.2026)
+
+async def test_баннер_хранится_в_закрепе_и_возвращается(tmp_path):
+    bot = FakeBot()
+    db.put_content('banner', 'animation', 'BANNER1')
+    await backup.save(bot)
+    assert 'banner animation BANNER1' in bot.pinned[ADMIN].text
+
+    db.connect(str(tmp_path / 'after-deploy.db'))
+    assert await backup.restore(bot) == 1
+    assert db.get_content('banner') == ('animation', 'BANNER1')
+
+
+def test_копия_базы_перед_запуском_целая_и_старые_не_копятся(tmp_path):
+    u"""«На всякий случай сделай бэкап»: перед запуском — копия рядом с базой,
+    последние несколько; диск Railway ими не забивается."""
+    path = str(tmp_path / 'marathon.db')
+    db.connect(path)
+    db.remember_user(5, 'nick', u'Человек')
+    for stamp in ('20260101-000000', '20260102-000000', '20260103-000000'):
+        (tmp_path / ('marathon.db.before-' + stamp)).write_bytes(b'old')
+
+    copy = backup.before_start(path, keep=2)
+
+    import glob
+    import sqlite3
+    left = sorted(os.path.basename(p) for p in glob.glob(path + '.before-*'))
+    assert left == ['marathon.db.before-20260103-000000', os.path.basename(copy)]
+    saved = sqlite3.connect(copy)
+    try:
+        assert saved.execute('SELECT username FROM users').fetchall() == [('nick',)]
+    finally:
+        saved.close()
+
+
+def test_нет_базы_нечего_копировать(tmp_path):
+    assert backup.before_start(str(tmp_path / 'нет.db')) is None

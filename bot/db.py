@@ -189,6 +189,19 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at   REAL NOT NULL,
   left_at      REAL
 );
+
+-- Куда ушли записи дней (29.09.2026). Через три дня после кнопок покупки
+-- записи закрываются (bot/closing.py), а править своё сообщение бот может
+-- только по его номеру — до этого номера нигде не хранились.
+CREATE TABLE IF NOT EXISTS day_messages (
+  user_id   INTEGER NOT NULL,
+  day       INTEGER NOT NULL,
+  tg_id     INTEGER NOT NULL,      -- номер сообщения в Telegram
+  kind      TEXT NOT NULL,         -- video | link: как ушла запись
+  at        REAL NOT NULL,
+  closed_at REAL,                  -- когда запись в сообщении закрыли
+  PRIMARY KEY (user_id, tg_id)
+);
 '''
 
 # Человек сейчас в чёрном списке — условие для запросов по users (алиас u).
@@ -230,6 +243,9 @@ def connect(path: str) -> sqlite3.Connection:
     # 15.09.2026: когда ушёл дожим «заходи на марафон» (bot/nudge.py)
     if 'nudged_at' not in columns:
         _conn.execute('ALTER TABLE users ADD COLUMN nudged_at REAL')
+    # 29.09.2026: когда закрыли записи марафона и ушёл баннер (bot/closing.py)
+    if 'closed_at' not in columns:
+        _conn.execute('ALTER TABLE users ADD COLUMN closed_at REAL')
     # 19.09.2026: править и удалять отправленное из пульта — для этого
     # нужен номер сообщения в самом Telegram.
     message_columns = [row[1] for row in _conn.execute('PRAGMA table_info(messages)')]
@@ -258,6 +274,15 @@ def connect(path: str) -> sqlite3.Connection:
         _conn.execute('ALTER TABLE lives ADD COLUMN targets TEXT')
     _conn.commit()
     return _conn
+
+
+def copy_to(target: str) -> None:
+    u"""Целая копия открытой базы в файл target (/backup)."""
+    out = sqlite3.connect(target)
+    try:
+        _conn.backup(out)
+    finally:
+        out.close()
 
 
 def _run(sql: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -393,7 +418,29 @@ def reset_funnel(user_id: int) -> None:
     # и записанные шаги прошлого прогона: иначе статистика считала бы
     # прошлые вопросы безответными и мерила время ответа через прогоны
     _run('DELETE FROM events WHERE user_id=?', (user_id,))
-    _run('UPDATE users SET launched_at=NULL, poll=NULL, nudged_at=NULL WHERE user_id=?', (user_id,))
+    _run('UPDATE users SET launched_at=NULL, poll=NULL, nudged_at=NULL, closed_at=NULL '
+         'WHERE user_id=?', (user_id,))
+
+
+def passed_marathon(user_id: int) -> bool:
+    u"""Дошёл ли человек до четвёртого дня — тогда «пройти заново» ему закрыто
+    (AleX 29.09.2026: «тем, кто четвёртый шаг уже запускал, перезапустить
+    бота чтобы нельзя было»).
+
+    Четвёртый шаг запущен, как только человек ответил на вопрос после
+    третьего дня: запись четвёртого уходит следом, через секунды. Поэтому
+    считается любое из: ответ на этот вопрос, сама запись или кнопки покупки
+    (шаги пишутся с 11.09.2026), четвёртый день в очереди (до 17.09.2026 его
+    ставил и таймер без ответа), закрытые записи.
+    """
+    def one(sql: str) -> bool:
+        return _conn.execute(sql, (user_id,)).fetchone() is not None
+    return (one("SELECT 1 FROM answers WHERE user_id=? AND poll='day3'")
+            or one("SELECT 1 FROM events WHERE user_id=? "
+                   "AND ((kind='day' AND ref='4') OR kind='offer')")
+            or one("SELECT 1 FROM jobs WHERE user_id=? "
+                   "AND chain IN ('day3_yes', 'day3_no', 'after_day4')")
+            or one('SELECT 1 FROM users WHERE user_id=? AND closed_at IS NOT NULL'))
 
 
 def nudge_candidates(since: float, launched_before: float) -> list[int]:
@@ -870,6 +917,74 @@ def missed_users(day: int) -> list[int]:
     return [r['user_id'] for r in rows]
 
 
+# ---------------------------------------- закрытие записей после марафона
+
+def remember_day_message(user_id: int, day: int, tg_id: int, kind: str,
+                         at: float | None = None) -> None:
+    u"""Запомнить сообщение, в котором ушла запись дня (bot/closing.py).
+    at — когда ушла; для найденных в старых переписках (bot/history.py)."""
+    _run('INSERT OR IGNORE INTO day_messages (user_id, day, tg_id, kind, at) '
+         'VALUES (?, ?, ?, ?, ?)',
+         (user_id, day, tg_id, kind, time.time() if at is None else at))
+
+
+def max_message_id() -> int:
+    u"""Последний номер сообщения в личных переписках, который бот знает."""
+    row = _conn.execute('SELECT MAX(n) FROM (SELECT MAX(tg_id) AS n FROM messages '
+                        'UNION ALL SELECT MAX(tg_id) FROM day_messages)').fetchone()
+    return int(row[0] or 0)
+
+
+def open_day_messages(user_id: int) -> list[dict]:
+    u"""Сообщения человека с записями дней, которые ещё не закрыты."""
+    rows = _conn.execute('SELECT day, tg_id, kind, at FROM day_messages '
+                         'WHERE user_id=? AND closed_at IS NULL ORDER BY at',
+                         (user_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def close_day_message(user_id: int, tg_id: int) -> None:
+    _run('UPDATE day_messages SET closed_at=? WHERE user_id=? AND tg_id=?',
+         (time.time(), user_id, tg_id))
+
+
+def closing_candidates(now: float, after: float) -> list[int]:
+    u"""Кому пора закрыть записи: кнопки покупки ушли не позже, чем after
+    секунд назад, «купить» после них не нажимал, бота не закрывал, не в
+    чёрном списке, записи ещё не закрыты (bot/closing.py).
+
+    Срок — в масштабе человека (speed): в тестовом прогоне /test три дня
+    сжаты так же, как паузы марафона. Кнопок могло быть несколько (прогоны
+    до «пройти заново») — считаем от последних.
+    """
+    rows = _conn.execute(
+        'SELECT t.user_id FROM ('
+        '  SELECT u.user_id, MAX(e.at) AS offered, COALESCE(u.speed, 1.0) AS speed'
+        '  FROM users u JOIN events e ON e.user_id = u.user_id AND e.kind = \'offer\''
+        '  WHERE u.closed_at IS NULL AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN +
+        '  GROUP BY u.user_id) t '
+        'WHERE t.offered + ? * t.speed <= ? '
+        'AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = t.user_id '
+        '                AND p.at >= t.offered) '
+        'ORDER BY t.offered', (after, now)).fetchall()
+    return [r[0] for r in rows]
+
+
+def closing_leftovers() -> list[int]:
+    u"""Кому баннер уже ушёл, а часть записей осталась открытой: подмену
+    прервал сбой связи. Их закрывают следующим кругом — без второго баннера."""
+    rows = _conn.execute(
+        'SELECT DISTINCT d.user_id FROM day_messages d JOIN users u ON u.user_id = d.user_id '
+        'WHERE d.closed_at IS NULL AND u.closed_at IS NOT NULL '
+        'AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' ORDER BY d.user_id').fetchall()
+    return [r[0] for r in rows]
+
+
+def mark_closed(user_id: int) -> None:
+    u"""Записи закрыты, баннер ушёл — второй раз не придёт."""
+    _run('UPDATE users SET closed_at=? WHERE user_id=?', (time.time(), user_id))
+
+
 # --------------------------------------------------------------- контент
 
 def put_content(key: str, kind: str, value: str) -> None:
@@ -1268,4 +1383,5 @@ def stats() -> dict[str, int]:
         # заявка — человек и продукт: повторные нажатия той же кнопки — одна
         'purchases': one('SELECT COUNT(*) FROM (SELECT DISTINCT user_id, product FROM purchases)'),
         'presses': one('SELECT COUNT(*) FROM purchases'),
+        'closed': one('SELECT COUNT(*) FROM users WHERE closed_at IS NOT NULL'),
     }
