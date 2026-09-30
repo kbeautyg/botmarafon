@@ -702,6 +702,48 @@ def ask_answers(broadcast_id: int) -> list[dict]:
     return sorted(last.values(), key=lambda row: row['at'])
 
 
+def ask_elsewhere(broadcast_id: int) -> dict[int, tuple[int, int]]:
+    u"""Нажатия под другими рассылками: {номер: (да, нет)}, по последнему
+    ответу каждого, — вдруг люди отвечают не под той, что в отчёте."""
+    refs = _conn.execute("SELECT DISTINCT ref FROM events WHERE kind IN ('ask_yes', 'ask_no') "
+                         "AND ref != ?", (str(broadcast_id),)).fetchall()
+    found = {}
+    for (ref,) in refs:
+        if str(ref).isdigit():
+            kinds = [row['kind'] for row in ask_answers(int(ref))]
+            found[int(ref)] = (kinds.count('ask_yes'), kinds.count('ask_no'))
+    return dict(sorted(found.items()))
+
+
+def broadcast_replies(task: dict, within: float = 3 * 24 * 3600) -> tuple[float | None, list[dict]]:
+    u"""Когда рассылка ушла и кто из получивших написал боту после неё.
+
+    Отвечают и словами: «Да» сообщением вместо кнопки (01.10.2026: в отчёте
+    по рассылке №11 ноль нажатий из 212). Получатели — те, кому рассылка
+    легла в переписку пульта (broadcast._remember): общее сообщение с тем же
+    текстом не раньше, чем рассылку завели, и раньше следующей рассылки. От
+    каждого — первое его сообщение за within секунд после рассылки.
+    Возвращает (когда рассылка ушла первому, [ответы]).
+    """
+    later = _conn.execute('SELECT MIN(at) FROM broadcasts WHERE id > ?',
+                          (task['id'],)).fetchone()[0]
+    window = (task.get('text') or '', task['at'], later or 1e12)
+    started = _conn.execute("SELECT MIN(at) FROM messages WHERE side='out' AND mass=1 "
+                            "AND text=? AND at>=? AND at<?", window).fetchone()[0]
+    rows = _conn.execute(
+        "SELECT i.user_id, i.kind, i.text, i.at, u.username, u.first_name "
+        "FROM (SELECT user_id, MIN(at) AS at FROM messages WHERE side='out' AND mass=1 "
+        "      AND text=? AND at>=? AND at<? GROUP BY user_id) b "
+        "JOIN messages i ON i.user_id = b.user_id AND i.side='in' AND i.gone=0 "
+        "     AND i.at > b.at AND i.at <= b.at + ? "
+        "LEFT JOIN users u ON u.user_id = i.user_id ORDER BY i.at",
+        window + (within,)).fetchall()
+    first = {}
+    for row in rows:
+        first.setdefault(row['user_id'], dict(row))
+    return started, list(first.values())
+
+
 def last_yesno_broadcast() -> dict | None:
     u"""Последняя запущенная рассылка с кнопками «Да» и «Нет»."""
     row = _conn.execute("SELECT * FROM broadcasts WHERE buttons='yesno' "

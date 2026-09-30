@@ -647,6 +647,23 @@ async def on_answers(message: Message, command: CommandObject | None = None):
     await answers_report(message, ((command.args if command else None) or u''))
 
 
+# Как назвать в отчёте ответ не текстом.
+_REPLY_KINDS = {'voice': u'голосовое', 'video_note': u'кружок', 'photo': u'фото',
+                'video': u'видео', 'sticker': u'стикер', 'document': u'файл',
+                'audio': u'аудио', 'animation': u'гифка'}
+
+
+def _reply_text(row: dict, limit: int = 60) -> str:
+    u"""«Да, хочу» — что человек написал в ответ, коротко; не текст — его вид."""
+    text = u' '.join((row.get('text') or u'').split())
+    kind = _REPLY_KINDS.get(row.get('kind'))
+    if kind:
+        text = (u'(%s) %s' % (kind, text)).strip()
+    if len(text) > limit:
+        text = text[:limit - 1] + u'…'
+    return u'«%s»' % text
+
+
 async def answers_report(message: Message, arg: str = u'') -> None:
     u"""Отчёт «кто что ответил» в чат message: и по /ответы, и по кнопке меню."""
     arg = (arg or u'').strip().lstrip(u'№#')
@@ -657,19 +674,35 @@ async def answers_report(message: Message, arg: str = u'') -> None:
     answers = db.ask_answers(task['id'])
     yes = [row for row in answers if row['kind'] == 'ask_yes']
     no = [row for row in answers if row['kind'] == 'ask_no']
-    head = texts.ANSWERS_HEAD.format(id=task['id'], sent=task['sent'], yes=len(yes), no=len(no),
-                                     silent=max(0, task['sent'] - len(yes) - len(no)))
+    started, replies = db.broadcast_replies(task)
+    pressed = {row['user_id'] for row in answers}
+    wrote = [row for row in replies if row['user_id'] not in pressed]
+    when = (texts.ANSWERS_WHEN.format(when=time.strftime(u'%d.%m в %H:%M',
+                                                         time.gmtime(started + 3 * 3600)))
+            if started else u'')
+    head = texts.ANSWERS_HEAD.format(
+        id=task['id'], when=when, sent=task['sent'], yes=len(yes), no=len(no), wrote=len(wrote),
+        silent=max(0, task['sent'] - len(yes) - len(no) - len(wrote)))
+
+    def who(row):
+        return contact.line(row['user_id'], row['first_name'], row['username'])
 
     def names(rows):
-        return u'\n'.join(u'%d. %s' % (i + 1, contact.line(row['user_id'], row['first_name'],
-                                                            row['username']))
-                          for i, row in enumerate(rows))
+        return u'\n'.join(u'%d. %s' % (i + 1, who(row)) for i, row in enumerate(rows))
 
     body = head
     if yes:
         body += u'\n\n' + texts.ANSWERS_YES + u'\n' + names(yes)
     if no:
         body += u'\n\n' + texts.ANSWERS_NO + u'\n' + names(no)
+    if wrote:
+        body += u'\n\n' + texts.ANSWERS_WROTE + u'\n' + u'\n'.join(
+            u'%d. %s — %s' % (i + 1, who(row), html.escape(_reply_text(row)))
+            for i, row in enumerate(wrote))
+    elsewhere = db.ask_elsewhere(task['id'])
+    if elsewhere:
+        body += u'\n\n' + texts.ANSWERS_ELSEWHERE.format(found=u'; '.join(
+            u'№%d — ДА %d, НЕТ %d' % (ref, y, n) for ref, (y, n) in elsewhere.items()))
     if len(body) <= 3800:
         await message.answer(body, disable_web_page_preview=True)
         return
@@ -677,10 +710,12 @@ async def answers_report(message: Message, arg: str = u'') -> None:
     out = io.StringIO()
     writer = csv.writer(out, delimiter=';')
     writer.writerow([u'Ответ', u'Имя', u'Ник', u'ID', u'Когда (МСК)'])
-    for row in answers:
-        when = time.strftime('%d.%m.%Y %H:%M', time.gmtime(row['at'] + 3 * 3600))
-        writer.writerow([u'Да' if row['kind'] == 'ask_yes' else u'Нет', row['first_name'] or u'',
-                         (u'@' + row['username']) if row['username'] else u'', row['user_id'], when])
+    rows = [(u'Да' if row['kind'] == 'ask_yes' else u'Нет', row) for row in answers]
+    rows += [(u'Сообщением: ' + _reply_text(row, 200), row) for row in wrote]
+    for answer, row in rows:
+        at = time.strftime('%d.%m.%Y %H:%M', time.gmtime(row['at'] + 3 * 3600))
+        writer.writerow([answer, row['first_name'] or u'',
+                         (u'@' + row['username']) if row['username'] else u'', row['user_id'], at])
     await message.bot.send_document(
         message.chat.id,
         BufferedInputFile(out.getvalue().encode('utf-8-sig'), filename='otvety_%d.csv' % task['id']))

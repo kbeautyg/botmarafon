@@ -172,6 +172,59 @@ async def test_отчёт_считает_да_нет_и_молчащих_пои�
     assert u'@u1' in да and u'@u3' in да and u'@u2' in нет
 
 
+async def test_ответ_сообщением_тоже_в_отчёте():
+    u"""01.10.2026: в отчёте по рассылке №11 ноль нажатий из 212 — а отвечают
+    и словами, «Да» сообщением вместо кнопки."""
+    _люди(1, 2, 3, 4)
+    bot = FakeBot()
+    await _завести(bot)
+    await broadcast.run(bot, 1)
+    await purchase.on_ask(FakeCall('ask:yes:1', user=FakeUser(1, 'u1', u'Человек 1'), bot=bot))
+    db.save_message(2, 'in', 'text', u'Да, я с вами!')
+    db.save_message(3, 'in', 'voice', None, 'voice-id')
+    db.save_message(1, 'in', 'text', u'А когда оплата?')     # уже нажал «ДА» — там и считается
+    db._run("UPDATE messages SET at = at + 60 WHERE side = 'in'")
+
+    запрос = FakeMessage(text=u'/ответы', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_answers(запрос)
+    отчёт = запрос.answers[-1]
+    assert u'разослана' in отчёт
+    assert u'Да: 1' in отчёт and u'Ответили сообщением, без кнопки: 2' in отчёт
+    assert u'Пока не ответили: 1' in отчёт
+    _, написали = отчёт.split(texts.ANSWERS_WROTE)
+    assert u'«Да, я с вами!»' in написали and u'«(голосовое)»' in написали
+    assert u'@u1' not in написали and u'@u4' not in написали
+
+
+async def test_ответ_до_рассылки_ответом_не_считается():
+    _люди(1)
+    db.save_message(1, 'in', 'text', u'Здравствуйте, а где запись?')
+    db._run("UPDATE messages SET at = at - 3600")
+    bot = FakeBot()
+    await _завести(bot)
+    await broadcast.run(bot, 1)
+    запрос = FakeMessage(text=u'/ответы', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_answers(запрос)
+    assert u'Ответили сообщением, без кнопки: 0' in запрос.answers[-1]
+    assert u'Пока не ответили: 1' in запрос.answers[-1]
+
+
+async def test_нажатия_под_другой_рассылкой_видны_в_отчёте():
+    _люди(1, 2)
+    bot = FakeBot()
+    await _завести(bot)
+    await broadcast.run(bot, 1)
+    await purchase.on_ask(FakeCall('ask:yes:1', user=FakeUser(1, 'u1', u'Человек 1'), bot=bot))
+    await _завести(bot)                                       # следующая — №2
+    await broadcast.run(bot, 2)
+
+    запрос = FakeMessage(text=u'/ответы', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_answers(запрос)
+    отчёт = запрос.answers[-1]
+    assert u'Ответы на рассылку №2' in отчёт and u'Да: 0' in отчёт
+    assert u'№1 — ДА 1, НЕТ 0' in отчёт
+
+
 async def test_длинный_отчёт_приходит_ещё_и_файлом():
     люди = list(range(1, 121))
     _люди(*люди)
