@@ -212,6 +212,22 @@ def test_имя_канала_узнаётся_в_любом_написании()
     assert stats.channel_named(u'@ник') is None and stats.channel_named(u'123') is None
 
 
+async def test_в_меню_админа_есть_кнопка_сколько_нажали_да_нет():
+    from bot import keyboards
+    кнопки = [b.callback_data for row in keyboards.menu(АДМИН).inline_keyboard for b in row]
+    assert 'mn:answers' in кнопки
+
+    _люди(1, 2)
+    bot = FakeBot()
+    await _завести(bot)
+    await broadcast.run(bot, 1)
+    await purchase.on_ask(FakeCall('ask:yes:1', user=FakeUser(1, 'u1', u'Человек 1'), bot=bot))
+    нажатие = FakeCall('mn:answers', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_menu_button_pressed(нажатие)
+    отчёт = нажатие.message.answers[-1]
+    assert u'Получили: 2' in отчёт and u'Да: 1' in отчёт and u'Нет: 0' in отчёт
+
+
 async def test_без_рассылки_с_кнопками_отчёт_честно_пуст():
     bot = FakeBot()
     запрос = FakeMessage(text=u'/ответы', user=FakeUser(АДМИН), bot=bot)

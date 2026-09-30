@@ -170,6 +170,8 @@ def menu(chat_id: int | None = None) -> InlineKeyboardMarkup:
         rows.append([panel])
     rows.append([InlineKeyboardButton(text=texts.MENU_BROADCAST, callback_data='mn:bc'),
                  InlineKeyboardButton(text=texts.MENU_DAILY, callback_data='mn:day')])
+    # 30.09.2026: «админам — сколько нажали ДА и НЕТ» — то же, что /ответы
+    rows.append([InlineKeyboardButton(text=texts.MENU_ANSWERS, callback_data='mn:answers')])
     rows.append([InlineKeyboardButton(text=texts.MENU_STATS, callback_data='mn:stats'),
                  InlineKeyboardButton(text=texts.MENU_WHO, callback_data='mn:who')])
     rows.append([InlineKeyboardButton(text=texts.MENU_LIVE, callback_data='mn:live'),

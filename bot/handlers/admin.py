@@ -416,6 +416,8 @@ async def on_menu_button_pressed(call: CallbackQuery):
         db.put_content(WAIT_KEY % call.from_user.id, 'await', '1')
         db.put_content(PICK_KEY % call.from_user.id, 'picked', '')
         await call.message.answer(texts.BROADCAST_ASK_MESSAGE)
+    elif what == 'answers':
+        await answers_report(call.message)
     elif what == 'day':
         base = daily.day_number()
         await call.message.answer(daily.report([base]),
@@ -610,7 +612,12 @@ async def on_answers(message: Message, command: CommandObject | None = None):
     """
     if not config.is_team(message.from_user.id):
         return
-    arg = ((command.args if command else None) or u'').strip().lstrip(u'№#')
+    await answers_report(message, ((command.args if command else None) or u''))
+
+
+async def answers_report(message: Message, arg: str = u'') -> None:
+    u"""Отчёт «кто что ответил» в чат message: и по /ответы, и по кнопке меню."""
+    arg = (arg or u'').strip().lstrip(u'№#')
     task = db.broadcast(int(arg)) if arg.isdigit() else db.last_yesno_broadcast()
     if not task or task.get('buttons') != 'yesno':
         await message.answer(texts.ANSWERS_NONE)
