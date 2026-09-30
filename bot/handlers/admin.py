@@ -521,9 +521,25 @@ async def on_broadcast(message: Message, command: CommandObject | None = None,
         await message.answer(texts.BROADCAST_BUSY)
         return
 
+    # По каналу: «/рассылка_да_нет мариус» — всем, у кого источник «Мариус — …»
+    # (30.09.2026: «пока только тем, кто пришёл из рекламы Мариуса»).
+    args = ((command.args if command else None) or u'').strip()
+    named = stats.channel_named(args) if args and u'@' not in args else None
+    if named:
+        people = stats.people_of(named)
+        if not people:
+            await message.answer(texts.BROADCAST_CHANNEL_NONE.format(channel=named))
+            return
+        db.put_content(WAIT_KEY % message.from_user.id, 'await', mode)
+        db.put_content(PICK_KEY % message.from_user.id, 'picked', ','.join(map(str, people)))
+        await message.answer(texts.BROADCAST_CHANNEL_HEAD.format(
+            channel=named, found=len(people))
+            + (texts.BROADCAST_YESNO_NOTE if mode == 'yesno' else u''))
+        return
+
     from .blacklist import _refs, _resolve
 
-    refs = _refs((command.args if command else None) or u'')
+    refs = _refs(args)
     found, missing = [], []
     for ref in refs:
         user_id = _resolve(ref)

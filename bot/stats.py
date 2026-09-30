@@ -241,6 +241,29 @@ def channel(source: str) -> str:
     return found[0] if found else OTHER
 
 
+CHANNELS = (MARIUS, TG_ADS, TELEGRAM, YANDEX, SITE)
+
+
+def channel_named(text: str) -> str | None:
+    u"""Канал по слову команды: «мариус», «Мариуса», «telegram ads» → имя канала.
+
+    Для рассылки по каналу (30.09.2026: «всем, кто пришёл из рекламы, которую
+    делал Мариус, — у кого в источнике приписка Мариус»).
+    """
+    word = (text or u'').strip().lower()
+    if not word:
+        return None
+    for name in sorted(CHANNELS, key=len, reverse=True):
+        if word == name.lower() or word.startswith(name.lower()):
+            return name
+    return None
+
+
+def people_of(name: str) -> list[int]:
+    u"""Все в базе, чей источник — этот канал (как в статистике: «Мариус — …»)."""
+    return [row['user_id'] for row in db.user_sources() if channel(row['source'] or '') == name]
+
+
 def label(source: str) -> str:
     u"""«Мариус — Instagram, через сайт», «Telegram — рассылка 1», «Telegram Ads —
     прямо в бота». Незнакомая метка показывается как есть, а не прячется:

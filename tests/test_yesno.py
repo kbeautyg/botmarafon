@@ -10,6 +10,7 @@ u"""Рассылка с кнопками «Да» и «Нет» (30.09.2026).
 """
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,6 +174,42 @@ async def test_итог_рассылки_подсказывает_про_отч�
     await broadcast.run(bot, 1)
     итоги = [text for kind, chat, text in bot.sent if kind == 'text' and u'Рассылка закончена' in (text or u'')]
     assert итоги and u'/ответы' in итоги[-1]
+
+
+# ------------------ «пока только тем, кто пришёл из рекламы Мариуса» (30.09.2026)
+
+async def test_по_каналу_мариус_уходит_только_людям_мариуса():
+    db.remember_user(1, 'u1', u'Инста Мариуса', 'site_ig')           # Мариус — Instagram
+    db.remember_user(2, 'u2', u'Окно Мариуса', 'site_popup_fb')      # Мариус — Facebook, окно
+    db.remember_user(3, 'u3', u'Мессенджер', 'site_msg')             # Мариус — Messenger
+    db.remember_user(4, 'u4', u'Инста без рекламы', 'site_igorg')    # не Мариус
+    db.remember_user(5, 'u5', u'Телеграм', 'tg_1')                   # Telegram
+    db.remember_user(6, 'u6', u'Яндекс', 'site_yandex')              # Яндекс Директ
+    db.remember_user(7, 'u7', u'Напрямую', '')                       # напрямую
+    db.remember_user(8, 'u8', u'Мариус, но закрыл бота', 'site_an')
+    db.mark_blocked(8)
+    bot = FakeBot()
+    команда = FakeMessage(text=u'/рассылка_да_нет мариус', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast_yesno(команда, SimpleNamespace(args=u'мариус'))
+    assert u'Таких в базе: 4 чел.' in команда.answers[-1]          # вместе с закрывшим бота
+    assert texts.BROADCAST_YESNO_NOTE.strip() in команда.answers[-1]
+
+    сообщение = FakeMessage(text=u'Вы с нами?', user=FakeUser(АДМИН), bot=bot)
+    await admin.on_broadcast_message(сообщение)
+    assert u'Получат: 3 чел.' in сообщение.replies[-1]              # закрывший бота не получит
+    await broadcast.run(bot, 1)
+
+    копии = [(chat, keys) for (kind, chat, _), keys in zip(bot.sent, bot.keys_sent) if kind == 'copy']
+    assert sorted(chat for chat, _ in копии) == [1, 2, 3]
+    assert all(_кнопки(keys)[0] == (u'ДА', 'ask:yes:1') for _, keys in копии)
+
+
+def test_имя_канала_узнаётся_в_любом_написании():
+    from bot import stats
+    assert stats.channel_named(u'мариус') == stats.MARIUS
+    assert stats.channel_named(u'Мариуса') == stats.MARIUS
+    assert stats.channel_named(u'telegram ads') == stats.TG_ADS
+    assert stats.channel_named(u'@ник') is None and stats.channel_named(u'123') is None
 
 
 async def test_без_рассылки_с_кнопками_отчёт_честно_пуст():

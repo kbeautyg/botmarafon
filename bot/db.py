@@ -633,6 +633,12 @@ def broadcast(broadcast_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def user_sources() -> list[dict]:
+    u"""Все в базе с их меткой источника — для рассылки по каналу."""
+    rows = _conn.execute('SELECT user_id, source FROM users ORDER BY user_id').fetchall()
+    return [dict(r) for r in rows]
+
+
 def ask_answers(broadcast_id: int) -> list[dict]:
     u"""Кто что ответил на рассылку с «Да» и «Нет»: последний ответ каждого.
 
