@@ -136,7 +136,9 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   kind       TEXT,
   text       TEXT,
   file_id    TEXT,
-  logged     INTEGER NOT NULL DEFAULT 0
+  logged     INTEGER NOT NULL DEFAULT 0,
+  -- Кнопки под сообщением (30.09.2026): 'yesno' — «Да» и «Нет»; пусто — без кнопок.
+  buttons    TEXT
 );
 
 -- Эфиры (Павел 20.09.2026). Бот не ведёт трансляцию — он собирает на неё
@@ -244,8 +246,9 @@ def connect(path: str) -> sqlite3.Connection:
         _conn.execute('ALTER TABLE broadcasts ADD COLUMN targets TEXT')
     # 24.09.2026: рассылка ложится в переписку каждого получателя. Прошлые
     # рассылки получают logged=0 — их допишет broadcast.backfill.
+    # 30.09.2026: рассылка с кнопками «Да» и «Нет» — buttons='yesno'.
     for column, kind in (('kind', 'TEXT'), ('text', 'TEXT'), ('file_id', 'TEXT'),
-                         ('logged', 'INTEGER NOT NULL DEFAULT 0')):
+                         ('logged', 'INTEGER NOT NULL DEFAULT 0'), ('buttons', 'TEXT')):
         if broadcast_columns and column not in broadcast_columns:
             _conn.execute('ALTER TABLE broadcasts ADD COLUMN %s %s' % (column, kind))
     # 21.09.2026: эфир можно прогнать на себе — анонс и напоминания только
@@ -549,17 +552,19 @@ def day_stats(since: float, until: float) -> dict:
 
 def broadcast_add(chat_id: int, message_id: int, author: int,
                   targets: list | None = None, kind: str | None = None,
-                  text: str | None = None, file_id: str | None = None) -> int:
+                  text: str | None = None, file_id: str | None = None,
+                  buttons: str | None = None) -> int:
     u"""Новая рассылка. targets — кому именно; пусто (None) — всем.
 
     kind/text/file_id — что в ней: каждому получателю рассылка ляжет в
-    переписку пульта сразу, как уйдёт (logged=1).
+    переписку пульта сразу, как уйдёт (logged=1). buttons='yesno' — под
+    сообщением кнопки «Да» и «Нет».
     """
     listed = ','.join(str(int(uid)) for uid in targets) if targets else None
     return _run('INSERT INTO broadcasts (chat_id, message_id, author, at, targets, '
-                'kind, text, file_id, logged) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
+                'kind, text, file_id, logged, buttons) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)',
                 (chat_id, message_id, author, time.time(), listed,
-                 kind or 'text', text, file_id)).lastrowid
+                 kind or 'text', text, file_id, buttons)).lastrowid
 
 
 def broadcast_content(broadcast_id: int, kind: str, text: str | None,
@@ -625,6 +630,29 @@ def broadcast_picked(task: dict) -> list:
 
 def broadcast(broadcast_id: int) -> dict | None:
     row = _conn.execute('SELECT * FROM broadcasts WHERE id=?', (broadcast_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def ask_answers(broadcast_id: int) -> list[dict]:
+    u"""Кто что ответил на рассылку с «Да» и «Нет»: последний ответ каждого.
+
+    Передумал — считается последнее нажатие. Порядок — по времени ответа.
+    """
+    rows = _conn.execute(
+        "SELECT e.user_id, e.kind, e.at, u.username, u.first_name FROM events e "
+        "LEFT JOIN users u ON u.user_id = e.user_id "
+        "WHERE e.kind IN ('ask_yes', 'ask_no') AND e.ref = ? ORDER BY e.at",
+        (str(broadcast_id),)).fetchall()
+    last = {}
+    for row in rows:
+        last[row['user_id']] = dict(row)
+    return sorted(last.values(), key=lambda row: row['at'])
+
+
+def last_yesno_broadcast() -> dict | None:
+    u"""Последняя запущенная рассылка с кнопками «Да» и «Нет»."""
+    row = _conn.execute("SELECT * FROM broadcasts WHERE buttons='yesno' "
+                        "AND status IN ('going', 'done') ORDER BY id DESC LIMIT 1").fetchone()
     return dict(row) if row else None
 
 

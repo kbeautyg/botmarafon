@@ -77,7 +77,8 @@ class FakeBot(object):
         return await self._record('document', chat_id, getattr(document, 'filename', None))
 
     async def copy_message(self, chat_id, from_chat_id, message_id, **kw):
-        return await self._record('copy', chat_id, (from_chat_id, message_id))
+        return await self._record('copy', chat_id, (from_chat_id, message_id),
+                                  kw.get('reply_markup'))
 
     # Чёрный список банит в каналах и чатах Павла (bot/blacklist.py).
     async def ban_chat_member(self, chat_id, user_id, **kw):

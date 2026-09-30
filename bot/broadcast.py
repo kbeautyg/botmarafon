@@ -23,7 +23,7 @@ import asyncio
 import logging
 import time
 
-from . import chatlog, config, db, delivery, texts
+from . import chatlog, config, db, delivery, keyboards, texts
 
 log = logging.getLogger(__name__)
 
@@ -35,10 +35,18 @@ PAUSE = 1.0 / PER_SECOND
 REPORT_EVERY = 200
 
 
-async def _copy(bot, user_id: int, chat_id: int, message_id: int) -> tuple:
+def markup(task: dict):
+    u"""Кнопки под рассылкой: «Да» и «Нет» (30.09.2026) — или никаких."""
+    if (task or {}).get('buttons') == 'yesno':
+        return keyboards.yes_no(task['id'])
+    return None
+
+
+async def _copy(bot, user_id: int, chat_id: int, message_id: int, keys=None) -> tuple:
     u"""Копия сообщения одному человеку: (итог, номер сообщения у него)."""
     try:
-        sent = await delivery._guard(bot.copy_message(user_id, chat_id, message_id))
+        sent = await delivery._guard(bot.copy_message(user_id, chat_id, message_id,
+                                                      reply_markup=keys))
     except delivery.Gone:
         db.mark_blocked(user_id)
         return 'gone', None
@@ -48,9 +56,9 @@ async def _copy(bot, user_id: int, chat_id: int, message_id: int) -> tuple:
     return 'ok', getattr(sent, 'message_id', None)
 
 
-async def send_one(bot, user_id: int, chat_id: int, message_id: int) -> str:
+async def send_one(bot, user_id: int, chat_id: int, message_id: int, keys=None) -> str:
     u"""Копия сообщения одному человеку. 'ok' | 'gone' | 'fail'."""
-    return (await _copy(bot, user_id, chat_id, message_id))[0]
+    return (await _copy(bot, user_id, chat_id, message_id, keys))[0]
 
 
 def _remember(task: dict, user_id: int, tg_id) -> None:
@@ -95,12 +103,13 @@ async def run(bot, broadcast_id: int) -> dict:
         task = db.broadcast(broadcast_id)
 
     picked = db.broadcast_picked(task)
+    keys = markup(task)
     while True:
         people = db.broadcast_targets(task['cursor'], 200, picked)
         if not people:
             break
         for user_id in people:
-            result, tg_id = await _copy(bot, user_id, task['chat_id'], task['message_id'])
+            result, tg_id = await _copy(bot, user_id, task['chat_id'], task['message_id'], keys)
             if result == 'ok':
                 _remember(task, user_id, tg_id)
             task = db.broadcast_step(broadcast_id, user_id, result)
@@ -134,6 +143,8 @@ async def _finish(bot, task: dict) -> None:
             total=left['total'], closed=left['closed'], banned=left['banned'])
     except Exception as err:          # раскладка — пояснение, итог уходит и без неё
         log.warning(u'рассылка %s: раскладку не посчитали: %s', task['id'], err)
+    if task.get('buttons') == 'yesno':
+        text += texts.BROADCAST_YESNO_HINT
     for chat in dict.fromkeys((task['author'],) + config.purchase_recipients()):
         try:
             await bot.send_message(chat, text)

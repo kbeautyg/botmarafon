@@ -234,6 +234,13 @@ def broadcast(broadcast_id: int, count: int) -> InlineKeyboardMarkup:
                               callback_data='bc:no:%d' % broadcast_id)]])
 
 
+def yes_no(broadcast_id: int) -> InlineKeyboardMarkup:
+    u"""«Да» и «Нет» под рассылкой (30.09.2026: «вы с нами? — две кнопки»)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=texts.ASK_YES, callback_data='ask:yes:%d' % broadcast_id),
+        InlineKeyboardButton(text=texts.ASK_NO, callback_data='ask:no:%d' % broadcast_id)]])
+
+
 def offer() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=texts.OFFER_GYM, callback_data='buy:gym')],

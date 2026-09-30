@@ -7,7 +7,9 @@ u"""Админка: загрузка записей дней, проверка �
 мгновенно, без перезаливки и без ограничения по размеру.
 """
 import asyncio
+import csv
 import html
+import io
 import logging
 import os
 import re
@@ -18,8 +20,8 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import (backup, broadcast, chatlog, config, daily, db, delivery, funnel, insights,
-                keyboards, leads, live, scheduler, stats, texts)
+from .. import (backup, broadcast, chatlog, config, contact, daily, db, delivery, funnel,
+                insights, keyboards, leads, live, scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -41,7 +43,8 @@ def _is_admin(user_id: int) -> bool:
 # записи. AleX 19.09.2026: «работает команда только пульт и статс» — а
 # /рассылка и /отчёт до него не доходили вовсе: роутер их не пропускал.
 STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
-                  'panel', 'пульт', 'рассылка', 'broadcast',
+                  'panel', 'пульт', 'рассылка', 'broadcast', 'рассылка_да_нет', 'yesno',
+                  'ответы', 'answers',
                   'заявки', 'zayavki', 'купили',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
                   'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream')
@@ -491,12 +494,26 @@ WAIT_KEY = 'broadcast:await:%d'
 PICK_KEY = 'broadcast:picked:%d'
 
 
+@router.message(Command('рассылка_да_нет', 'yesno'))
+async def on_broadcast_yesno(message: Message, command: CommandObject | None = None):
+    u"""Рассылка с кнопками «Да» и «Нет» под сообщением (30.09.2026: «вы с
+    нами? — две кнопки Да или Нет, всем, на каких бы шагах они ни были»).
+
+    «Да» — заявка менеджерам на спортзал по акции, человеку — кнопка оплаты;
+    «Нет» — человеку спасибо (handlers/purchase.py). Список ников — как у
+    /рассылка.
+    """
+    await on_broadcast(message, command, mode='yesno')
+
+
 @router.message(Command('рассылка', 'broadcast'))
-async def on_broadcast(message: Message, command: CommandObject | None = None):
+async def on_broadcast(message: Message, command: CommandObject | None = None,
+                       mode: str = '1'):
     u"""Рассылка: следующее сообщение станет тем, что уйдёт людям.
 
     Без списка — всем. Со списком ников или ID («/рассылка @ник1 @ник2»)
     — только им: AleX 19.09.2026 просил «пачкой кому-то отправить что-то».
+    mode='yesno' — под сообщением будут кнопки «Да» и «Нет».
     """
     if not config.is_team(message.from_user.id):
         return
@@ -515,11 +532,12 @@ async def on_broadcast(message: Message, command: CommandObject | None = None):
         await message.answer(texts.BROADCAST_PICKED_NONE)
         return
 
-    db.put_content(WAIT_KEY % message.from_user.id, 'await', '1')
+    db.put_content(WAIT_KEY % message.from_user.id, 'await', mode)
     db.put_content(PICK_KEY % message.from_user.id, 'picked',
                    ','.join(str(uid) for uid in found))
     if not refs:
-        await message.answer(texts.BROADCAST_ASK_MESSAGE)
+        await message.answer(texts.BROADCAST_YESNO_ASK_MESSAGE if mode == 'yesno'
+                             else texts.BROADCAST_ASK_MESSAGE)
         return
     note = texts.BROADCAST_PICKED_MISSING.format(
         who=html.escape(u', '.join(str(x) for x in missing))) if missing else u''
@@ -549,6 +567,8 @@ def waiting_broadcast(message: Message) -> bool:
 @router.message(waiting_broadcast)
 async def on_broadcast_message(message: Message):
     u"""То, что разошлём. Показываем предпросмотр и спрашиваем подтверждение."""
+    waiting = db.get_content(WAIT_KEY % message.from_user.id)
+    buttons = 'yesno' if waiting and waiting[1] == 'yesno' else None
     db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
     stored = db.get_content(PICK_KEY % message.from_user.id)
     picked = [int(piece) for piece in ((stored[1] if stored else '') or '').split(',')
@@ -556,11 +576,59 @@ async def on_broadcast_message(message: Message):
     db.put_content(PICK_KEY % message.from_user.id, 'picked', '')
     kind, text, file_id = chatlog.parts(message)
     task_id = db.broadcast_add(message.chat.id, message.message_id,
-                               message.from_user.id, picked, kind, text, file_id)
+                               message.from_user.id, picked, kind, text, file_id, buttons)
     task = db.broadcast(task_id)
-    await message.reply(broadcast.preview(task),
+    note = texts.BROADCAST_YESNO_NOTE if buttons else u''
+    await message.reply(broadcast.preview(task) + note,
                         reply_markup=keyboards.broadcast(task_id,
                                                          db.broadcast_left(0, picked)))
+
+
+@router.message(Command('ответы', 'answers'))
+async def on_answers(message: Message, command: CommandObject | None = None):
+    u"""Кто что ответил на рассылку с «Да» и «Нет» (30.09.2026: «кто что
+    нажмёт — как мы это увидим?»). Без номера — последняя такая рассылка.
+
+    «Да» и так приходят заявками в чат покупок; здесь — счёт и поимённо
+    обе стороны. Длинный список — ещё и файлом (в Excel открывается).
+    """
+    if not config.is_team(message.from_user.id):
+        return
+    arg = ((command.args if command else None) or u'').strip().lstrip(u'№#')
+    task = db.broadcast(int(arg)) if arg.isdigit() else db.last_yesno_broadcast()
+    if not task or task.get('buttons') != 'yesno':
+        await message.answer(texts.ANSWERS_NONE)
+        return
+    answers = db.ask_answers(task['id'])
+    yes = [row for row in answers if row['kind'] == 'ask_yes']
+    no = [row for row in answers if row['kind'] == 'ask_no']
+    head = texts.ANSWERS_HEAD.format(id=task['id'], sent=task['sent'], yes=len(yes), no=len(no),
+                                     silent=max(0, task['sent'] - len(yes) - len(no)))
+
+    def names(rows):
+        return u'\n'.join(u'%d. %s' % (i + 1, contact.line(row['user_id'], row['first_name'],
+                                                            row['username']))
+                          for i, row in enumerate(rows))
+
+    body = head
+    if yes:
+        body += u'\n\n' + texts.ANSWERS_YES + u'\n' + names(yes)
+    if no:
+        body += u'\n\n' + texts.ANSWERS_NO + u'\n' + names(no)
+    if len(body) <= 3800:
+        await message.answer(body, disable_web_page_preview=True)
+        return
+    await message.answer(head + texts.ANSWERS_FILE)
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=';')
+    writer.writerow([u'Ответ', u'Имя', u'Ник', u'ID', u'Когда (МСК)'])
+    for row in answers:
+        when = time.strftime('%d.%m.%Y %H:%M', time.gmtime(row['at'] + 3 * 3600))
+        writer.writerow([u'Да' if row['kind'] == 'ask_yes' else u'Нет', row['first_name'] or u'',
+                         (u'@' + row['username']) if row['username'] else u'', row['user_id'], when])
+    await message.bot.send_document(
+        message.chat.id,
+        BufferedInputFile(out.getvalue().encode('utf-8-sig'), filename='otvety_%d.csv' % task['id']))
 
 
 @router.callback_query(F.data.startswith('bc:'))
@@ -577,7 +645,8 @@ async def on_broadcast_button(call: CallbackQuery):
         # Проба на себе: копия того же сообщения, людям ничего не уходит.
         await call.answer(u'Присылаю пробу…')
         result = await broadcast.send_one(call.bot, call.from_user.id,
-                                          task['chat_id'], task['message_id'])
+                                          task['chat_id'], task['message_id'],
+                                          broadcast.markup(task))
         await call.message.answer(texts.TRY_DONE if result == 'ok'
                                   else texts.TRY_FAILED.format(why=result))
         return

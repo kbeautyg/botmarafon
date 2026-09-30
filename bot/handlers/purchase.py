@@ -119,3 +119,40 @@ async def on_buy(call: CallbackQuery):
         await _reply(call, u'Открываю оплату', *answer)
     else:
         await _reply(call, u'Заявка принята', texts.OFFER_DONE)
+
+
+@router.callback_query(F.data.startswith('ask:'))
+async def on_ask(call: CallbackQuery):
+    u"""«Да» или «Нет» под рассылкой (30.09.2026: «вы с нами?»).
+
+    «Да» — то же, что кнопка покупки спортзала: заявка менеджерам с пометкой
+    об акции и кнопка оплаты человеку; повтор за сутки менеджерам второй раз
+    не уходит. «Нет» — человеку спасибо. Каждое нажатие пишется в шаги
+    (ask_yes / ask_no, ref — номер рассылки).
+    """
+    parts = call.data.split(':')
+    answer = parts[1] if len(parts) > 1 else ''
+    if answer not in ('yes', 'no'):
+        await call.answer()
+        return
+    user_id = call.from_user.id
+    db.unblock(user_id)                        # нажал кнопку — бот у него открыт
+    db.log_event(user_id, 'ask_' + answer, parts[2] if len(parts) > 2 else None)
+    if answer == 'no':
+        await _reply(call, u'Спасибо за ответ', texts.ASK_NO_DONE)
+        return
+
+    pay_url = config.PAY_URLS.get('gym') or ''
+    reply = (texts.ASK_YES_PAY, keyboards.pay(pay_url)) if pay_url else (texts.ASK_YES_DONE,)
+    earlier = db.purchase_presses(user_id, 'gym')
+    number = db.add_purchase(user_id, 'gym')
+    if earlier and time.time() - earlier[-1]['at'] < REPEAT_WINDOW:
+        log.info(u'%s ответил «Да», а заявка на спортзал за сутки уже была — менеджерам не шлём',
+                 user_id)
+        await _reply(call, u'Вы уже в списке', *reply)
+        return
+    paid = u'\n%s' % texts.PAY_NOTE if pay_url else u''
+    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s\n\n%s' % (
+        number, _who(call.from_user), texts.ASK_YES_CHOICE, paid, texts.REPLY_HINT)
+    await _deliver(call.bot, number, note, user_id)
+    await _reply(call, u'Вы в списке!', *reply)
