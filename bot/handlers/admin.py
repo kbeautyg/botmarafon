@@ -496,49 +496,15 @@ WAIT_KEY = 'broadcast:await:%d'
 PICK_KEY = 'broadcast:picked:%d'
 
 
-@router.message(Command('рассылка_да_нет', 'yesno'))
-async def on_broadcast_yesno(message: Message, command: CommandObject | None = None):
-    u"""Рассылка с кнопками «Да» и «Нет» под сообщением (30.09.2026: «вы с
-    нами? — две кнопки Да или Нет, всем, на каких бы шагах они ни были»).
-
-    «Да» — заявка менеджерам на спортзал по акции, человеку — кнопка оплаты;
-    «Нет» — человеку спасибо (handlers/purchase.py). Список ников — как у
-    /рассылка.
-    """
-    await on_broadcast(message, command, mode='yesno')
-
-
-@router.message(Command('рассылка', 'broadcast'))
-async def on_broadcast(message: Message, command: CommandObject | None = None,
-                       mode: str = '1'):
-    u"""Рассылка: следующее сообщение станет тем, что уйдёт людям.
-
-    Без списка — всем. Со списком ников или ID («/рассылка @ник1 @ник2»)
-    — только им: AleX 19.09.2026 просил «пачкой кому-то отправить что-то».
-    mode='yesno' — под сообщением будут кнопки «Да» и «Нет».
-    """
-    if not config.is_team(message.from_user.id):
-        return
-    if db.broadcasts_going():
-        await message.answer(texts.BROADCAST_BUSY)
-        return
-
-    # По каналу: «/рассылка_да_нет мариус» — всем, у кого источник «Мариус — …»
-    # (30.09.2026: «пока только тем, кто пришёл из рекламы Мариуса»).
-    args = ((command.args if command else None) or u'').strip()
+def _audience(args: str) -> tuple:
+    u"""Кому рассылка по словам после команды: (выбранные, их число в базе,
+    чего не нашли, канал). Пусто — всем; «мариус» (канал из статистики) —
+    всем с таким источником; ники и ID — только им. Выбранных нет, а просили —
+    None вместо списка."""
     named = stats.channel_named(args) if args and u'@' not in args else None
     if named:
         people = stats.people_of(named)
-        if not people:
-            await message.answer(texts.BROADCAST_CHANNEL_NONE.format(channel=named))
-            return
-        db.put_content(WAIT_KEY % message.from_user.id, 'await', mode)
-        db.put_content(PICK_KEY % message.from_user.id, 'picked', ','.join(map(str, people)))
-        await message.answer(texts.BROADCAST_CHANNEL_HEAD.format(
-            channel=named, found=len(people))
-            + (texts.BROADCAST_YESNO_NOTE if mode == 'yesno' else u''))
-        return
-
+        return (people or None), len(people), [], named
     from .blacklist import _refs, _resolve
 
     refs = _refs(args)
@@ -547,20 +513,86 @@ async def on_broadcast(message: Message, command: CommandObject | None = None,
         user_id = _resolve(ref)
         (found if user_id and db.get_user(user_id) else missing).append(user_id or ref)
     if refs and not found:
-        await message.answer(texts.BROADCAST_PICKED_NONE)
+        return None, 0, missing, None
+    return found, len(refs), missing, None
+
+
+@router.message(Command('рассылка_да_нет', 'yesno'))
+async def on_broadcast_yesno(message: Message, command: CommandObject | None = None):
+    u"""Рассылка акции с кнопками «ДА» и «НЕТ» — сразу с готовым текстом.
+
+    30.09.2026: «вы с нами? — две кнопки ДА или НЕТ», а потом «пусть по
+    команде /рассылка_да_нет мариус запускалась рассылка уже с этим текстом».
+    Текст присылать не нужно: бот сам пишет его (texts.PROMO_YESNO) — это и
+    образец, и то сообщение, которое копируется людям, — и сразу спрашивает
+    подтверждение: проба на себе, «Разослать», «Отменить». Отправка — вторым
+    касанием, как у любой рассылки: её не отозвать.
+
+    «ДА» — заявка менеджерам на спортзал по акции и кнопка оплаты человеку;
+    «НЕТ» — человеку спасибо (handlers/purchase.py). Кому — как у /рассылка:
+    всем, по каналу («мариус») или по никам.
+    """
+    if not config.is_team(message.from_user.id):
+        return
+    if db.broadcasts_going():
+        await message.answer(texts.BROADCAST_BUSY)
+        return
+    args = ((command.args if command else None) or u'').strip()
+    picked, asked, missing, named = _audience(args)
+    if picked is None:
+        await message.answer(texts.BROADCAST_CHANNEL_NONE.format(channel=named) if named
+                             else texts.BROADCAST_PICKED_NONE)
+        return
+    if named:
+        head = texts.BROADCAST_CHANNEL_FOUND.format(channel=named, found=asked)
+    elif args:
+        note = texts.BROADCAST_PICKED_MISSING.format(
+            who=html.escape(u', '.join(str(x) for x in missing))) if missing else u''
+        head = texts.BROADCAST_PICKED_FOUND.format(found=len(picked), asked=asked, missing=note)
+    else:
+        head = u''
+    sample = await message.answer(texts.PROMO_YESNO)      # образец — он же и уйдёт людям
+    task_id = db.broadcast_add(message.chat.id, sample.message_id, message.from_user.id,
+                               picked, 'text', texts.PROMO_YESNO, None, 'yesno')
+    task = db.broadcast(task_id)
+    await message.answer(head + broadcast.preview(task) + texts.BROADCAST_YESNO_NOTE,
+                         reply_markup=keyboards.broadcast(task_id, db.broadcast_left(0, picked),
+                                                          everyone=not picked))
+
+
+@router.message(Command('рассылка', 'broadcast'))
+async def on_broadcast(message: Message, command: CommandObject | None = None):
+    u"""Рассылка: следующее сообщение станет тем, что уйдёт людям.
+
+    Без списка — всем. Со списком ников или ID («/рассылка @ник1 @ник2»)
+    — только им: AleX 19.09.2026 просил «пачкой кому-то отправить что-то».
+    Словом-каналом («/рассылка мариус») — всем, у кого такой источник.
+    """
+    if not config.is_team(message.from_user.id):
+        return
+    if db.broadcasts_going():
+        await message.answer(texts.BROADCAST_BUSY)
         return
 
-    db.put_content(WAIT_KEY % message.from_user.id, 'await', mode)
-    db.put_content(PICK_KEY % message.from_user.id, 'picked',
-                   ','.join(str(uid) for uid in found))
-    if not refs:
-        await message.answer(texts.BROADCAST_YESNO_ASK_MESSAGE if mode == 'yesno'
-                             else texts.BROADCAST_ASK_MESSAGE)
+    args = ((command.args if command else None) or u'').strip()
+    picked, asked, missing, named = _audience(args)
+    if picked is None:
+        await message.answer(texts.BROADCAST_CHANNEL_NONE.format(channel=named) if named
+                             else texts.BROADCAST_PICKED_NONE)
+        return
+
+    db.put_content(WAIT_KEY % message.from_user.id, 'await', '1')
+    db.put_content(PICK_KEY % message.from_user.id, 'picked', ','.join(map(str, picked)))
+    if named:
+        await message.answer(texts.BROADCAST_CHANNEL_HEAD.format(channel=named, found=asked))
+        return
+    if not args:
+        await message.answer(texts.BROADCAST_ASK_MESSAGE)
         return
     note = texts.BROADCAST_PICKED_MISSING.format(
         who=html.escape(u', '.join(str(x) for x in missing))) if missing else u''
     await message.answer(texts.BROADCAST_PICKED_HEAD.format(
-        found=len(found), asked=len(refs), missing=note))
+        found=len(picked), asked=asked, missing=note))
 
 
 @router.message(Command('отмена', 'cancel'))
@@ -585,8 +617,6 @@ def waiting_broadcast(message: Message) -> bool:
 @router.message(waiting_broadcast)
 async def on_broadcast_message(message: Message):
     u"""То, что разошлём. Показываем предпросмотр и спрашиваем подтверждение."""
-    waiting = db.get_content(WAIT_KEY % message.from_user.id)
-    buttons = 'yesno' if waiting and waiting[1] == 'yesno' else None
     db.put_content(WAIT_KEY % message.from_user.id, 'await', '')
     stored = db.get_content(PICK_KEY % message.from_user.id)
     picked = [int(piece) for piece in ((stored[1] if stored else '') or '').split(',')
@@ -594,12 +624,11 @@ async def on_broadcast_message(message: Message):
     db.put_content(PICK_KEY % message.from_user.id, 'picked', '')
     kind, text, file_id = chatlog.parts(message)
     task_id = db.broadcast_add(message.chat.id, message.message_id,
-                               message.from_user.id, picked, kind, text, file_id, buttons)
+                               message.from_user.id, picked, kind, text, file_id)
     task = db.broadcast(task_id)
-    note = texts.BROADCAST_YESNO_NOTE if buttons else u''
-    await message.reply(broadcast.preview(task) + note,
-                        reply_markup=keyboards.broadcast(task_id,
-                                                         db.broadcast_left(0, picked)))
+    await message.reply(broadcast.preview(task),
+                        reply_markup=keyboards.broadcast(task_id, db.broadcast_left(0, picked),
+                                                         everyone=not picked))
 
 
 @router.message(Command('ответы', 'answers'))

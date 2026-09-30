@@ -221,16 +221,18 @@ def daily(base: int, chosen: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def broadcast(broadcast_id: int, count: int) -> InlineKeyboardMarkup:
+def broadcast(broadcast_id: int, count: int, everyone: bool = True) -> InlineKeyboardMarkup:
     u"""Подтверждение рассылки: разослать всем или отменить.
 
     Рассылку нельзя отозвать, поэтому отправка — вторым касанием, и на
-    кнопке сразу видно, скольким людям уйдёт.
+    кнопке сразу видно, скольким людям уйдёт. Рассылка выбранным (по никам
+    или каналу, например «мариус») — «Разослать выбранным», а не «всем».
     """
+    go = texts.BROADCAST_GO if everyone else texts.BROADCAST_GO_PICKED
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=texts.TRY_BUTTON,
                               callback_data='bc:me:%d' % broadcast_id)],
-        [InlineKeyboardButton(text=texts.BROADCAST_GO.format(count=count),
+        [InlineKeyboardButton(text=go.format(count=count),
                               callback_data='bc:go:%d' % broadcast_id)],
         [InlineKeyboardButton(text=texts.BROADCAST_CANCEL,
                               callback_data='bc:no:%d' % broadcast_id)]])

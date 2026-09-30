@@ -43,11 +43,14 @@ def _люди(*ids):
         db.remember_user(uid, 'u%d' % uid, u'Человек %d' % uid)
 
 
-async def _завести(bot, команда=u'/рассылка_да_нет', текст=u'Вы с нами?'):
+async def _завести(bot, команда=u'/рассылка_да_нет', текст=u'Вы с нами?', слово=None):
+    u"""/рассылка_да_нет сама пишет текст акции и сразу спрашивает
+    подтверждение; /рассылка ждёт сообщение. Возвращает то, где предпросмотр."""
     if команда == u'/рассылка_да_нет':
-        await admin.on_broadcast_yesno(FakeMessage(text=команда, user=FakeUser(АДМИН), bot=bot))
-    else:
-        await admin.on_broadcast(FakeMessage(text=команда, user=FakeUser(АДМИН), bot=bot))
+        запрос = FakeMessage(text=команда, user=FakeUser(АДМИН), bot=bot)
+        await admin.on_broadcast_yesno(запрос, SimpleNamespace(args=слово) if слово else None)
+        return запрос
+    await admin.on_broadcast(FakeMessage(text=команда, user=FakeUser(АДМИН), bot=bot))
     сообщение = FakeMessage(text=текст, user=FakeUser(АДМИН), bot=bot)
     await admin.on_broadcast_message(сообщение)
     return сообщение
@@ -57,18 +60,35 @@ def _кнопки(keys):
     return [(b.text, b.callback_data) for row in keys.inline_keyboard for b in row]
 
 
+async def test_команда_сразу_пишет_текст_акции_и_ждёт_только_подтверждения():
+    u"""«Пусть по команде запускалась рассылка уже с этим текстом» (30.09.2026)."""
+    _люди(1, 2)
+    bot = FakeBot()
+    запрос = await _завести(bot)
+    образец, вопрос = запрос.answers[-2], запрос.answers[-1]
+    assert образец == texts.PROMO_YESNO
+    assert u'Вы с нами?' in образец and u'купить один месяц, а получить два' in образец
+    assert u'Разослать это всем?' in вопрос and texts.BROADCAST_YESNO_NOTE.strip() in вопрос
+    задача = db.broadcast(1)
+    assert задача['status'] == 'ready' and задача['buttons'] == 'yesno'
+    assert задача['text'] == texts.PROMO_YESNO
+    assert not [1 for kind, _, _ in bot.sent if kind == 'copy']   # без подтверждения — никому
+
+
 async def test_под_рассылкой_у_каждого_кнопки_да_и_нет():
     _люди(1, 2, 3)
     db.mark_blocked(3)
     bot = FakeBot()
-    сообщение = await _завести(bot)
-    assert texts.BROADCAST_YESNO_NOTE.strip() in сообщение.replies[-1]
+    await _завести(bot)
 
     await broadcast.run(bot, 1)
 
-    копии = [(chat, keys) for (kind, chat, _), keys in zip(bot.sent, bot.keys_sent) if kind == 'copy']
-    assert [chat for chat, _ in копии] == [1, 2]              # всем, кроме закрывших бота
-    for _, keys in копии:
+    копии = [(chat, payload, keys) for (kind, chat, payload), keys in zip(bot.sent, bot.keys_sent)
+             if kind == 'copy']
+    assert [chat for chat, _, _ in копии] == [1, 2]           # всем, кроме закрывших бота
+    образец = db.broadcast(1)['message_id']
+    for _, (откуда, номер), keys in копии:
+        assert (откуда, номер) == (АДМИН, образец)            # копия того самого текста
         assert _кнопки(keys) == [(u'ДА', 'ask:yes:1'), (u'НЕТ', 'ask:no:1')]
 
 
@@ -189,14 +209,13 @@ async def test_по_каналу_мариус_уходит_только_людя
     db.remember_user(8, 'u8', u'Мариус, но закрыл бота', 'site_an')
     db.mark_blocked(8)
     bot = FakeBot()
-    команда = FakeMessage(text=u'/рассылка_да_нет мариус', user=FakeUser(АДМИН), bot=bot)
-    await admin.on_broadcast_yesno(команда, SimpleNamespace(args=u'мариус'))
-    assert u'Таких в базе: 4 чел.' in команда.answers[-1]          # вместе с закрывшим бота
-    assert texts.BROADCAST_YESNO_NOTE.strip() in команда.answers[-1]
-
-    сообщение = FakeMessage(text=u'Вы с нами?', user=FakeUser(АДМИН), bot=bot)
-    await admin.on_broadcast_message(сообщение)
-    assert u'Получат: 3 чел.' in сообщение.replies[-1]              # закрывший бота не получит
+    запрос = await _завести(bot, слово=u'мариус')
+    вопрос = запрос.answers[-1]
+    assert запрос.answers[-2] == texts.PROMO_YESNO
+    assert u'в базе 4 чел.' in вопрос                             # вместе с закрывшим бота
+    assert u'Получат: 3 чел.' in вопрос                           # закрывший бота не получит
+    кнопки = [b.text for row in запрос.markups[-1].inline_keyboard for b in row]
+    assert texts.BROADCAST_GO_PICKED.format(count=3) in кнопки    # «выбранным», а не «всем»
     await broadcast.run(bot, 1)
 
     копии = [(chat, keys) for (kind, chat, _), keys in zip(bot.sent, bot.keys_sent) if kind == 'copy']
