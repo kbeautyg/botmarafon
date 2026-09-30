@@ -418,6 +418,23 @@ async def test_видео_от_админа_уходит_без_обложки_�
     assert 'cover' not in bot.video_kw[0]
 
 
+async def test_включено_выкладкой_один_раз(monkeypatch):
+    u"""Заказчик 01.10.2026: «Включай сам всё». Выключит админ — следующая
+    выкладка снова не включит."""
+    assert closing.switch_on_once() is None              # баннера нет — не включаем
+    assert not closing.enabled()
+
+    monkeypatch.setattr(closing, 'DEFAULT', РОЛИК)
+    await _прошёл(1)
+    await _прошёл(2, давно=ДЕНЬ)                         # у второго 72 часа ещё не прошли
+    assert closing.switch_on_once() == 1
+    assert closing.enabled()
+
+    closing.switch(False)                                # админ выключил в /баннер
+    assert closing.switch_on_once() is None
+    assert not closing.enabled()
+
+
 async def test_просмотр_без_загрузки_показывает_финальный_ролик(monkeypatch):
     monkeypatch.setattr(closing, 'DEFAULT', РОЛИК)
     message = FakeMessage(text='/баннер', user=FakeUser(ADMIN))

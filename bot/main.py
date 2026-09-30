@@ -92,6 +92,15 @@ async def run():
     nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
     reporter_daily = asyncio.create_task(daily.loop(bot))  # отчёт за сутки ночью
     liver = asyncio.create_task(live.loop(bot))       # напоминания об эфире
+    # Закрытие записей включено выкладкой (заказчик 01.10.2026: «Включай сам
+    # всё»), один раз — админам число тех, кому баннер уходит сразу.
+    try:
+        waiting = closing.switch_on_once()
+        if waiting is not None:
+            log.info(u'закрытие записей включено выкладкой, баннер сразу: %d чел.', waiting)
+            await delivery.alert_admins(bot, texts.BANNER_AUTO_ON.format(due=waiting))
+    except Exception as err:
+        log.warning(u'закрытие записей выкладкой не включили: %s', err)
     # записи закрываются через 72 часа после четвёртого дня, приходит баннер
     closer = asyncio.create_task(closing.loop(bot))
     # один раз: найти записи дней в старых переписках, чтобы закрыть и их
