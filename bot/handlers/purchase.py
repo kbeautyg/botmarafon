@@ -100,6 +100,10 @@ async def on_buy(call: CallbackQuery):
     if place == PREVIEW:
         await call.answer(u'Это просмотр баннера — заявка не создаётся')
         return
+    if place in PLACES and product == 'gym':
+        # Менеджеру — та кнопка, что видел человек (keyboards.finish): «Вступить
+        # в …», без «по акции». Покупка и оплата — те же, что в конце марафона.
+        title = texts.FINISH_BUY
 
     user_id = call.from_user.id
     # Есть ссылка на оплату — человек уходит туда сразу, заявка команде всё равно

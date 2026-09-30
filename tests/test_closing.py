@@ -11,6 +11,7 @@ AleX 29.09.2026: «всем, кто посмотрел четвёртый ден
 import os
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
@@ -20,16 +21,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot import backup, closing, config, db, delivery, texts                  # noqa: E402
 from bot.handlers import admin, purchase, start                               # noqa: E402
-from tests.fakes import FakeBot, FakeCall, FakeMessage, FakeUser, FakeVideo   # noqa: E402
+from tests.fakes import (FakeBot, FakeCall, FakeMessage, FakePhoto, FakeUser,  # noqa: E402
+                         FakeVideo)
 
 ADMIN = 777
 PAVEL = 312701042
 ДЕНЬ = 24 * 3600
+РОЛИК = closing.DEFAULT          # финальный ролик в репозитории — баннер по умолчанию
 
 
 @pytest.fixture(autouse=True)
 def база(tmp_path, monkeypatch):
     db.connect(str(tmp_path / 'closing.db'))
+    # Ролик из репозитория включают только тесты про него: остальным нужен
+    # баннер, который задал админ, — или никакого.
+    monkeypatch.setattr(closing, 'DEFAULT', str(tmp_path / 'нет-ролика.mp4'))
     monkeypatch.setattr(config, 'ADMIN_IDS', (ADMIN,))
     monkeypatch.setattr(config, 'STATS_IDS', ())
     monkeypatch.setattr(config, 'PURCHASE_CHAT_ID', 0)
@@ -296,6 +302,131 @@ async def test_баннер_виден_в_переписке_пульта():
     await closing.run_once(FakeBot())
     [line] = db.chat_history(1)
     assert (line['side'], line['text'], line['mass']) == ('out', texts.BANNER_CAPTION, 1)
+
+
+async def test_закрываются_только_четыре_записи_дней():
+    u"""Заказчик 01.10.2026: «удалялись 4 видео длинных, про темы сфер жизни,
+    остальные короткие и текстовые остаются»."""
+    await _прошёл(1)
+    records = {row['tg_id'] for row in db.open_day_messages(1)}
+    _включить()
+    bot = FakeBot()
+    await closing.run_once(bot)
+    assert len(records) == 4
+    assert {message_id for _, _, message_id, *_ in bot.edits} == records
+    assert not [s for s in bot.sent if s[0] == 'delete']
+
+
+async def test_под_баннером_вступить_и_сайт():
+    u"""Заказчик 01.10.2026: кнопки «Вступить в "Энергетический спортзал"» и
+    ссылка на сайт https://energy-sport-gum.ru/."""
+    await _прошёл(1)
+    _включить()
+    bot = FakeBot()
+    await closing.run_once(bot)
+    [[join], [site]] = bot.keys_sent[0].inline_keyboard
+    assert (join.text, join.callback_data) == (u'Вступить в «Энергетический спортзал»',
+                                               'buy:gym:banner')
+    assert site.url == 'https://energy-sport-gum.ru/'
+
+
+async def test_вступить_работает_как_покупка_в_конце_марафона(monkeypatch):
+    u"""«Кнопка купить она должна быть рабочей. Как в боте, купить спортзал
+    есть в марафоне в конце» (01.10.2026): та же оплата, та же заявка."""
+    monkeypatch.setattr(config, 'PAY_URLS', {'gym': 'https://pay.example/gym', 'course': ''})
+    db.remember_user(1, 'u1', u'Человек')
+    bot = FakeBot()
+    joined = FakeCall('buy:gym:banner', bot=bot)
+    await purchase.on_buy(joined)
+    at_end = FakeCall('buy:gym', user=FakeUser(2))       # кнопка в конце марафона
+    await purchase.on_buy(at_end)
+
+    assert joined.message.answers == at_end.message.answers == [texts.OFFER_PAY]
+    assert (_кнопки(joined.message.markups[0]) == _кнопки(at_end.message.markups[0])
+            == ['https://pay.example/gym'])
+    # менеджеру — заявка с той кнопкой, что видел человек, без «по акции»
+    notes = [text for kind, chat, text in bot.sent if u'Заявка №' in (text or u'')]
+    assert notes and all(texts.FINISH_BUY in note and u'по акции' not in note
+                         for note in notes)
+    assert db.purchase_presses(1, 'gym')
+
+
+# ------------------------------- финальный ролик — баннер по умолчанию
+
+class Загружает(FakeBot):
+    u"""Как Telegram: у ушедшего видео есть file_id ролика и обложки."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.video_kw = []
+
+    async def send_video(self, chat_id, video, **kw):
+        sent = await super().send_video(chat_id, video, **kw)
+        self.video_kw.append(kw)
+        sent.video = SimpleNamespace(file_id='uploaded-banner',
+                                     cover=[FakePhoto('cover-small'), FakePhoto('uploaded-cover')])
+        return sent
+
+
+async def test_финальный_ролик_уходит_без_загрузки_админом(monkeypatch):
+    u"""Заказчик 01.10.2026: «приходит в конце вот медиа сообщение с видео
+    заставкой последней версии» — ролик лежит в репозитории."""
+    monkeypatch.setattr(closing, 'DEFAULT', РОЛИК)
+    await _прошёл(1)
+    await _прошёл(2)
+    closing.switch(True)
+    bot = Загружает()
+    assert await closing.run_once(bot) == 2
+
+    first, second = [(chat, video) for kind, chat, video in bot.sent if kind == 'video']
+    # первому — файлом, дальше — по file_id: семь мегабайт уходят один раз
+    assert isinstance(first[1], FSInputFile) and first[1].path == РОЛИК
+    assert second == (2, 'uploaded-banner')
+    # обложка — кадр с лучом: тоже файлом один раз
+    assert isinstance(bot.video_kw[0]['cover'], FSInputFile)
+    assert bot.video_kw[1]['cover'] == 'uploaded-cover'
+    assert (bot.video_kw[1]['width'], bot.video_kw[1]['height']) == (1080, 1440)
+    assert db.get_content(closing.BANNER) == ('video', 'uploaded-banner')
+    assert [line['file_id'] for line in db.chat_history(1)] == ['uploaded-banner']
+    assert len(bot.edits) == 8                           # записи обоих закрыты
+
+
+async def test_новее_то_и_баннер(monkeypatch, tmp_path):
+    u"""Видео от админа выкладка не перетирает — перетирает только новый ролик."""
+    monkeypatch.setattr(closing, 'DEFAULT', РОЛИК)
+    assert closing.banner() == ('file', str(os.path.getsize(РОЛИК)))
+    db.put_content(closing.BANNER, 'video', 'from-admin')
+    assert closing.banner() == ('video', 'from-admin')
+
+    newer = tmp_path / 'banner.mp4'
+    newer.write_bytes(b'0' * 10)
+    monkeypatch.setattr(closing, 'DEFAULT', str(newer))
+    assert closing.banner() == ('file', '10')
+
+    monkeypatch.setattr(closing, 'DEFAULT', str(tmp_path / 'убрали.mp4'))
+    assert closing.banner() is None                      # так и не ушёл — слать нечего
+
+
+async def test_видео_от_админа_уходит_без_обложки_ролика(monkeypatch):
+    monkeypatch.setattr(closing, 'DEFAULT', РОЛИК)
+    await _прошёл(1)
+    closing.banner()                                     # выкладка с роликом была раньше
+    _включить(file_id='from-admin')
+    bot = Загружает()
+    await closing.run_once(bot)
+    assert bot.sent[0] == ('video', 1, 'from-admin')
+    assert 'cover' not in bot.video_kw[0]
+
+
+async def test_просмотр_без_загрузки_показывает_финальный_ролик(monkeypatch):
+    monkeypatch.setattr(closing, 'DEFAULT', РОЛИК)
+    message = FakeMessage(text='/баннер', user=FakeUser(ADMIN))
+    await admin.on_banner_command(message)
+    bot = message.bot
+    assert [kind for kind, chat, _ in bot.sent if chat == ADMIN] == [
+        'text', 'photo', 'video', 'text']                # пояснение, закрытая запись, баннер
+    assert _кнопки(bot.keys_sent[-2]) == ['buy:gym:preview', config.GYM_SITE_URL]
+    assert _кнопки(bot.keys_sent[-1]) == ['cl:on']
 
 
 # ------------------------------------------- какие сообщения бот помнит

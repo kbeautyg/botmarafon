@@ -24,6 +24,13 @@ bot/history.py. Запись, номера которой бот не знает
 как весь марафон), «купить» после него не нажимал, бота не закрывал, не в
 чёрном списке, не из команды проекта, закрытия ещё не было.
 
+Заказчик 01.10.2026: закрываются только «4 видео длинных, про темы сфер
+жизни, остальные короткие и текстовые остаются» — бот и помнит одни записи
+дней; «отслеживалось постоянно и каждый час» — проверка раз в минуту;
+баннер — «видео заставка последней версии» (media/banner.mp4) с кнопками
+«Вступить в „Энергетический спортзал“» (рабочая покупка, как в конце
+марафона) и «Сайт».
+
 Включает закрытие админ — кнопкой в /баннер, посмотрев баннер на себе.
 Сразу после включения баннер уходит всем, у кого 72 часа уже прошли, — а
 таких после выкладки сотни, и без явного «да» писать им нельзя. Пока
@@ -43,13 +50,22 @@ from . import config, db, delivery, keyboards, texts
 log = logging.getLogger(__name__)
 
 AFTER = 72 * 3600           # через сколько после четвёртого дня закрывать
-EVERY = 60                  # как часто проверять
+EVERY = 60                  # как часто проверять («каждый час» — с запасом)
 PAUSE = 0.05                # между сообщениями: Telegram принимает ~30 в секунду
-BANNER = 'banner'           # баннер в content: (video | animation, file_id)
+BANNER = 'banner'           # баннер в content: (video | animation | photo, file_id)
+                            # или (file, версия) — ролик из репозитория, ещё не уходил
 SWITCH = 'closing:on'       # включено ли закрытие: '1' — да
 BROKEN_EVERY = 6 * 3600     # как часто напоминать админам, что баннер не уходит
 
 CLOSED_DIR = os.path.join(config.ROOT, 'media', 'closed')
+
+# Баннер по умолчанию — финальный ролик с Павлом (30.09.2026, promo-banner/):
+# лежит в репозитории, загружать его админу не нужно. Обложка — кадр, где
+# луч уже светит: первые пять секунд ролика тучи ещё закрыты.
+DEFAULT = os.path.join(config.ROOT, 'media', 'banner.mp4')
+DEFAULT_COVER = os.path.join(config.ROOT, 'media', 'banner_cover.jpg')
+DEFAULT_META = {'width': 1080, 'height': 1440, 'duration': 14}
+DEFAULT_MARK = 'banner:default'     # какая версия ролика уже стала баннером
 
 # Ответы на правку, после которых закрывать в сообщении уже нечего: человек
 # удалил его сам, или оно уже подменено (круг прервался после правки, но до
@@ -66,8 +82,37 @@ class BannerBroken(Exception):
     u"""Telegram не принял баннер — он не уйдёт никому, пока его не заменят."""
 
 
+def _default_version() -> str | None:
+    u"""Версия ролика из репозитория — его размер, как у отзывов. None — ролика нет."""
+    try:
+        return str(os.path.getsize(DEFAULT))
+    except OSError:
+        return None
+
+
+def _default_id() -> str | None:
+    u"""file_id, под которым ролик этой версии уже ушёл, — или None."""
+    known = db.get_content('%s:%s' % (DEFAULT_MARK, _default_version()))
+    return known[1] if known else None
+
+
 def banner() -> tuple[str, str] | None:
-    return db.get_content(BANNER)
+    u"""Баннер. Что пришло позже, то и уходит: новый ролик в репозитории (с
+    выкладкой) или видео от админа с подписью banner.
+
+    Ролик ставится баннером один раз на версию: видео от админа следующая
+    выкладка не перетрёт — перетрёт только новый ролик.
+    """
+    version = _default_version()
+    if version:
+        seen = db.get_content(DEFAULT_MARK)
+        if not seen or seen[1] != version:
+            db.put_content(BANNER, 'file', version)
+            db.put_content(DEFAULT_MARK, 'default', version)
+    stored = db.get_content(BANNER)
+    if stored and stored[0] == 'file' and stored[1] != version:
+        return None             # ролик убрали из репозитория, так ни разу и не отправив
+    return stored
 
 
 def enabled() -> bool:
@@ -168,8 +213,48 @@ async def close_records(bot, user_id: int) -> int:
 
 # -------------------------------------------------------------- баннер
 
+async def _send_default(bot, chat_id: int, stored, keys):
+    u"""Ролик из репозитория — с обложкой-кадром, где луч уже светит.
+
+    Ролик и обложка уходят файлом один раз, дальше — по file_id. Обложку по
+    file_id Telegram не принял — шлём её файлом, как картинку «запись закрыта».
+    """
+    kind, value = stored
+    video = FSInputFile(DEFAULT) if kind == 'file' else value
+    has_cover = os.path.exists(DEFAULT_COVER)
+    cover_key = 'banner:cover:%d' % os.path.getsize(DEFAULT_COVER) if has_cover else None
+    known = db.get_content(cover_key) if cover_key else None
+
+    async def send(cover):
+        return await delivery._guard(bot.send_video(
+            chat_id, video, caption=texts.BANNER_CAPTION, reply_markup=keys, cover=cover,
+            supports_streaming=True, **DEFAULT_META))
+
+    sent = None
+    if known:
+        try:
+            sent = await send(known[1])
+        except TelegramBadRequest as err:
+            if _said(err, _CHAT_GONE):
+                raise
+            log.warning(u'file_id обложки баннера не принят (%s) — шлём файлом', err)
+    if sent is None:
+        sent = await send(FSInputFile(DEFAULT_COVER) if has_cover else None)
+        covers = getattr(getattr(sent, 'video', None), 'cover', None)
+        if covers and cover_key:
+            db.put_content(cover_key, 'photo', covers[-1].file_id)
+
+    file_id = getattr(getattr(sent, 'video', None), 'file_id', None)
+    if kind == 'file' and file_id:
+        db.put_content('%s:%s' % (DEFAULT_MARK, value), 'video', file_id)
+        # Админ мог за это время прислать свой баннер — его не трогаем.
+        if db.get_content(BANNER) == stored:
+            db.put_content(BANNER, 'video', file_id)
+    return sent
+
+
 async def send_banner(bot, chat_id: int, stored, place: str = 'banner'):
-    u"""Баннер с кнопками «купить» и «сайт». BannerBroken — Telegram не
+    u"""Баннер с кнопками «вступить» и «сайт». BannerBroken — Telegram не
     принял сам баннер (а не человека): он не уйдёт и остальным."""
     kind, file_id = stored
     keys = keyboards.finish(place)
@@ -180,6 +265,8 @@ async def send_banner(bot, chat_id: int, stored, place: str = 'banner'):
         if kind == 'animation':
             return await delivery._guard(bot.send_animation(
                 chat_id, file_id, caption=texts.BANNER_CAPTION, reply_markup=keys))
+        if kind == 'file' or file_id == _default_id():
+            return await _send_default(bot, chat_id, stored, keys)
         return await delivery._guard(bot.send_video(
             chat_id, file_id, caption=texts.BANNER_CAPTION, reply_markup=keys,
             supports_streaming=True))
@@ -206,8 +293,11 @@ async def preview(bot, chat_id: int) -> bool:
 
 def _to_chat(user_id: int, stored, sent) -> None:
     u"""Баннер — в переписку пульта: команда видит, что он ушёл."""
+    kind, file_id = stored
+    if kind == 'file':                   # ролик ушёл файлом — в переписку его file_id
+        kind, file_id = 'video', getattr(getattr(sent, 'video', None), 'file_id', None)
     try:
-        db.save_message(user_id, 'out', stored[0], texts.BANNER_CAPTION, stored[1], None,
+        db.save_message(user_id, 'out', kind, texts.BANNER_CAPTION, file_id, None,
                         getattr(sent, 'message_id', None), mass=True)
     except Exception as err:
         log.warning(u'баннер %s: в переписку не записали: %s', user_id, err)
@@ -244,6 +334,8 @@ async def run_once(bot, now: float | None = None) -> int:
         return 0
     done = 0
     for uid in due(now):
+        # Ролик из репозитория уходит файлом только первому — дальше по file_id.
+        stored = banner() or stored
         try:
             await close_for(bot, uid, stored)
             done += 1
@@ -280,7 +372,8 @@ async def run_once(bot, now: float | None = None) -> int:
 
 
 async def loop(bot) -> None:
-    u"""Раз в минуту — созревшее. Сбой одного круга не останавливает."""
+    u"""Раз в минуту — созревшее (заказчик 01.10.2026: «отслеживалось постоянно
+    и каждый час»). Сбой одного круга не останавливает."""
     while True:
         try:
             await run_once(bot)
