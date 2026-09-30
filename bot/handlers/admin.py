@@ -720,20 +720,22 @@ async def on_broadcast_button(call: CallbackQuery):
 
 # ---------------------------------------------- баннер после марафона
 #
-# AleX 29.09.2026: через три дня после кнопок покупки записи закрываются, и
+# AleX 29.09.2026: через 72 часа после четвёртого дня записи закрываются, и
 # приходит баннер — короткое зацикленное видео Энергетического спортзала
 # (bot/closing.py). Видео админ присылает боту с подписью banner, как записи
 # дней. Обработчик стоит выше on_video: тот иначе забрал бы видео себе.
 
-@router.message(F.caption.regexp(BANNER_TAG), F.video | F.animation | F.document)
+@router.message(F.caption.regexp(BANNER_TAG), F.video | F.animation | F.document | F.photo)
 async def on_banner(message: Message):
     if not _is_admin(message.from_user.id):
         return
     if getattr(message, 'animation', None):
-        kind, media = 'animation', message.animation
+        kind, file_id = 'animation', message.animation.file_id
+    elif message.photo:                        # баннер может быть и картинкой
+        kind, file_id = 'photo', message.photo[-1].file_id
     else:
-        kind, media = 'video', message.video or message.document
-    db.put_content(closing.BANNER, kind, media.file_id)
+        kind, file_id = 'video', (message.video or message.document).file_id
+    db.put_content(closing.BANNER, kind, file_id)
     await backup.save(message.bot)
     log.info(u'админ %s задал баннер после марафона', message.from_user.id)
     await _banner_screen(message.bot, message.chat.id, message.from_user.id)
@@ -759,7 +761,7 @@ async def on_banner_command(message: Message):
 
 @router.callback_query(F.data.in_({'cl:on', 'cl:off'}))
 async def on_closing_switch(call: CallbackQuery):
-    u"""Включить закрытие — баннер сразу уйдёт всем, у кого три дня прошли.
+    u"""Включить закрытие — баннер сразу уйдёт всем, у кого 72 часа прошли.
     Поэтому только админам и только отдельным нажатием после просмотра."""
     if not _is_admin(call.from_user.id):
         await call.answer(u'Включает закрытие админ бота')

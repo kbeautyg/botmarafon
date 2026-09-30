@@ -43,17 +43,20 @@ def база(tmp_path, monkeypatch):
 
 
 async def _прошёл(uid, давно=4 * ДЕНЬ):
-    u"""Человек прошёл четыре дня, кнопки покупки ушли ему `давно` назад.
-    Записи уходят настоящей отправкой — так бот запоминает их сообщения."""
+    u"""Человек прошёл марафон: четвёртый день пришёл ему `давно` назад, кнопки
+    покупки — через час после него. Записи уходят настоящей отправкой — так
+    бот запоминает их сообщения."""
     db.remember_user(uid, 'u%d' % uid, u'Человек')
     db.mark_launched(uid)
     marathon = FakeBot()
     for day in (1, 2, 3, 4):
         await delivery.send_day(marathon, uid, day)
     db.save_answer(uid, 'day3', 'yes')
+    db.log_event(uid, 'day', 4)
     db.log_event(uid, 'offer')
-    db._run("UPDATE events SET at=? WHERE user_id=? AND kind='offer'",
-            (time.time() - давно, uid))
+    day4 = time.time() - давно
+    db._run("UPDATE events SET at=? WHERE user_id=? AND kind='day'", (day4, uid))
+    db._run("UPDATE events SET at=? WHERE user_id=? AND kind='offer'", (day4 + 3600, uid))
 
 
 def _включить(kind='video', file_id='banner-file'):
@@ -84,6 +87,30 @@ async def test_через_три_дня_приходит_баннер_и_зап�
         texts.DAY_CLOSED.format(day=d) for d in (1, 2, 3, 4)]
     assert db.open_day_messages(1) == []
     assert db.get_user(1)['closed_at'] is not None
+
+
+async def test_72_часа_считаются_от_четвёртого_дня_а_не_от_кнопок():
+    u"""Заказчик 30.09.2026: «после момента, как 4-й день пришёл, через 72 часа».
+    Кнопки покупки — через час после дня, но ждать этот час не нужно."""
+    await _прошёл(1, давно=72 * 3600 + 600)          # день 4 — 72 ч 10 мин назад
+    _включить()
+    assert await closing.run_once(FakeBot()) == 1
+
+
+async def test_без_шага_четвёртого_дня_считаем_от_кнопок():
+    u"""Шаг «день 4» пишется с 11.09.2026 — у кого его нет, есть кнопки покупки."""
+    await _прошёл(1)
+    db._run("DELETE FROM events WHERE user_id=1 AND kind='day'")
+    _включить()
+    assert await closing.run_once(FakeBot()) == 1
+
+
+async def test_баннер_картинкой_уходит_картинкой():
+    await _прошёл(1)
+    _включить(kind='photo', file_id='banner-photo')
+    bot = FakeBot()
+    await closing.run_once(bot)
+    assert bot.sent[0] == ('photo', 1, 'banner-photo')
 
 
 async def test_раньше_трёх_дней_записи_на_месте():

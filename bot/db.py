@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS chats (
   left_at      REAL
 );
 
--- Куда ушли записи дней (29.09.2026). Через три дня после кнопок покупки
+-- Куда ушли записи дней (29.09.2026). Через 72 часа после четвёртого дня
 -- записи закрываются (bot/closing.py), а править своё сообщение бот может
 -- только по его номеру — до этого номера нигде не хранились.
 CREATE TABLE IF NOT EXISTS day_messages (
@@ -949,24 +949,30 @@ def close_day_message(user_id: int, tg_id: int) -> None:
 
 
 def closing_candidates(now: float, after: float) -> list[int]:
-    u"""Кому пора закрыть записи: кнопки покупки ушли не позже, чем after
-    секунд назад, «купить» после них не нажимал, бота не закрывал, не в
+    u"""Кому пора закрыть записи: четвёртый день пришёл не позже, чем after
+    секунд назад, «купить» после него не нажимал, бота не закрывал, не в
     чёрном списке, записи ещё не закрыты (bot/closing.py).
 
-    Срок — в масштабе человека (speed): в тестовом прогоне /test три дня
-    сжаты так же, как паузы марафона. Кнопок могло быть несколько (прогоны
-    до «пройти заново») — считаем от последних.
+    Отсчёт — от записи четвёртого дня (заказчик 30.09.2026: «после момента,
+    как 4-й день пришёл, через 72 часа»). Шаг «день 4» пишется с 11.09.2026;
+    у кого его нет, считаем от кнопок покупки — они приходят через час
+    после четвёртого дня. Срок — в масштабе человека (speed): в тестовом
+    прогоне /test он сжат так же, как паузы марафона.
     """
     rows = _conn.execute(
         'SELECT t.user_id FROM ('
-        '  SELECT u.user_id, MAX(e.at) AS offered, COALESCE(u.speed, 1.0) AS speed'
-        '  FROM users u JOIN events e ON e.user_id = u.user_id AND e.kind = \'offer\''
-        '  WHERE u.closed_at IS NULL AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN +
-        '  GROUP BY u.user_id) t '
-        'WHERE t.offered + ? * t.speed <= ? '
+        '  SELECT u.user_id, COALESCE('
+        "    (SELECT MAX(e.at) FROM events e WHERE e.user_id = u.user_id"
+        "     AND e.kind = 'day' AND e.ref = '4'),"
+        "    (SELECT MAX(e.at) FROM events e WHERE e.user_id = u.user_id"
+        "     AND e.kind = 'offer')) AS since,"
+        '    COALESCE(u.speed, 1.0) AS speed'
+        '  FROM users u'
+        '  WHERE u.closed_at IS NULL AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ') t '
+        'WHERE t.since IS NOT NULL AND t.since + ? * t.speed <= ? '
         'AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = t.user_id '
-        '                AND p.at >= t.offered) '
-        'ORDER BY t.offered', (after, now)).fetchall()
+        '                AND p.at >= t.since) '
+        'ORDER BY t.since', (after, now)).fetchall()
     return [r[0] for r in rows]
 
 

@@ -92,7 +92,7 @@ async def run():
     nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
     reporter_daily = asyncio.create_task(daily.loop(bot))  # отчёт за сутки ночью
     liver = asyncio.create_task(live.loop(bot))       # напоминания об эфире
-    # записи закрываются через три дня после кнопок покупки, приходит баннер
+    # записи закрываются через 72 часа после четвёртого дня, приходит баннер
     closer = asyncio.create_task(closing.loop(bot))
     # один раз: найти записи дней в старых переписках, чтобы закрыть и их
     finder = asyncio.create_task(history.run(bot))
