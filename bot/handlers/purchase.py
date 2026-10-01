@@ -36,9 +36,12 @@ REPEAT_WINDOW = 24 * 3600
 
 # Где нажали «купить», если не под кнопками покупки после четвёртого дня
 # (buy:gym:<где>, keyboards.finish): менеджеру видно, что сработало.
+# Павел 01.10.2026 про «Нажал под баннером: через 72 часа после 4-го дня,
+# записи закрыты»: «не понял, она нажала купить?» — поэтому словами, где.
 PLACES = {
-    'banner': u'Нажал под баннером: через 72 часа после 4-го дня, записи закрыты',
-    'again': u'Нажал, вернувшись в бота после марафона',
+    'banner': u'Где нажали: под видео-баннером, который приходит через 72 часа '
+              u'после 4-го дня марафона',
+    'again': u'Где нажали: в ответе на /start — человек вернулся в бота уже после марафона',
 }
 # Кнопка в просмотре баннера командой (/баннер) — не заявка.
 PREVIEW = 'preview'
@@ -129,7 +132,7 @@ async def on_buy(call: CallbackQuery):
              if earlier else u'')
     paid = u'\n%s' % texts.PAY_NOTE if pay_url else u''
     where = u'\n%s' % PLACES[place] if place in PLACES else u''
-    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nВыбор: <b>%s</b>%s%s%s\n\n%s' % (
+    note = u'🛒 <b>Заявка №%s</b>\n%s\n\nНажата кнопка покупки: <b>%s</b>%s%s%s\n\n%s' % (
         number, _who(call.from_user), title, where, paid, again, texts.REPLY_HINT)
     await _deliver(call.bot, number, note, user_id)
     if answer:
