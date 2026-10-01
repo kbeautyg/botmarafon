@@ -169,9 +169,13 @@ def due(now: float | None = None) -> list[int]:
 def state(now: float | None = None) -> str:
     u"""Строка для /баннер: включено ли закрытие и сколько людей его ждёт."""
     count = len(due(now))
+    skipped = db.closing_skipped(time.time() if now is None else now, AFTER)
+    why = texts.BANNER_STATE_SKIPPED.format(**{
+        key: len([uid for uid in ids if not config.is_team(uid)])
+        for key, ids in skipped.items()})
     if enabled():
-        return texts.BANNER_STATE_ON.format(due=count, closed=db.stats()['closed'])
-    return texts.BANNER_STATE_OFF.format(due=count)
+        return texts.BANNER_STATE_ON.format(due=count, closed=db.stats()['closed']) + why
+    return texts.BANNER_STATE_OFF.format(due=count) + why
 
 
 def _said(err: Exception, marks: tuple) -> bool:
@@ -377,6 +381,12 @@ async def run_once(bot, now: float | None = None) -> int:
     stored = banner()
     if not stored:
         return 0
+    # Чьи записи нашлись в переписке, а самих в базе нет — сначала вернуть:
+    # без строки в базе правило их не видит.
+    restored = db.restore_lost_users()
+    if restored:
+        log.info(u'вернули в базу %d чел. по записям дней из старых переписок', restored)
+        await delivery.alert_admins(bot, texts.USERS_RESTORED.format(count=restored))
     done = 0
     for uid in due(now):
         # Ролик из репозитория уходит файлом только первому — дальше по file_id.

@@ -504,6 +504,65 @@ async def test_resend_всем_не_возвращает_закрытые_зап
     assert got == {2}
 
 
+# -------------------- кто прошёл марафон до журнала шагов (до 11.09.2026)
+#
+# 01.10.2026: баннер пришёл 85 людям, а ещё у 51 четвёртый день был больше
+# 72 часов назад — и ничего. Шаги пишутся с 11.09.2026: у прошедших раньше
+# нет ни шага «день 4», ни кнопок покупки, и правило их не видело.
+
+def _записи_из_переписки(uid, давно, дни=(1, 2, 3, 4), в_базе=True):
+    u"""Как после bot/history.py: записи дней найдены в переписке, а шагов
+    в журнале у человека нет."""
+    if в_базе:
+        db.remember_user(uid, 'u%d' % uid, u'Человек')
+    for day in дни:
+        db.remember_day_message(uid, day, 1000 * uid + day, 'video',
+                                at=time.time() - давно + day)
+
+
+async def test_прошедшим_до_журнала_шагов_срок_от_записи_четвёртого_дня():
+    _записи_из_переписки(1, давно=20 * ДЕНЬ)
+    _записи_из_переписки(2, давно=2 * ДЕНЬ)                # 72 часа ещё не прошли
+    _записи_из_переписки(3, давно=20 * ДЕНЬ, дни=(1, 2))   # до четвёртого дня не дошёл
+    _включить()
+    bot = FakeBot()
+    assert await closing.run_once(bot) == 1
+    assert [chat for kind, chat, _ in bot.sent if kind == 'video'] == [1]
+    assert db.open_day_messages(1) == []
+    assert len(db.open_day_messages(2)) == 4 and len(db.open_day_messages(3)) == 2
+    # «заново» закрыто и им: четвёртый день у них был
+    assert db.passed_marathon(1) and db.passed_marathon(2) and not db.passed_marathon(3)
+
+
+async def test_потерянных_из_базы_возвращаем_и_закрываем():
+    u"""До 05.09.2026 база не переживала выкладку: записи дней у человека в
+    переписке есть, а его самого в базе нет."""
+    _записи_из_переписки(5, давно=25 * ДЕНЬ, в_базе=False)
+    _включить()
+    bot = FakeBot()
+    assert await closing.run_once(bot) == 1
+    человек = db.get_user(5)
+    assert человек['closed_at'] is not None and db.open_day_messages(5) == []
+    assert time.time() - человек['started_at'] > 24 * ДЕНЬ   # не «новый за сегодня»
+    to_admin = [text for kind, chat, text in bot.sent if chat == ADMIN]
+    assert to_admin == [texts.USERS_RESTORED.format(count=1)]
+
+    await closing.run_once(bot)                               # второй раз возвращать некого
+    assert len([1 for kind, chat, _ in bot.sent if chat == ADMIN]) == 1
+
+
+async def test_в_баннере_видно_почему_закрыты_не_все():
+    await _прошёл(1)
+    db.add_purchase(1, 'gym')                                 # выбрал — правило не трогает
+    await _прошёл(2)
+    db.mark_blocked(2)                                        # закрыл бота
+    await _прошёл(3)
+    await _прошёл(ADMIN)
+    db.add_purchase(ADMIN, 'gym')                             # команда — не в счёт
+    _включить()
+    assert texts.BANNER_STATE_SKIPPED.format(bought=1, blocked=1) in closing.state()
+
+
 # --------------------------------------------------- «пройти заново»
 
 async def test_после_четвёртого_дня_заново_не_начать():

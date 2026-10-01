@@ -440,6 +440,9 @@ def passed_marathon(user_id: int) -> bool:
                    "AND ((kind='day' AND ref='4') OR kind='offer')")
             or one("SELECT 1 FROM jobs WHERE user_id=? "
                    "AND chain IN ('day3_yes', 'day3_no', 'after_day4')")
+            # до 11.09.2026 шаги не писались — но сама запись четвёртого дня
+            # в переписке есть (bot/history.py)
+            or one('SELECT 1 FROM day_messages WHERE user_id=? AND day=4')
             or one('SELECT 1 FROM users WHERE user_id=? AND closed_at IS NOT NULL'))
 
 
@@ -990,32 +993,77 @@ def close_day_message(user_id: int, tg_id: int) -> None:
          (time.time(), user_id, tg_id))
 
 
+# Когда человеку пришёл четвёртый день (алиас users — u). Шаг «день 4»
+# пишется с 11.09.2026; у кого его нет — от кнопок покупки, они приходят
+# через час после четвёртого дня. У прошедших марафон до 11.09.2026 шагов
+# нет вовсе: им — от самой записи четвёртого дня, найденной в переписке
+# (bot/history.py). 01.10.2026 так нашлись люди с четвёртым днём, которых
+# правило закрытия не видело.
+_DAY4_AT = ('COALESCE('
+            "(SELECT MAX(e.at) FROM events e WHERE e.user_id = u.user_id"
+            " AND e.kind = 'day' AND e.ref = '4'), "
+            "(SELECT MAX(e.at) FROM events e WHERE e.user_id = u.user_id"
+            " AND e.kind = 'offer'), "
+            '(SELECT MAX(d.at) FROM day_messages d WHERE d.user_id = u.user_id'
+            ' AND d.day = 4))')
+_BOUGHT_SINCE = ('EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = t.user_id '
+                 'AND p.at >= t.since)')
+
+
 def closing_candidates(now: float, after: float) -> list[int]:
     u"""Кому пора закрыть записи: четвёртый день пришёл не позже, чем after
     секунд назад, «купить» после него не нажимал, бота не закрывал, не в
     чёрном списке, записи ещё не закрыты (bot/closing.py).
 
     Отсчёт — от записи четвёртого дня (заказчик 30.09.2026: «после момента,
-    как 4-й день пришёл, через 72 часа»). Шаг «день 4» пишется с 11.09.2026;
-    у кого его нет, считаем от кнопок покупки — они приходят через час
-    после четвёртого дня. Срок — в масштабе человека (speed): в тестовом
-    прогоне /test он сжат так же, как паузы марафона.
+    как 4-й день пришёл, через 72 часа»), см. _DAY4_AT. Срок — в масштабе
+    человека (speed): в тестовом прогоне /test он сжат так же, как паузы
+    марафона.
     """
     rows = _conn.execute(
         'SELECT t.user_id FROM ('
-        '  SELECT u.user_id, COALESCE('
-        "    (SELECT MAX(e.at) FROM events e WHERE e.user_id = u.user_id"
-        "     AND e.kind = 'day' AND e.ref = '4'),"
-        "    (SELECT MAX(e.at) FROM events e WHERE e.user_id = u.user_id"
-        "     AND e.kind = 'offer')) AS since,"
-        '    COALESCE(u.speed, 1.0) AS speed'
+        '  SELECT u.user_id, ' + _DAY4_AT + ' AS since, COALESCE(u.speed, 1.0) AS speed'
         '  FROM users u'
         '  WHERE u.closed_at IS NULL AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ') t '
         'WHERE t.since IS NOT NULL AND t.since + ? * t.speed <= ? '
-        'AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = t.user_id '
-        '                AND p.at >= t.since) '
+        'AND NOT ' + _BOUGHT_SINCE + ' '
         'ORDER BY t.since', (after, now)).fetchall()
     return [r[0] for r in rows]
+
+
+def closing_skipped(now: float, after: float) -> dict:
+    u"""У кого срок закрытия пришёл, а записи остаются открытыми — и почему:
+    bought — нажал «купить» после четвёртого дня (правило его не трогает);
+    blocked — закрыл бота: править его переписку бот не может, закроет,
+    когда человек вернётся. Для строки в /баннер: «почему закрыты не все».
+    """
+    base = ('SELECT t.user_id FROM ('
+            '  SELECT u.user_id, u.blocked_at, ' + _DAY4_AT + ' AS since,'
+            '    COALESCE(u.speed, 1.0) AS speed'
+            '  FROM users u WHERE u.closed_at IS NULL AND NOT ' + ACTIVE_BAN + ') t '
+            'WHERE t.since IS NOT NULL AND t.since + ? * t.speed <= ? ')
+
+    def ids(tail: str) -> list:
+        return [r[0] for r in _conn.execute(base + tail, (after, now)).fetchall()]
+
+    return {'bought': ids('AND ' + _BOUGHT_SINCE),
+            'blocked': ids('AND t.blocked_at IS NOT NULL AND NOT ' + _BOUGHT_SINCE)}
+
+
+def restore_lost_users() -> int:
+    u"""Вернуть в базу людей, чьи записи дней нашлись в переписке, а самих
+    в базе нет. Возвращает, скольких вернули.
+
+    До 05.09.2026 база не переживала выкладку (диска у бота не было), и
+    те, кто пришёл раньше и больше боту не писал, из неё пропали. Записи
+    дней у них остались — без строки в users правило закрытия их не видит.
+    Пришёл и запустил марафон — тогда же, когда ушла первая найденная
+    запись: в «новые за сегодня» такие люди не попадают.
+    """
+    return _run('INSERT OR IGNORE INTO users (user_id, started_at, launched_at, source) '
+                "SELECT d.user_id, MIN(d.at), MIN(d.at), '' FROM day_messages d "
+                'WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = d.user_id) '
+                'GROUP BY d.user_id').rowcount
 
 
 def closing_leftovers() -> list[int]:
