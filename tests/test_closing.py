@@ -43,6 +43,8 @@ def база(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'PAY_URLS', {'gym': '', 'course': ''})
     monkeypatch.setattr(closing, 'PAUSE', 0)
     monkeypatch.setattr(closing, '_broken_told', 0.0)
+    monkeypatch.setattr(closing, '_refused_at', 0.0)
+    monkeypatch.setattr(closing, '_refused_told', 0.0)
     for day in (1, 2, 3, 4):
         db.put_content('day%d' % day, 'video', 'fileday%d' % day)
     yield
@@ -196,6 +198,32 @@ async def test_удалённое_человеком_сообщение_не_м�
     assert await closing.run_once(bot) == 1
     assert len(bot.edits) == 3
     assert db.open_day_messages(1) == []
+
+
+async def test_отказ_telegram_править_запись_закрытием_не_считается():
+    u"""«Message can't be edited»: сообщение на месте, запись открыта. Отметить
+    её закрытой — значит молча не закрыть сотни записей из старых переписок."""
+    await _прошёл(1)
+    await _прошёл(2)
+
+    class Отказ(FakeBot):
+        tries = 0
+
+        async def edit_message_media(self, media, chat_id=None, message_id=None, **kw):
+            Отказ.tries += 1
+            raise TelegramBadRequest(method=None, message=u"Bad Request: message can't be edited")
+
+    _включить()
+    bot = Отказ()
+    assert await closing.run_once(bot) == 2              # баннер ушёл обоим
+    assert len(db.open_day_messages(1)) == 4 and len(db.open_day_messages(2)) == 4
+    to_admin = [text for kind, chat, text in bot.sent if chat == ADMIN]
+    assert len(to_admin) == 1 and u'be edited' in to_admin[0]
+
+    tried = Отказ.tries
+    await closing.run_once(bot)                          # час записи не трогаем
+    assert Отказ.tries == tried
+    assert len([text for kind, chat, text in bot.sent if chat == ADMIN]) == 1
 
 
 async def test_сбой_связи_дозакрывает_записи_без_второго_баннера():

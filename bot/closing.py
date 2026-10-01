@@ -72,16 +72,28 @@ DEFAULT_MARK = 'banner:default'     # какая версия ролика уж�
 # Ответы на правку, после которых закрывать в сообщении уже нечего: человек
 # удалил его сам, или оно уже подменено (круг прервался после правки, но до
 # отметки в базе).
-_NOTHING_LEFT = ('message to edit not found', 'message is not modified',
-                 "message can't be edited", 'message_id_invalid')
+_NOTHING_LEFT = ('message to edit not found', 'message is not modified', 'message_id_invalid')
+# Сообщение на месте, но править его Telegram не дал: запись осталась
+# открытой, и закрытой её считать нельзя. С 01.10.2026 закрываются и записи
+# из старых переписок (bot/history.py) — тихо отметить сотни записей
+# закрытыми, ничего не закрыв, было бы хуже любого сбоя.
+_REFUSED = ("message can't be edited",)
 # Ответы на отправку баннера, которые говорят о человеке, а не о баннере.
 _CHAT_GONE = ('chat not found', 'peer_id_invalid', 'user not found')
 
+REFUSED_PAUSE = 3600        # сколько не трогать записи после отказа Telegram
+
 _broken_told = 0.0
+_refused_at = 0.0           # когда Telegram в последний раз не дал править запись
+_refused_told = 0.0
 
 
 class BannerBroken(Exception):
     u"""Telegram не принял баннер — он не уйдёт никому, пока его не заменят."""
+
+
+class EditRefused(Exception):
+    u"""Telegram не дал править сообщение с записью — она осталась открытой."""
 
 
 def _default_version() -> str | None:
@@ -221,6 +233,8 @@ async def close_records(bot, user_id: int) -> int:
         try:
             await _close_one(bot, user_id, row)
         except TelegramBadRequest as err:
+            if _said(err, _REFUSED):
+                raise EditRefused(str(err)) from err
             if not _said(err, _NOTHING_LEFT):
                 raise
             log.info(u'запись дня %s у %s закрывать нечего: %s', row['day'], user_id, err)
@@ -332,7 +346,8 @@ async def close_for(bot, user_id: int, stored) -> None:
     sent = await send_banner(bot, user_id, stored)
     db.mark_closed(user_id)
     _to_chat(user_id, stored, sent)
-    await close_records(bot, user_id)
+    if time.time() - _refused_at >= REFUSED_PAUSE:      # Telegram не даёт править — позже
+        await close_records(bot, user_id)
 
 
 async def _tell_broken(bot, err: Exception) -> None:
@@ -342,6 +357,17 @@ async def _tell_broken(bot, err: Exception) -> None:
         return
     _broken_told = now
     await delivery.alert_admins(bot, texts.BANNER_BROKEN.format(why=html.escape(str(err))[:500]))
+
+
+async def _tell_refused(bot, err: Exception) -> None:
+    u"""Записи не правятся: час их не трогаем, админам — не чаще раза в шесть часов."""
+    global _refused_at, _refused_told
+    _refused_at = now = time.time()
+    log.warning(u'Telegram не даёт править записи дней: %s', err)
+    if now - _refused_told < BROKEN_EVERY:
+        return
+    _refused_told = now
+    await delivery.alert_admins(bot, texts.RECORDS_REFUSED.format(why=html.escape(str(err))[:500]))
 
 
 async def run_once(bot, now: float | None = None) -> int:
@@ -362,6 +388,9 @@ async def run_once(bot, now: float | None = None) -> int:
         except delivery.Gone:
             db.mark_blocked(uid)
             log.info(u'%s закрыл бота — закрытие записей подождёт его возвращения', uid)
+        except EditRefused as err:
+            done += 1                   # баннер ушёл — не закрылись только записи
+            await _tell_refused(bot, err)
         except BannerBroken as err:
             # Тот же баннер не примут и у остальных — ждём, пока его заменят.
             log.warning(u'баннер не принят: %s', err)
@@ -376,6 +405,8 @@ async def run_once(bot, now: float | None = None) -> int:
             log.warning(u'закрытие у %s не прошло (%s) — повторим следующим кругом', uid, err)
         await asyncio.sleep(PAUSE)
 
+    if time.time() - _refused_at < REFUSED_PAUSE:
+        return done                 # Telegram не даёт править записи — ждём
     for uid in db.closing_leftovers():
         if config.is_team(uid):
             continue
@@ -384,6 +415,9 @@ async def run_once(bot, now: float | None = None) -> int:
         except delivery.Gone:
             db.mark_blocked(uid)
         except TelegramRetryAfter:
+            break
+        except EditRefused as err:
+            await _tell_refused(bot, err)
             break
         except Exception as err:
             log.warning(u'дозакрыть записи у %s не вышло (%s) — повторим', uid, err)
