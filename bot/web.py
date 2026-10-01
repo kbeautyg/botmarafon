@@ -25,7 +25,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import blacklist, broadcast, chatlog, config, db, delivery, record
+from . import blacklist, broadcast, chatlog, config, db, delivery, keyboards, record
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,8 @@ MAX_CAPTION = 1024
 # Скольких можно вычеркнуть из группы руками. Больше — это уже не
 # «снять тех, кому уже ушло», а другая группа.
 MAX_SKIPPED = 2000
+# Сколько знаков в своей кнопке под сообщением: длиннее телефон обрежет.
+MAX_BUTTON = 40
 
 
 class Denied(Exception):
@@ -203,6 +205,38 @@ def wanted_scope(source) -> str:
     u"""Какую группу выбрали в пульте. Пусто — не группу, а людей поимённо."""
     scope = str(source.get('scope') or '').strip()
     return scope if scope in db.AUDIENCES else ''
+
+
+def wanted_buttons(source) -> tuple:
+    u"""Кнопки под сообщением, выбранные в пульте: (что выбрали, ошибка).
+
+    AleX 01.10.2026: «выбираем сообщение, где будет видео и текст и кнопка».
+    join — «Вступить в „Энергетический спортзал“» и сайт, как под баннером;
+    text + url — своя кнопка-ссылка; можно обе. Из формы с файлом приходит
+    JSON-строкой, из обычного запроса — словарём. Ничего не выбрано — None.
+    """
+    raw = source.get('buttons')
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else None
+        except ValueError:
+            return None, u'не разобрали кнопки под сообщением'
+    if not isinstance(raw, dict):
+        return None, u''
+    spec = {}
+    if raw.get('join'):
+        spec['join'] = True
+    text = u' '.join(str(raw.get('text') or '').split())
+    url = str(raw.get('url') or '').strip()
+    if text or url:
+        if not (text and url):
+            return None, u'своей кнопке нужны и текст, и ссылка'
+        if len(text) > MAX_BUTTON:
+            return None, u'текст кнопки длиннее %d знаков' % MAX_BUTTON
+        if not check_media(url):
+            return None, u'ссылка кнопки должна начинаться с http:// или https://'
+        spec['link'] = [text, url]
+    return (spec or None), u''
 
 
 def skipped_ids(source) -> list:
@@ -422,7 +456,7 @@ def check_media(url: str) -> str:
     return url if parts.scheme in ('http', 'https') and '.' in parts.netloc else ''
 
 
-async def send_media(bot, user_id: int, url: str, caption: str) -> tuple:
+async def send_media(bot, user_id: int, url: str, caption: str, keys=None) -> tuple:
     u"""Отправить вложение по ссылке. Возвращает вид отправленного."""
     kind = media_kind(url)
     senders = {
@@ -435,9 +469,11 @@ async def send_media(bot, user_id: int, url: str, caption: str) -> tuple:
     if kind not in senders:
         # Не узнали вложение — пусть уходит ссылкой: Telegram покажет превью.
         body = (caption + u'\n' + url) if caption else url
-        sent = await delivery._guard(bot.send_message(user_id, body, parse_mode=None))
+        sent = await delivery._guard(bot.send_message(user_id, body, parse_mode=None,
+                                                      reply_markup=keys))
         return 'text', sent
-    sent = await delivery._guard(senders[kind](user_id, url, caption=caption or None))
+    sent = await delivery._guard(senders[kind](user_id, url, caption=caption or None,
+                                               reply_markup=keys))
     return kind, sent
 
 
@@ -498,7 +534,7 @@ def scope_title(scope: str) -> str:
     return dict(SCOPES).get(scope, scope)
 
 
-async def spread(request, user, scope: str, compose, skip=()) -> web.Response:
+async def spread(request, user, scope: str, compose, skip=(), buttons=None) -> web.Response:
     u"""Отправить одно и то же целой группе — через обычную рассылку.
 
     Группа — это сотни человек и минуты отправки: держать ради этого
@@ -530,7 +566,10 @@ async def spread(request, user, scope: str, compose, skip=()) -> web.Response:
     # уже не все — тогда только списком: 26.09.2026 снятые в «Все участники»
     # получали сообщение наравне с остальными.
     targets = None if scope == 'all' and not skip else ids
-    task = db.broadcast_add(author, message_id, author, targets, *chatlog.parts(origin))
+    # Кнопки, выбранные в пульте, едут с рассылкой: и после перезапуска бот
+    # продолжит её с ними же.
+    task = db.broadcast_add(author, message_id, author, targets, *chatlog.parts(origin),
+                            buttons=json.dumps(buttons, ensure_ascii=False) if buttons else None)
     asyncio.create_task(broadcast.run(request.app['bot'], task))
     log.info(u'пульт: %s шлёт группе «%s» — %d чел.', author, scope, len(ids))
     return web.json_response({
@@ -558,24 +597,35 @@ async def api_send(request, user):
             {'error': u'слишком длинное: %d знаков, влезает %d' % (len(text), MAX_TEXT)},
             status=400)
 
+    buttons, wrong = wanted_buttons(body)
+    if wrong:
+        return web.json_response({'error': wrong}, status=400)
+    keys = keyboards.extra(buttons)
+
     bot = request.app['bot']
     scope = wanted_scope(body)
     if scope:
+        # Образец у автора — с теми же кнопками, но «Вступить» на нём заявку
+        # не создаёт; людям кнопки ставит уже рассылка.
+        sample = keyboards.extra(buttons, 'preview')
+
         async def compose(uid):
             if media:
-                return (await send_media(bot, uid, media, text))[1]
-            return await delivery._guard(bot.send_message(uid, text, parse_mode=None))
+                return (await send_media(bot, uid, media, text, sample))[1]
+            return await delivery._guard(bot.send_message(uid, text, parse_mode=None,
+                                                          reply_markup=sample))
 
-        return await spread(request, user, scope, compose, skipped_ids(body))
+        return await spread(request, user, scope, compose, skipped_ids(body), buttons)
 
     chosen = picked_ids(body)
     if chosen:
         async def one(uid):
             if media:
-                kind, sent = await send_media(bot, uid, media, text)
+                kind, sent = await send_media(bot, uid, media, text, keys)
             else:
                 kind = 'text'
-                sent = await delivery._guard(bot.send_message(uid, text, parse_mode=None))
+                sent = await delivery._guard(bot.send_message(uid, text, parse_mode=None,
+                                                              reply_markup=keys))
             # нескольким разом — общее, а не личный ответ: из «ждут» не убирает
             db.save_message(uid, 'out', kind, text or media, media or None,
                             author=int(user['id']), tg_id=getattr(sent, 'message_id', None),
@@ -590,10 +640,11 @@ async def api_send(request, user):
     sent = None
     try:
         if media:
-            kind, sent = await send_media(bot, user_id, media, text)
+            kind, sent = await send_media(bot, user_id, media, text, keys)
         else:
             kind = 'text'
-            sent = await delivery._guard(bot.send_message(user_id, text, parse_mode=None))
+            sent = await delivery._guard(bot.send_message(user_id, text, parse_mode=None,
+                                                          reply_markup=keys))
     except delivery.Gone:
         db.mark_blocked(user_id)
         return web.json_response({'error': u'человек закрыл бота — писать ему нельзя'}, status=409)
@@ -854,16 +905,19 @@ def file_kind(mime: str, name: str, size: int = 0) -> str:
     return kind
 
 
-async def _send_file(bot, user_id: int, kind: str, body, name: str, caption: str):
-    u"""Файл одному человеку. body — байты или file_id уже залитого файла."""
+async def _send_file(bot, user_id: int, kind: str, body, name: str, caption: str, keys=None):
+    u"""Файл одному человеку. body — байты или file_id уже залитого файла;
+    keys — кнопки под ним, если их выбрали в пульте."""
     from aiogram.types import BufferedInputFile
 
     method, field = SEND_BY_KIND.get(kind, ('send_document', 'document'))
     ready = body if isinstance(body, str) else BufferedInputFile(body, name or 'file')
-    keys = {field: ready}
+    params = {field: ready}
     if kind != 'video_note':
-        keys['caption'] = caption or None
-    return await delivery._guard(getattr(bot, method)(user_id, **keys))
+        params['caption'] = caption or None
+    if keys is not None:
+        params['reply_markup'] = keys
+    return await delivery._guard(getattr(bot, method)(user_id, **params))
 
 
 def _file_id(sent, kind: str) -> str:
@@ -879,12 +933,18 @@ async def _file_out(request, user, fields: dict, blob: bytes, name: str, caption
     bot = request.app['bot']
     author = int(user['id'])
     kind = file_kind(fields.get('mime') or '', name, len(blob))
+    buttons, wrong = wanted_buttons(fields)
+    if wrong:
+        return web.json_response({'error': wrong}, status=400)
+    keys = keyboards.extra(buttons)
+    # У автора — образец: кнопка «Вступить» на нём заявку не создаёт.
+    sample = keyboards.extra(buttons, 'preview')
 
     scope = wanted_scope(fields)
     if scope:
         return await spread(request, user, scope,
-                            lambda uid: _send_file(bot, uid, kind, blob, name, caption),
-                            skipped_ids(fields))
+                            lambda uid: _send_file(bot, uid, kind, blob, name, caption, sample),
+                            skipped_ids(fields), buttons)
 
     chosen = picked_ids(fields)
     if chosen:
@@ -893,14 +953,14 @@ async def _file_out(request, user, fields: dict, blob: bytes, name: str, caption
         # нужны ни нам, ни телефону.
         shared, saved_id = blob, ''
         try:
-            first = await _send_file(bot, author, kind, blob, name, caption)
+            first = await _send_file(bot, author, kind, blob, name, caption, sample)
             saved_id = _file_id(first, kind)
             shared = saved_id or blob
         except Exception as err:
             log.warning(u'пульт: файл не лёг автору %s: %s', author, err)
 
         async def one(uid):
-            sent = await _send_file(bot, uid, kind, shared, name, caption)
+            sent = await _send_file(bot, uid, kind, shared, name, caption, keys)
             db.save_message(uid, 'out', kind, caption or None, saved_id or None,
                             author, getattr(sent, 'message_id', None))
 
@@ -911,7 +971,7 @@ async def _file_out(request, user, fields: dict, blob: bytes, name: str, caption
     if not db.get_user(user_id):
         return web.json_response({'error': u'человека нет в базе'}, status=404)
     try:
-        sent = await _send_file(bot, user_id, kind, blob, name, caption)
+        sent = await _send_file(bot, user_id, kind, blob, name, caption, keys)
     except delivery.Gone:
         db.mark_blocked(user_id)
         return web.json_response({'error': u'человек закрыл бота — писать ему нельзя'},

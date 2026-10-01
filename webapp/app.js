@@ -706,6 +706,8 @@
       : 'Сообщение придёт каждому из выбранных отдельно, '
         + 'как обычное сообщение от бота — с уведомлением. '
         + 'Переписку видно в карточке каждого.';
+    hint.textContent += ' Кнопки под сообщением — «Вступить в спортзал», «Сайт» '
+      + 'или своя ссылка — включает значок 🔘 внизу.';
     $('log').appendChild(hint);
     $('go').disabled = false;
     if (tg && tg.BackButton) { tg.BackButton.show(); }
@@ -715,6 +717,7 @@
     state.to = [];
     clearScope();
     dropFile();
+    dropKeys();
     $('info').hidden = false;
     $('ban').hidden = false;
     state.id = id;
@@ -733,6 +736,7 @@
     state.to = [];
     clearScope();
     dropFile();
+    dropKeys();
     chatScreen.classList.remove('is-open');
     listScreen.classList.remove('is-behind');
     if (tg && tg.BackButton) { tg.BackButton.hide(); }
@@ -750,11 +754,41 @@
     else if (window.confirm(ask)) { next(); }
   }
 
+  /* КНОПКИ ПОД СООБЩЕНИЕМ (AleX 01.10.2026: «сообщение, где будет видео и
+     текст и кнопка»). Готовая пара — «Вступить…» и «Сайт», как под баннером
+     после марафона, — и своя кнопка-ссылка; можно обе. Панель закрыта —
+     кнопок нет, что бы в ней ни осталось. */
+  function keysChosen() {
+    if ($('keys-box').hidden || state.editing) { return null; }
+    var chosen = { join: $('keys-join').checked,
+                   text: $('keys-text').value.trim(), url: $('keys-url').value.trim() };
+    return (chosen.join || chosen.text || chosen.url) ? chosen : null;
+  }
+
+  function keysWrong(chosen) {
+    if (!chosen || (!chosen.text && !chosen.url)) { return ''; }
+    if (!chosen.text || !chosen.url) { return 'Своей кнопке нужны и надпись, и ссылка'; }
+    if (!/^https?:\/\/\S+\.\S+/i.test(chosen.url)) {
+      return 'Ссылка кнопки должна начинаться с https://';
+    }
+    return '';
+  }
+
+  function dropKeys() {
+    $('keys-box').hidden = true;
+    $('keys').classList.remove('is-on');
+    $('keys-join').checked = false;
+    $('keys-text').value = '';
+    $('keys-url').value = '';
+  }
+
   function send(event) {
     event.preventDefault();
     var text = $('text').value.trim();
     var media = $('media').value.trim();
     if (state.busy || (!state.id && !manyCount())) { return; }
+    var wrong = keysWrong(keysChosen());
+    if (wrong) { toast(wrong); return; }
     if (state.file) { return confirmGroup(sendFile); }
     if (!text && !media) { return; }
     confirmGroup(function () { reallySend(text, media); });
@@ -769,13 +803,15 @@
     var call = state.editing
       ? api('edit', { messageId: state.editing, text: text })
       : api('send', { id: state.id, ids: state.to, scope: state.scope,
-                      except: state.skip, text: text, media: media });
+                      except: state.skip, text: text, media: media,
+                      buttons: keysChosen() });
     call
       .then(function (data) {
         field.value = '';
         link.value = '';
         link.hidden = true;
         $('clip').classList.remove('is-on');
+        dropKeys();
         stopEdit();
         grow(field);
         if (many) { doneMany(data); } else {
@@ -987,6 +1023,9 @@
     form.append('kind', 'file');
     form.append('mime', file.type || '');
     form.append('text', $('text').value.trim());
+    // кнопки — тоже раньше файла: бот читает поля по порядку
+    var chosen = keysChosen();
+    if (chosen) { form.append('buttons', JSON.stringify(chosen)); }
     form.append('file', file, file.name || 'file');
     state.busy = true;
     $('go').disabled = true;
@@ -999,6 +1038,7 @@
         $('text').value = '';
         grow($('text'));
         dropFile();
+        dropKeys();
         if (many) { doneMany(data); return; }
         toast('Отправлено');
         drawChat({ person: state.person, card: state.card, chats: state.chats,
@@ -1031,6 +1071,16 @@
     link.hidden = !link.hidden;
     this.classList.toggle('is-on', !link.hidden);
     if (!link.hidden) { link.focus(); }
+  });
+
+  $('keys').addEventListener('click', function () {
+    var box = $('keys-box');
+    if (box.hidden) {
+      box.hidden = false;
+      this.classList.add('is-on');
+    } else {
+      dropKeys();
+    }
   });
 
   $('info').addEventListener('click', function () {

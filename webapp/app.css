@@ -462,6 +462,21 @@ html, body {
   font-size: 13px;
 }
 .attach[hidden] { display: none; }
+
+/* Кнопки под сообщением: готовая пара и своя ссылка. */
+.keys { display: flex; flex-direction: column; gap: 6px; }
+.keys[hidden] { display: none; }
+.keys__join {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--card);
+  font-size: 14px;
+  cursor: pointer;
+}
+.keys__join input { width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
 .attach__name {
   flex: 1;
   min-width: 0;

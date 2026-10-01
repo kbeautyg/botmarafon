@@ -267,6 +267,25 @@ def finish(place: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def extra(spec: dict | None, place: str = 'cast') -> InlineKeyboardMarkup | None:
+    u"""Кнопки под сообщением из пульта (AleX 01.10.2026: «сообщение, где
+    будет видео и текст и кнопка»; «кнопки обе сделай»).
+
+    spec — что выбрали в пульте: {'join': True} — «Вступить…» и сайт, как
+    под баннером; {'link': [текст, адрес]} — своя кнопка-ссылка; можно обе.
+    place — где кнопки покажут: cast — людям, preview — образец у автора,
+    заявку он не создаёт.
+    """
+    spec = spec or {}
+    rows = []
+    if spec.get('join'):
+        rows.extend(finish(place).inline_keyboard)
+    link = spec.get('link')
+    if link:
+        rows.append([InlineKeyboardButton(text=link[0], url=link[1])])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
 def closing_switch(enabled: bool, due: int) -> InlineKeyboardMarkup:
     u"""Включить или выключить закрытие записей (/баннер, только админам)."""
     if enabled:

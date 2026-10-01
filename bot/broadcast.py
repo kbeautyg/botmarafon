@@ -20,6 +20,7 @@ AleX 18.09.2026: «одной кнопкой написать абсолютно
 начинается заново — второй раз одно и то же людям не приходит.
 """
 import asyncio
+import json
 import logging
 import time
 
@@ -36,9 +37,20 @@ REPORT_EVERY = 200
 
 
 def markup(task: dict):
-    u"""Кнопки под рассылкой: «Да» и «Нет» (30.09.2026) — или никаких."""
-    if (task or {}).get('buttons') == 'yesno':
+    u"""Кнопки под рассылкой: «Да» и «Нет» (30.09.2026), выбранные в пульте
+    «Вступить…» с сайтом и своя ссылка (01.10.2026) — или никаких.
+
+    Выбранное в пульте лежит в рассылке JSON-строкой — так оно переживает
+    перезапуск вместе с ней.
+    """
+    buttons = (task or {}).get('buttons') or ''
+    if buttons == 'yesno':
         return keyboards.yes_no(task['id'])
+    if buttons.startswith('{'):
+        try:
+            return keyboards.extra(json.loads(buttons))
+        except (ValueError, TypeError, IndexError) as err:
+            log.warning(u'рассылка %s: кнопки не разобрали (%s) — уйдёт без них', task['id'], err)
     return None
 
 

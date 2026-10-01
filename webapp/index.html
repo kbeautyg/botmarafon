@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=14">
+<link rel="stylesheet" href="/static/app.css?v=15">
 </head>
 <body>
 
@@ -62,6 +62,18 @@
         <span id="attach-name" class="attach__name"></span>
         <button id="attach-drop" class="attach__drop" type="button" aria-label="Убрать файл">✕</button>
       </div>
+      <!-- Кнопки под сообщением: AleX 01.10.2026 «сообщение, где будет видео
+           и текст и кнопка»; «кнопки обе сделай» — готовая и своя. -->
+      <div id="keys-box" class="keys" hidden>
+        <label class="keys__join">
+          <input id="keys-join" type="checkbox">
+          <span>Кнопки «Вступить в «Энергетический спортзал»» и «Сайт»</span>
+        </label>
+        <input id="keys-text" class="send__media" type="text" maxlength="40"
+               placeholder="Своя кнопка: надпись" autocomplete="off">
+        <input id="keys-url" class="send__media" type="url" inputmode="url"
+               placeholder="Своя кнопка: ссылка https://…" autocomplete="off">
+      </div>
       <textarea id="text" class="send__text" rows="3" placeholder="Сообщение от имени бота"></textarea>
     </div>
     <div class="send__tools">
@@ -69,6 +81,7 @@
       <input id="file" type="file" hidden>
       <button id="pin" class="send__clip" type="button" aria-label="Файл с устройства">📁</button>
       <button id="clip" class="send__clip" type="button" aria-label="Вложение по ссылке">📎</button>
+      <button id="keys" class="send__clip" type="button" aria-label="Кнопки под сообщением">🔘</button>
       <button id="mic" class="send__clip" type="button" aria-label="Записать голосовое">🎤</button>
       <button id="cam" class="send__clip" type="button" aria-label="Записать кружок">⭕</button>
       <button id="go" class="send__go" type="submit" aria-label="Отправить">➤</button>
@@ -87,6 +100,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=16"></script>
+<script src="/static/app.js?v=17"></script>
 </body>
 </html>
