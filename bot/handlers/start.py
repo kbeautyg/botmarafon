@@ -60,11 +60,22 @@ def _nth(n: int) -> str:
     return u'в первый раз' if n <= 1 else u'%d-й раз' % n
 
 
-def _entry_text(user, template: str, **extra) -> str:
+def _entry_text(user, template: str, now: str | None = None, **extra) -> str:
+    u"""Текст уведомления о входе. now — метка ссылки, по которой человек
+    пришёл в этот раз.
+
+    За человеком остаётся первая метка — откуда он пришёл впервые. Пришёл
+    снова по другой ссылке — команде видно и её: AleX 05.10.2026 «пришёл в
+    марафон с рассылки, а статистика зафиксировала, что от Мариуса».
+    """
     known = db.get_user(user.id) or {}
     when = datetime.fromtimestamp(time.time(), stats.MSK).strftime('%d.%m %H:%M')
-    return template.format(who=_who(user), when=when,
-                           source=stats.source_label(known), **extra)
+    source = stats.source_label(known)
+    first = known.get('source') or ''
+    if now is not None and first and now != first:
+        source = texts.ENTRY_SOURCE_NOW.format(
+            first=source, now=stats.label(now) if now else texts.ENTRY_NO_TAG)
+    return template.format(who=_who(user), when=when, source=source, **extra)
 
 
 async def _announce(bot, user, text: str, skip: tuple = ()) -> None:
@@ -169,7 +180,7 @@ async def on_start(message: Message, command: CommandObject | None = None):
             await _announce(message.bot, message.from_user,
                             _entry_text(message.from_user,
                                         texts.ENTRY_LEAD if launched else texts.ENTRY_LEAD_AGAIN,
-                                        nth=_nth(nth)),
+                                        now=source, nth=_nth(nth)),
                             skip=(config.SUPPORT_CHAT_ID,))
         return
 
@@ -204,7 +215,8 @@ async def on_start(message: Message, command: CommandObject | None = None):
         # Уведомление тоже здесь: даже если приветствие не ушло, вход был и
         # марафон запущен — команда должна это видеть (AleX 11.09.2026).
         await _announce(message.bot, message.from_user,
-                        _entry_text(message.from_user, texts.ENTRY_LAUNCHED, nth=_nth(nth)))
+                        _entry_text(message.from_user, texts.ENTRY_LAUNCHED, now=source,
+                                    nth=_nth(nth)))
 
 
 @router.callback_query(F.data == 'restart')

@@ -53,6 +53,34 @@ async def test_первый_старт_уходит_в_чат_уведомлен
     assert 'launch' in db.pending_chains(1)
 
 
+async def test_пришёл_снова_по_другой_ссылке_видна_и_она():
+    u"""AleX 05.10.2026: «пришёл в марафон с рассылки по комментариям, а
+    статистика зафиксировала, что от Мариуса». За человеком остаётся первая
+    метка, но в уведомлении видно и ту, по которой он пришёл сейчас."""
+    db.remember_user(3, None, u'Гульгайша', 'site_popup_ig')     # впервые — с рекламы Мариуса
+    сообщение = FakeMessage(text='/start', user=FakeUser(3, None, u'Гульгайша'))
+    await start.on_start(сообщение)
+    (текст,) = _в_чат(сообщение.bot, ENTRY)
+    assert (u'откуда: Мариус — Instagram, окно на сайте (впервые), '
+            u'в этот раз — ссылка без метки') in текст
+    assert db.get_user(3)['source'] == 'site_popup_ig'            # первая метка остаётся
+
+    db.remember_user(4, None, u'Анна', 'site_popup_ig')
+    сообщение = FakeMessage(text='/start ls_kom', user=FakeUser(4, None, u'Анна'))
+    await start.on_start(сообщение)
+    (текст,) = _в_чат(сообщение.bot, ENTRY)
+    assert u'в этот раз — Telegram — рассылка в ЛС по комментариям в каналах' in текст
+
+
+async def test_рассылка_по_комментариям_со_своей_меткой():
+    сообщение = FakeMessage(text='/start ls_kom', user=FakeUser(5, 'david', u'David'))
+    await start.on_start(сообщение)
+    (текст,) = _в_чат(сообщение.bot, ENTRY)
+    assert u'откуда: Telegram — рассылка в ЛС по комментариям в каналах\n' in текст
+    assert u'впервые' not in текст
+    assert u'?start=ls_kom' in stats.links_report('finish_marafon_bot')
+
+
 async def test_повторный_старт_не_уведомляет_а_перезапуск_считает_разы():
     первый = FakeMessage(text='/start', user=FakeUser(2))
     await start.on_start(первый)

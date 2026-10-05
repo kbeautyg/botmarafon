@@ -179,6 +179,9 @@ DIRECT_HEADS = {
     'zayavka': (u'Заявка с сайта', u''),
 }
 IG_TAILS = {'direct': u'автоответ в директ', 'bio': u'ссылка в профиле'}
+# AleX 05.10.2026 запустил через программу рассылку людям из комментариев в
+# каналах: их ссылка на бота — ?start=ls_kom.
+LS_TAILS = {'kom': u'рассылка в ЛС по комментариям в каналах'}
 
 
 def _join(*bits) -> str:
@@ -228,6 +231,8 @@ def _direct(source: str) -> tuple[str, str] | None:
         return name, (u'рассылка %s' % tail) if tail.isdigit() else tail
     if head == 'ig' and tail:
         return name, IG_TAILS.get(tail, tail)
+    if head == 'ls' and tail in LS_TAILS:
+        return name, LS_TAILS[tail]
     if head == 'tgads' and tail:
         return name, tail
     return name, u' '.join(b for b in (what, tail) if b)
@@ -469,6 +474,7 @@ def links_report(username: str) -> str:
         (u'Telegram Ads', 'tg_ads1'),
         (u'Автообзвон', 'az'),
         (u'Рассылка в личные сообщения', 'ls'),
+        (u'Рассылка в ЛС людям из комментариев в каналах (через программу)', 'ls_kom'),
         (u'Нейрокомментинг', 'nc'),
         (u'Instagram — автоответ в директ по слову «Марафон»', 'ig_direct'),
         (u'Instagram — ссылка в шапке профиля', 'ig_bio'),
