@@ -249,5 +249,6 @@ async def on_restart(call: CallbackQuery):
     await call.message.answer(texts.RESTART_DONE, reply_markup=keyboards.care())
     await call.answer()
     log.info(u'воронка перезапущена по кнопке для %s', user_id)
+    # Свой заголовок: это тот же человек, а не новый запуск (08.10.2026).
     await _announce(call.bot, call.from_user,
-                    _entry_text(call.from_user, texts.ENTRY_LAUNCHED, nth=_nth(nth)))
+                    _entry_text(call.from_user, texts.ENTRY_RESTARTED, nth=_nth(nth)))
