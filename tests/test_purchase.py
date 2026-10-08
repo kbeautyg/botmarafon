@@ -219,5 +219,5 @@ async def test_обучение_без_ссылки_как_раньше(monkeypa
 
 
 def test_боевая_ссылка_спортзала_точка_банк():
-    u"""Ссылка, которую прислал Павел; обучению ссылку пока не ставили."""
-    assert config.GYM_PAY_URL == 'https://tochkaplace.com/ia/df12d7ce-070a-4243-8ba4-34ae84e86e94'
+    u"""Ссылка, которую прислал Павел (08.10.2026 — новая); обучению ссылку пока не ставили."""
+    assert config.GYM_PAY_URL == 'https://tochkaplace.com/ia/e70fdfa9-8630-467b-8f36-50672f7ca33e'
