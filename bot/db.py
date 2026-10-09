@@ -1111,13 +1111,15 @@ def purchases_list(since: float = 0, until: float | None = None,
     prev_at — когда этот же человек жал ту же кнопку до этого: если в
     пределах суток, менеджерам заявку не слали (bot/handlers/purchase.py,
     REPEAT_WINDOW), и в списке это надо назвать, иначе число в отчёте и
-    число заявок в личке не сходятся.
+    число заявок в личке не сходятся. prev_count — сколько раз жал до этого.
     """
     rows = _conn.execute(
         'SELECT p.id, p.user_id, p.product, p.at, '
         '       u.username, u.first_name, u.blocked_at, '
         '       (SELECT MAX(q.at) FROM purchases q WHERE q.user_id = p.user_id '
-        '        AND q.product = p.product AND q.id < p.id) AS prev_at '
+        '        AND q.product = p.product AND q.id < p.id) AS prev_at, '
+        '       (SELECT COUNT(*) FROM purchases q WHERE q.user_id = p.user_id '
+        '        AND q.product = p.product AND q.id < p.id) AS prev_count '
         'FROM purchases p LEFT JOIN users u ON u.user_id = p.user_id '
         'WHERE p.at >= ? AND (? IS NULL OR p.at < ?) '
         'ORDER BY p.at DESC LIMIT ?', (since, until, until, limit)).fetchall()

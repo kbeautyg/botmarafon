@@ -91,6 +91,27 @@ def _who(row: dict) -> str:
     return contact.line(row['user_id'], row.get('first_name'), row.get('username'))
 
 
+def _times(n: int) -> str:
+    u"""2 раза, 5 раз, 22 раза."""
+    word = u'раза' if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else u'раз'
+    return u'%d %s' % (n, word)
+
+
+def _earlier(row: dict) -> str:
+    u"""Пометка у того, кто жал эту кнопку и раньше (09.10.2026: в отчёте за
+    день стояли люди, пришедшие давно, — команда решила, что отчёт врёт).
+    В пределах суток — «(повтор)»: заявку менеджерам по нему не слали."""
+    if _again(row):
+        return u' (повтор)'
+    if not row.get('prev_at'):
+        return u''
+    last = datetime.fromtimestamp(row['prev_at'], MSK).strftime('%d.%m')
+    count = int(row.get('prev_count') or 1)
+    if count <= 1:
+        return u' (раньше нажимали %s)' % last
+    return u' (раньше нажимали %s, последний — %s)' % (_times(count), last)
+
+
 def purchase_lines(rows: list) -> str:
     u"""Кто нажал «купить» — короткими строками под число в отчёте.
 
@@ -102,8 +123,7 @@ def purchase_lines(rows: list) -> str:
     lines = []
     for row in rows:
         when = datetime.fromtimestamp(row['at'], MSK).strftime('%H:%M')
-        lines.append(u'   • %s · %s, %s%s' % (
-            _who(row), _product(row), when, u' (повтор)' if _again(row) else u''))
+        lines.append(u'   • %s · %s, %s%s' % (_who(row), _product(row), when, _earlier(row)))
     return u'\n' + u'\n'.join(lines)
 
 
