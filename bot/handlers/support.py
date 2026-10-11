@@ -21,7 +21,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from .. import chatlog, config, contact, db, delivery, keyboards, texts
+from .. import chatlog, config, contact, db, delivery, evgeny, keyboards, texts
 
 log = logging.getLogger(__name__)
 router = Router(name='support')
@@ -71,7 +71,9 @@ async def _relay(message: Message) -> None:
     chatlog.save(message, user_id, 'out', message.from_user.id,
                  getattr(copy, 'message_id', None))
     log.info(u'ответ команды %s ушёл человеку %s', message.from_user.id, user_id)
-    await message.reply(u'Отправлено ✅')
+    # Команда ответила сама — Евгений в этом диалоге замолкает (bot/evgeny.py).
+    stopped = evgeny.team_wrote(user_id, message.from_user.full_name or u'')
+    await message.reply(u'Отправлено ✅' + (texts.EVGENY_OFF_NOTE if stopped else u''))
 
 
 @router.message(F.chat.type == 'private', F.text == texts.CARE_BUTTON)
@@ -177,7 +179,9 @@ async def _write(message: Message, ref: str, start: int) -> None:
     chatlog.save_text(user_id, body, message.from_user.id,
                       getattr(ушло, 'message_id', None))
     log.info(u'команда %s написала человеку %s по /написать', message.from_user.id, user_id)
-    sent = await message.answer(texts.WRITE_SENT.format(who=who))
+    stopped = evgeny.team_wrote(user_id, message.from_user.full_name or u'')
+    sent = await message.answer(texts.WRITE_SENT.format(who=who)
+                                + (texts.EVGENY_OFF_NOTE if stopped else u''))
     db.link_care(message.chat.id, sent.message_id, user_id)
 
 
@@ -187,11 +191,12 @@ async def from_team(message: Message):
     await _relay(message)
 
 
-async def _mirror(message: Message) -> int:
+async def _mirror(message: Message, ai: bool = False) -> int:
     u"""Продублировать написанное боту команде. Возвращает, скольким дошло.
 
     Каждое сообщение уходит двумя частями — «кто написал» и само сообщение
-    копией, — и реплай на любую из них находит человека.
+    копией, — и реплай на любую из них находит человека. ai — диалог ведёт
+    Евгений: команде видно, что отвечать не обязательно.
     """
     chats = (((config.SUPPORT_CHAT_ID,) if config.SUPPORT_CHAT_ID else ())
              + config.purchase_recipients())
@@ -202,7 +207,8 @@ async def _mirror(message: Message) -> int:
         try:
             head = await delivery.note(
                 message.bot, chat,
-                u'💬 <b>Написали в бота</b>\n%s\n%s' % (_who(message.from_user), texts.REPLY_HINT),
+                u'💬 <b>Написали в бота</b>\n%s\n%s' % (
+                    _who(message.from_user), texts.EVGENY_MIRROR_HINT if ai else texts.REPLY_HINT),
                 keyboards.ban_ask(message.from_user.id, chat),
                 keyboards.ban_ask(message.from_user.id))
             db.link_care(chat, head.message_id, message.from_user.id)
@@ -240,6 +246,12 @@ async def to_support(message: Message):
     db.remember_user(message.from_user.id, message.from_user.username,
                      message.from_user.first_name)
     chatlog.save(message, message.from_user.id, 'in', tg_id=message.message_id)
+    if evgeny.is_on(message.from_user.id):
+        # Диалог ведёт Евгений: команда всё равно видит сообщение, а отвечает он —
+        # без «Получили 🤝» (bot/evgeny.py).
+        await _mirror(message, ai=True)
+        evgeny.heard(message.bot, message)
+        return
     delivered = await _mirror(message)
     db.set_care_open(message.from_user.id, False)
     await message.answer(texts.CARE_SENT_HERE if delivered else texts.CARE_SENT,

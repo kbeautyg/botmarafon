@@ -144,6 +144,16 @@ PAY_URLS = {
     'course': os.getenv('COURSE_PAY_URL', '').strip(),
 }
 
+# Евгений — ИИ-помощник, который дожимает до «Энергетического спортзала»
+# (AleX 11.10.2026, bot/evgeny.py). Провайдер — OpenAI-совместимый шлюз
+# apinet.cloud, как у Евгения с Авито. Ключ — только переменной Railway
+# AI_API_KEY: без него кнопка «AI» в пульте и /евгений честно говорят, что
+# ключа нет, и ничего не шлют.
+AI_API_KEY = (os.getenv('AI_API_KEY') or os.getenv('OPENAI_API_KEY') or '').strip()
+AI_BASE_URL = (os.getenv('AI_BASE_URL') or os.getenv('OPENAI_BASE_URL')
+               or 'https://apinet.cloud/v1').strip().rstrip('/')
+AI_MODEL = (os.getenv('AI_MODEL') or os.getenv('OPENAI_MODEL') or 'glm-5.2').strip()
+
 # Сайт Энергетического спортзала — кнопка под баннером после марафона
 # (AleX 29.09.2026: «кнопкой купить и ссылкой на сайт энергозал»). Пусто —
 # кнопки сайта нет, остаётся «купить».

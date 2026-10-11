@@ -450,6 +450,12 @@ html, body {
   cursor: pointer;
 }
 .send__clip.is-on { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.send__clip:disabled { opacity: 0.45; cursor: default; }
+/* Семь кнопок (с 🤖 Евгения, 11.10.2026) на самом узком телефоне: поменьше. */
+@media (max-width: 360px) {
+  .send__tools { gap: 6px; }
+  .send__clip, .send__go { width: 36px; height: 36px; font-size: 16px; }
+}
 
 /* Файл с устройства, выбранный и готовый уйти. */
 .attach {

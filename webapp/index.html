@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Пульт · Марафон ФИНИШ</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="stylesheet" href="/static/app.css?v=15">
+<link rel="stylesheet" href="/static/app.css?v=16">
 </head>
 <body>
 
@@ -77,6 +77,10 @@
       <textarea id="text" class="send__text" rows="3" placeholder="Сообщение от имени бота"></textarea>
     </div>
     <div class="send__tools">
+      <!-- Евгений (ИИ): подключить к диалогу — он пишет сам и дожимает до спортзала
+           (AleX 11.10.2026: «кнопочка (Ai) рядом с тем, что можно прикрепить»). -->
+      <button id="ai" class="send__clip" type="button" aria-label="Евгений (ИИ) ведёт диалог"
+              title="Евгений (ИИ): подключить к диалогу">🤖</button>
       <!-- Файл с устройства: картинка, видео, аудио — что угодно. -->
       <input id="file" type="file" hidden>
       <button id="pin" class="send__clip" type="button" aria-label="Файл с устройства">📁</button>
@@ -100,6 +104,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="/static/app.js?v=17"></script>
+<script src="/static/app.js?v=18"></script>
 </body>
 </html>

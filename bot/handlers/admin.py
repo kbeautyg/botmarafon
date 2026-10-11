@@ -21,8 +21,10 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
-from .. import (backup, broadcast, chatlog, closing, config, contact, daily, db, delivery,
-                funnel, insights, keyboards, leads, live, scheduler, stats, texts)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from .. import (ai, backup, broadcast, chatlog, closing, config, contact, daily, db, delivery,
+                evgeny, funnel, insights, keyboards, leads, live, scheduler, stats, texts)
 
 log = logging.getLogger(__name__)
 router = Router(name='admin')
@@ -50,7 +52,8 @@ STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'заявки', 'zayavki', 'купили',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
                   'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream',
-                  'баннер', 'banner')
+                  'баннер', 'banner',
+                  'евгений', 'evgeny', 'евгений_факты', 'evgeny_facts')
 
 
 def _command(message: Message) -> str:
@@ -1206,3 +1209,83 @@ async def on_live_speed(message: Message):
     db.set_speed(message.from_user.id, 1.0)
     db.reset_funnel(message.from_user.id)
     await message.answer(u'Боевые сроки вернул, свою очередь очистил.')
+
+
+# ------------------------------------------------------------- Евгений (ИИ)
+
+def _evgeny_keys(found: int, active: int) -> InlineKeyboardMarkup | None:
+    rows = []
+    if found:
+        rows.append([InlineKeyboardButton(text=texts.EVGENY_GO.format(n=found), callback_data='ev:go')])
+    if active:
+        rows.append([InlineKeyboardButton(text=texts.EVGENY_STOP_ALL, callback_data='ev:stop')])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def _evgeny_status() -> tuple[str, InlineKeyboardMarkup | None]:
+    counts = db.evgeny_counts()
+    found = len(evgeny.candidates())
+    if not ai.ready():
+        state = u'⚠️ нет ключа. ' + texts.EVGENY_NO_KEY
+    else:
+        at, error = ai.health()
+        state = u'есть ключ, модель %s' % html.escape(config.AI_MODEL)
+        if error:
+            state += u' · ⚠️ последняя ошибка: %s' % html.escape(error)
+    text = texts.EVGENY_STATUS.format(
+        ai=state, active=counts['active'], pending=counts['pending'], ever=counts['ever'],
+        found=found, per_min=evgeny.OPEN_PER_MINUTE, nudges=evgeny.MAX_NUDGES,
+        sample=html.escape(evgeny.opener(u'Анна')))
+    return text, _evgeny_keys(found if ai.ready() else 0, counts['active'])
+
+
+@router.message(Command('евгений', 'evgeny'))
+async def on_evgeny(message: Message):
+    u"""Евгений — ИИ-дожим до спортзала (AleX 11.10.2026): сколько ведёт
+    диалогов и кнопка массового дожима тех, кто прошёл марафон и ничего не
+    сделал. Запуск — вторым касанием: сотням людей уйдёт сообщение."""
+    if not config.is_team(message.from_user.id):
+        return
+    text, keys = _evgeny_status()
+    await message.answer(text, reply_markup=keys)
+
+
+@router.callback_query(F.data.in_({'ev:go', 'ev:stop'}))
+async def on_evgeny_button(call: CallbackQuery):
+    if not config.is_team(call.from_user.id):
+        await call.answer()
+        return
+    if call.data == 'ev:go':
+        if not ai.ready():
+            await call.answer(u'Нет ключа ИИ', show_alert=True)
+            return
+        n = evgeny.push(call.from_user.id)
+        note = (texts.EVGENY_STARTED.format(n=n, per_min=evgeny.OPEN_PER_MINUTE,
+                                            minutes=max(1, -(-n // evgeny.OPEN_PER_MINUTE)))
+                if n else texts.EVGENY_NOBODY)
+    else:
+        n = evgeny.stop_all(u'выключили всех: %s' % (call.from_user.full_name or call.from_user.id))
+        note = texts.EVGENY_STOPPED_ALL.format(n=n)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception as err:                       # сообщение могли удалить
+        log.debug(u'кнопки Евгения не убрали: %s', err)
+    await call.answer()
+    await call.message.answer(note)
+
+
+@router.message(Command('евгений_факты', 'evgeny_facts'))
+async def on_evgeny_facts(message: Message, command: CommandObject | None = None):
+    u"""Что Евгений знает о спортзале. С текстом — заменить, «сброс» — вернуть стандартное."""
+    if not config.is_team(message.from_user.id):
+        return
+    new = ((command.args if command else None) or u'').strip()
+    if new.lower() in (u'сброс', u'reset'):
+        evgeny.set_facts('')
+        await message.answer(texts.EVGENY_FACTS_RESET)
+        return
+    if new:
+        evgeny.set_facts(new)
+        await message.answer(texts.EVGENY_FACTS_SAVED)
+        return
+    await message.answer(texts.EVGENY_FACTS_NOW.format(facts=html.escape(evgeny.facts())))

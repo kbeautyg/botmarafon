@@ -202,6 +202,22 @@ CREATE TABLE IF NOT EXISTS day_messages (
   closed_at REAL,                  -- когда запись в сообщении закрыли
   PRIMARY KEY (user_id, tg_id)
 );
+
+-- Евгений — ИИ-помощник, который ведёт диалог и дожимает до спортзала
+-- (AleX 11.10.2026, bot/evgeny.py). Строка есть — Евгений человеку уже
+-- писал или его включали: второй раз массовый дожим его не берёт.
+CREATE TABLE IF NOT EXISTS evgeny (
+  user_id    INTEGER PRIMARY KEY,
+  active     INTEGER NOT NULL DEFAULT 1,  -- ведёт диалог сейчас
+  since      REAL NOT NULL,               -- когда включили
+  by_id      INTEGER,                     -- кто включил; 0 — массовый дожим
+  pending    INTEGER NOT NULL DEFAULT 0,  -- первое сообщение ещё не ушло (очередь)
+  last_out   REAL,                        -- когда Евгений писал последний раз
+  last_in    REAL,                        -- когда человек писал последний раз
+  nudges     INTEGER NOT NULL DEFAULT 0,  -- сколько напоминаний молчащему
+  stopped_at REAL,
+  reason     TEXT                         -- почему выключился
+);
 '''
 
 # Человек сейчас в чёрном списке — условие для запросов по users (алиас u).
@@ -1483,3 +1499,95 @@ def stats() -> dict[str, int]:
         'presses': one('SELECT COUNT(*) FROM purchases'),
         'closed': one('SELECT COUNT(*) FROM users WHERE closed_at IS NOT NULL'),
     }
+
+
+# ------------------------------------------------------------- Евгений (ИИ)
+
+def evgeny_get(user_id: int) -> dict | None:
+    row = _conn.execute('SELECT * FROM evgeny WHERE user_id=?', (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def evgeny_on(user_id: int, by_id: int, pending: bool = False) -> None:
+    u"""Включить Евгения человеку. pending — первое сообщение ещё отправить."""
+    _run('INSERT INTO evgeny (user_id, active, since, by_id, pending, nudges) '
+         'VALUES (?, 1, ?, ?, ?, 0) '
+         'ON CONFLICT(user_id) DO UPDATE SET active=1, since=excluded.since, '
+         'by_id=excluded.by_id, pending=excluded.pending, nudges=0, '
+         'stopped_at=NULL, reason=NULL',
+         (user_id, time.time(), by_id, 1 if pending else 0))
+
+
+def evgeny_off(user_id: int, reason: str) -> bool:
+    u"""Выключить. False — и так не вёл диалог."""
+    cur = _run('UPDATE evgeny SET active=0, pending=0, stopped_at=?, reason=? '
+               'WHERE user_id=? AND active=1', (time.time(), reason[:200], user_id))
+    return cur.rowcount > 0
+
+
+def evgeny_touch(user_id: int, side: str) -> None:
+    u"""Отметить, кто написал последним: out — Евгений, in — человек."""
+    if side == 'out':
+        _run('UPDATE evgeny SET last_out=?, pending=0 WHERE user_id=?', (time.time(), user_id))
+    else:
+        _run('UPDATE evgeny SET last_in=? WHERE user_id=?', (time.time(), user_id))
+
+
+def evgeny_active_ids() -> set[int]:
+    rows = _conn.execute('SELECT user_id FROM evgeny WHERE active=1').fetchall()
+    return {r['user_id'] for r in rows}
+
+
+def evgeny_pending(limit: int) -> list[int]:
+    u"""Массовый дожим: кому первое сообщение ещё не ушло."""
+    rows = _conn.execute('SELECT user_id FROM evgeny WHERE active=1 AND pending=1 '
+                         'ORDER BY since, user_id LIMIT ?', (limit,)).fetchall()
+    return [r['user_id'] for r in rows]
+
+
+def evgeny_silent(before: float, max_nudges: int, limit: int) -> list[dict]:
+    u"""Кому пора напомнить: последним писал Евгений, и было это до before."""
+    rows = _conn.execute(
+        'SELECT * FROM evgeny WHERE active=1 AND pending=0 AND last_out IS NOT NULL '
+        'AND last_out <= ? AND (last_in IS NULL OR last_in < last_out) AND nudges < ? '
+        'ORDER BY last_out LIMIT ?', (before, max_nudges, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def evgeny_nudged(user_id: int) -> None:
+    _run('UPDATE evgeny SET nudges=nudges+1, last_out=? WHERE user_id=?', (time.time(), user_id))
+
+
+def evgeny_counts() -> dict[str, int]:
+    one = lambda sql: _conn.execute(sql).fetchone()[0]
+    return {'active': one('SELECT COUNT(*) FROM evgeny WHERE active=1'),
+            'pending': one('SELECT COUNT(*) FROM evgeny WHERE active=1 AND pending=1'),
+            'ever': one('SELECT COUNT(*) FROM evgeny')}
+
+
+def evgeny_off_all(reason: str) -> int:
+    cur = _run('UPDATE evgeny SET active=0, pending=0, stopped_at=?, reason=? WHERE active=1',
+               (time.time(), reason[:200]))
+    return cur.rowcount
+
+
+def evgeny_candidates(day4_before: float) -> list[dict]:
+    u"""Массовый дожим: прошли марафон и после него ничего не сделали.
+
+    Пользователь 11.10.2026: «Евгений должен дожимать тех, кто ничего после
+    марафона не сделал». Прошёл — дошёл до четвёртого дня и с тех пор прошло
+    72 часа (записи закрыты, баннер с кнопкой был). Ничего не сделал — ни
+    разу не нажал «купить» (и «ДА» на акцию — это тоже нажатие), бот не
+    закрыт, не в чёрном списке, в очереди ничего не ждёт. Кому Евгений уже
+    писал — второй раз не берём. Команду отсеивает вызывающий (config).
+    """
+    rows = _conn.execute(
+        'SELECT u.* FROM users u '
+        'WHERE (u.closed_at IS NOT NULL OR EXISTS (SELECT 1 FROM events e '
+        "       WHERE e.user_id = u.user_id AND e.kind = 'day' AND e.ref = '4' AND e.at <= ?)) "
+        'AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' '
+        'AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = u.user_id) '
+        'AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.user_id = u.user_id) '
+        'AND NOT EXISTS (SELECT 1 FROM evgeny g WHERE g.user_id = u.user_id) '
+        'ORDER BY u.user_id', (day4_before,)).fetchall()
+    return [dict(r) for r in rows]

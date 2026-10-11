@@ -8,8 +8,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from . import (backup, broadcast, closing, config, daily, db, delivery, handlers, history,
-               leads, live, nudge, scheduler, stats, texts, web)
+from . import (backup, broadcast, closing, config, daily, db, delivery, evgeny, handlers,
+               history, leads, live, nudge, scheduler, stats, texts, web)
 
 log = logging.getLogger('marathon')
 
@@ -92,6 +92,7 @@ async def run():
     nudger = asyncio.create_task(nudge.loop(bot))        # дожим через 5 часов
     reporter_daily = asyncio.create_task(daily.loop(bot))  # отчёт за сутки ночью
     liver = asyncio.create_task(live.loop(bot))       # напоминания об эфире
+    evgenier = asyncio.create_task(evgeny.loop(bot))  # Евгений: массовый дожим и напоминания
     # Закрытие записей включено выкладкой (заказчик 01.10.2026: «Включай сам
     # всё»), один раз — админам число тех, кому баннер уходит сразу.
     try:
@@ -125,6 +126,7 @@ async def run():
         worker.cancel()
         reporter.cancel()
         nudger.cancel()
+        evgenier.cancel()
         reporter_daily.cancel()
         liver.cancel()
         closer.cancel()

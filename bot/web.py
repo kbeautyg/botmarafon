@@ -25,7 +25,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import blacklist, broadcast, chatlog, config, db, delivery, keyboards, record
+from . import blacklist, broadcast, chatlog, config, db, delivery, evgeny, keyboards, record
 
 log = logging.getLogger(__name__)
 
@@ -147,9 +147,12 @@ async def _body(request) -> dict:
 
 # --------------------------------------------------------------- данные
 
-def _person(row: dict) -> dict:
-    u"""Человек для списка: только то, что показывает пульт."""
+def _person(row: dict, ai_ids: set | None = None) -> dict:
+    u"""Человек для списка: только то, что показывает пульт. ai — диалог
+    ведёт Евгений (bot/evgeny.py); ai_ids — включённые разом, для списка."""
+    ai_on = (row['user_id'] in ai_ids) if ai_ids is not None else evgeny.is_on(row['user_id'])
     return {
+        'ai': ai_on,
         'id': row['user_id'],
         'name': row.get('first_name') or u'Без имени',
         'username': row.get('username') or '',
@@ -191,8 +194,9 @@ async def api_people(request, user):
         everyone = bool(rows)
         only_chats = not everyone
     total = db.people_count(query, only_chats=only_chats, scope=scope)
+    ai_ids = db.evgeny_active_ids()
     return web.json_response({
-        'people': [_person(r) for r in rows],
+        'people': [_person(r, ai_ids) for r in rows],
         'everyone': everyone,
         'total': total,
         # Сколько ещё осталось за экраном: пульт рисует «показать ещё»
@@ -363,7 +367,9 @@ def _messages(user_id: int) -> list[dict]:
               'can_edit': bool(m['side'] == 'out' and m['tg_id'] and m['kind'] == 'text'
                                and not m.get('mass')),
               'can_drop': bool(m['side'] == 'out' and m['tg_id']),
-              'mass': bool(m.get('mass'))}
+              'mass': bool(m.get('mass')),
+              # написал Евгений (ИИ), а не человек из команды
+              'ai': bool(m['side'] == 'out' and m.get('author') == evgeny.EVGENY)}
              for m in db.chat_history(user_id)]
     lines += [{'id': 0, 'note': True, 'text': _note(step), 'at': step['at'],
                'kind': 'text', 'mine': False} for step in _steps(user_id)]
@@ -651,7 +657,10 @@ async def api_send(request, user):
     db.save_message(user_id, 'out', kind, text or media, media or None,
                     author=int(user['id']), tg_id=getattr(sent, 'message_id', None))
     log.info(u'пульт: %s написал(а) человеку %s', user['id'], user_id)
-    return web.json_response({'messages': _messages(user_id)})
+    # Написали сами — Евгений в этом диалоге замолкает (двое отвечающих путают человека).
+    stopped = evgeny.team_wrote(user_id, user.get('first_name') or u'')
+    return web.json_response({'messages': _messages(user_id), 'ai': evgeny.is_on(user_id),
+                              'ai_stopped': stopped})
 
 
 # Каким вызовом слать вложение по его виду. Всё уходит по file_id: сам
@@ -979,7 +988,9 @@ async def _file_out(request, user, fields: dict, blob: bytes, name: str, caption
     db.save_message(user_id, 'out', kind, caption or None, _file_id(sent, kind) or None,
                     author, getattr(sent, 'message_id', None))
     log.info(u'пульт: %s отправил(а) %s человеку %s', author, kind, user_id)
-    return web.json_response({'messages': _messages(user_id), 'kind': kind})
+    stopped = evgeny.team_wrote(user_id, user.get('first_name') or u'')
+    return web.json_response({'messages': _messages(user_id), 'kind': kind,
+                              'ai': evgeny.is_on(user_id), 'ai_stopped': stopped})
 
 
 def _who_safe(fields: dict):
@@ -1059,6 +1070,23 @@ async def _send_record(bot, user_id: int, kind: str, blob: bytes, name: str,
     finally:
         record.forget(*ready[1])
     return web.json_response({'messages': _messages(user_id), 'kind': saved})
+
+
+@route
+async def api_ai(request, user):
+    u"""Кнопка 🤖 в пульте (AleX 11.10.2026): подключить Евгения к диалогу —
+    он сразу пишет и дальше ведёт человека к спортзалу — или выключить."""
+    body = await _body(request)
+    user_id = int(body.get('id') or 0)
+    if not db.get_user(user_id):
+        return web.json_response({'error': u'человека нет в базе'}, status=404)
+    if body.get('on'):
+        wrong = evgeny.enable(request.app['bot'], user_id, int(user['id']))
+        if wrong:
+            return web.json_response({'error': u'Евгения не включить: ' + wrong}, status=409)
+    else:
+        evgeny.disable(user_id, u'выключил(а) в пульте %s' % (user.get('first_name') or ''))
+    return web.json_response({'ai': evgeny.is_on(user_id)})
 
 
 @route
@@ -1181,6 +1209,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/edit', api_edit)
     app.router.add_post('/api/drop', api_drop)
     app.router.add_post('/api/ban', api_ban)
+    app.router.add_post('/api/ai', api_ai)
     app.router.add_post('/api/file', api_file)
     app.router.add_get('/static/{name}', _static)
     return app

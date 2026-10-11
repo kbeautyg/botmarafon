@@ -176,6 +176,13 @@
       gone.textContent = 'ушёл';
       side.appendChild(gone);
     }
+    if (person.ai) {
+      // диалог ведёт Евгений (ИИ)
+      var robot = document.createElement('span');
+      robot.className = 'badge badge--quiet';
+      robot.textContent = '🤖';
+      side.appendChild(robot);
+    }
 
     row.appendChild(ava);
     row.appendChild(main);
@@ -439,7 +446,8 @@
     row.textContent = body;
     var at = document.createElement('span');
     at.className = 'msg__at';
-    at.textContent = (message.mass ? '📢 рассылка · ' : '') + when(message.at);
+    at.textContent = (message.ai ? '🤖 Евгений · ' : '') + (message.mass ? '📢 рассылка · ' : '')
+      + when(message.at);
     row.appendChild(at);
     if (message.file) { row.appendChild(fileTools(message)); }
 
@@ -657,7 +665,11 @@
     if (person.blocked) { bits.push('закрыл бота'); }
     else if (person.poll) { bits.push('ждём ответ: ' + person.poll.replace('day', 'день ')); }
     if (person.source) { bits.push(SOURCES[person.source] || person.source); }
+    if (person.ai) { bits.push('🤖 ведёт Евгений'); }
     $('chat-sub').textContent = bits.join(' · ');
+    $('ai').hidden = false;
+    $('ai').classList.toggle('is-on', !!person.ai);
+    $('ai').disabled = !!person.blocked;
     $('ban').classList.toggle('is-on', !!person.banned);
     $('ban').textContent = person.banned ? '↩️' : '🚫';
 
@@ -691,6 +703,7 @@
     $('card').hidden = true;
     $('info').hidden = true;
     $('ban').hidden = true;
+    $('ai').hidden = true;
     $('chat-name').textContent = state.scope ? state.scopeTitle
       : 'Выбрано: ' + state.to.length;
     $('chat-sub').textContent = state.scope
@@ -720,6 +733,7 @@
     dropKeys();
     $('info').hidden = false;
     $('ban').hidden = false;
+    $('ai').hidden = false;
     state.id = id;
     listScreen.classList.add('is-behind');
     chatScreen.classList.add('is-open');
@@ -815,7 +829,9 @@
         stopEdit();
         grow(field);
         if (many) { doneMany(data); } else {
+          if (state.person && data.ai !== undefined) { state.person.ai = !!data.ai; }
           drawChat({ person: state.person, messages: data.messages || [] });
+          if (data.ai_stopped) { toast('Отправлено. Евгений в этом диалоге выключен — отвечаете вы'); }
         }
         if (tg && tg.HapticFeedback) { tg.HapticFeedback.notificationOccurred('success'); }
       })
@@ -842,6 +858,38 @@
     toast(parts.join(' · '));
     closeChat();
     setPicking(false);
+  }
+
+  /* ЕВГЕНИЙ (ИИ) — AleX 11.10.2026: «кнопочка (Ai): активирует Евгения и
+     подключает к диалогу, чтобы он делал дожимы». Подключили — Евгений сразу
+     пишет (или отвечает, если человек ждёт ответа) и ведёт к спортзалу.
+     Написали человеку сами — он выключается: двое отвечающих путают. */
+  function toggleAi() {
+    if (!state.id || !state.person) { return; }
+    var on = !state.person.ai;
+    var ask = on
+      ? 'Подключить Евгения (ИИ)? Он сразу напишет человеку и дальше будет вести диалог '
+        + 'к «Энергетическому спортзалу». Напишете человеку сами — Евгений выключится.'
+      : 'Выключить Евгения? Дальше отвечаете сами.';
+    var id = state.id;
+    var run = function () {
+      api('ai', { id: id, on: on })
+        .then(function (data) {
+          if (state.id !== id || !state.person) { return; }
+          state.person.ai = !!data.ai;
+          $('ai').classList.toggle('is-on', !!data.ai);
+          toast(data.ai ? 'Евгений подключён — напишет в течение минуты' : 'Евгений выключен');
+          if (data.ai) {
+            // ответ Евгения появится в переписке через несколько секунд
+            setTimeout(function () {
+              if (state.id === id) { api('chat', { id: id }).then(drawChat).catch(function () {}); }
+            }, 20000);
+          }
+        })
+        .catch(function (err) { toast(err.message); });
+    };
+    if (tg && tg.showConfirm) { tg.showConfirm(ask, function (ok) { if (ok) { run(); } }); }
+    else if (window.confirm(ask)) { run(); }
   }
 
   function toggleBan() {
@@ -1048,6 +1096,7 @@
       .then(function () { state.busy = false; $('go').disabled = false; });
   }
 
+  $('ai').addEventListener('click', toggleAi);
   $('pin').addEventListener('click', function () { $('file').click(); });
   $('file').addEventListener('change', function () { chooseFile(this.files[0]); });
   $('attach-drop').addEventListener('click', dropFile);
