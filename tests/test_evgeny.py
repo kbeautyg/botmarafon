@@ -322,3 +322,34 @@ async def test_кнопка_в_пульте_включает_и_выключае
         assert r.status == 409 and u'ключа' in (await r.json())['error']
     finally:
         await client.close()
+
+
+# ------------------------------------------------------------------ партнёр: Soft Finish
+
+async def test_партнёр_узнаёт_кто_запускал_марафон(monkeypatch):
+    from aiohttp.test_utils import TestClient, TestServer
+    from bot import web
+    web._hits.clear()
+    web._window_from[0] = 0.0
+    _человек(1)                                   # запускал
+    db.remember_user(2, None, u'Борис')           # нажал старт, но не запускал (нет launched_at)
+    client = TestClient(TestServer(web.build(FakeBot())))
+    await client.start_server()
+    try:
+        monkeypatch.setattr(config, 'PARTNER_TOKEN', '')
+        r = await client.post('/api/partner/launched', json={'ids': [1]})
+        assert r.status == 403, 'без секрета на сервере адрес закрыт'
+
+        monkeypatch.setattr(config, 'PARTNER_TOKEN', 's3cret')
+        r = await client.post('/api/partner/launched', json={'ids': [1]},
+                              headers={'Authorization': 'Bearer wrong'})
+        assert r.status == 403
+        хорошо = {'Authorization': 'Bearer s3cret'}
+        r = await client.post('/api/partner/launched', json={'ids': [1, 2, 3, '4']}, headers=хорошо)
+        assert (await r.json()) == {'launched': [1]}
+        r = await client.post('/api/partner/launched', json={'ids': 'всё'}, headers=хорошо)
+        assert r.status == 400
+        r = await client.post('/api/partner/launched', json={'ids': list(range(1, 1002))}, headers=хорошо)
+        assert r.status == 400
+    finally:
+        await client.close()

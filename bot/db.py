@@ -1591,3 +1591,15 @@ def evgeny_candidates(day4_before: float) -> list[dict]:
         'AND NOT EXISTS (SELECT 1 FROM evgeny g WHERE g.user_id = u.user_id) '
         'ORDER BY u.user_id', (day4_before,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def launched_among(ids: list[int]) -> set[int]:
+    u"""Кто из этих Telegram id уже запускал марафон (для Soft Finish)."""
+    found = set()
+    for start in range(0, len(ids), 500):            # предел переменных SQLite
+        part = ids[start:start + 500]
+        rows = _conn.execute(
+            'SELECT user_id FROM users WHERE launched_at IS NOT NULL AND user_id IN (%s)'
+            % ','.join('?' * len(part)), tuple(part)).fetchall()
+        found.update(r['user_id'] for r in rows)
+    return found

@@ -154,6 +154,12 @@ AI_BASE_URL = (os.getenv('AI_BASE_URL') or os.getenv('OPENAI_BASE_URL')
                or 'https://apinet.cloud/v1').strip().rstrip('/')
 AI_MODEL = (os.getenv('AI_MODEL') or os.getenv('OPENAI_MODEL') or 'glm-5.2').strip()
 
+# Партнёрский доступ (11.10.2026): программа Soft Finish — регистрационный бот
+# AleX — спрашивает, кто из её людей уже запустил марафон, чтобы Евгений там
+# дожимал только не запустивших (bot/web.py, /api/partner/launched). Общий
+# секрет — переменная Railway PARTNER_TOKEN; пусто — доступа нет.
+PARTNER_TOKEN = os.getenv('PARTNER_TOKEN', '').strip()
+
 # Сайт Энергетического спортзала — кнопка под баннером после марафона
 # (AleX 29.09.2026: «кнопкой купить и ссылкой на сайт энергозал»). Пусто —
 # кнопки сайта нет, остаётся «купить».

@@ -1116,6 +1116,38 @@ class _Caller:
         self.username = who.get('username') or None
 
 
+# --------------------------------------------------------------- партнёр
+
+# Сколько id за один запрос: регистрационный бот спрашивает пачками.
+PARTNER_MAX_IDS = 1000
+
+
+async def api_partner_launched(request):
+    u"""Кто из присланных Telegram id уже запускал марафон (11.10.2026).
+
+    Спрашивает Soft Finish — программа регистрационного бота AleX: Евгений там
+    дожимает «пройти марафон» только тех, кто его ещё не запускал. Не пульт:
+    подписи Telegram нет, доступ — по общему секрету PARTNER_TOKEN в заголовке
+    Authorization: Bearer. Наружу — только номера из присланных, и только
+    «запускал»: имён и переписки здесь нет.
+    """
+    token = config.PARTNER_TOKEN
+    given = (request.headers.get('Authorization') or '').strip()
+    if not token or not hmac.compare_digest(given.encode(), ('Bearer ' + token).encode()):
+        return web.json_response({'error': u'нет доступа'}, status=403)
+    body = await _body(request)
+    raw = body.get('ids')
+    if not isinstance(raw, list) or len(raw) > PARTNER_MAX_IDS:
+        return web.json_response({'error': u'нужен список ids, не больше %d' % PARTNER_MAX_IDS},
+                                 status=400)
+    ids = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, (int, str)) or not str(item).isdigit():
+            return web.json_response({'error': u'ids — номера Telegram'}, status=400)
+        ids.append(int(item))
+    return web.json_response({'launched': sorted(db.launched_among(ids))})
+
+
 # --------------------------------------------------------------- сервер
 
 async def _index(request):
@@ -1210,6 +1242,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/drop', api_drop)
     app.router.add_post('/api/ban', api_ban)
     app.router.add_post('/api/ai', api_ai)
+    app.router.add_post('/api/partner/launched', api_partner_launched)
     app.router.add_post('/api/file', api_file)
     app.router.add_get('/static/{name}', _static)
     return app
