@@ -262,6 +262,26 @@ async def test_включили_из_пульта_евгений_сразу_пи
     assert фальшивый.запросы[0][-1]['content'] == texts.EVGENY_OPEN_TASK
 
 
+async def test_последняя_реплика_в_запросе_всегда_человека(monkeypatch):
+    u"""Gemini отвергает запрос, где последней репликой идёт бот (12.10.2026,
+    Динар: последней была рассылка) — и при включении, и в напоминании."""
+    _человек(1)
+    db.save_message(1, 'out', 'text', u'Друзья, в 9:00 эфир — подключайтесь!')
+    bot = FakeBot()
+    фальшивый = ИИ(u'Анна, здравствуйте! Как вам марафон?', u'Анна, как вы? Получилось подумать?')
+    monkeypatch.setattr(ai, 'complete', фальшивый)
+    monkeypatch.setattr(evgeny, 'daytime', lambda now=None: True)
+    evgeny.enable(bot, 1, SHARP)
+    await asyncio.sleep(0.2)
+    db._run('UPDATE evgeny SET last_out=? WHERE user_id=1', (time.time() - 2 * ДЕНЬ,))
+    await evgeny.tick(bot)
+    assert len(фальшивый.запросы) == 2, 'и первое сообщение, и напоминание спросили ИИ'
+    for запрос in фальшивый.запросы:
+        реплики = [m for m in запрос if m['role'] != 'system']
+        assert реплики[-1]['role'] == 'user', реплики
+        assert запрос[-1]['role'] == 'system', 'задание — в конце, как и было'
+
+
 async def test_включили_когда_человек_ждёт_ответа_евгений_отвечает(monkeypatch):
     _человек(1)
     db.save_message(1, 'in', 'text', u'Сколько стоит спортзал?')

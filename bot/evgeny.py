@@ -172,6 +172,11 @@ def _request(user_id: int, task: str) -> list[dict]:
     messages = [{'role': 'system', 'content': system}] + _history(user_id)
     if len(messages) == 1:              # переписки нет: шлюзу нужна хоть одна реплика
         messages.append({'role': 'user', 'content': u'(переписки ещё не было)'})
+    elif messages[-1]['role'] != 'user':
+        # Gemini не берёт запрос, где последняя реплика — бота: «Requests ending
+        # with a model turn are not supported» (12.10.2026, у Динара последней
+        # была рассылка). Так и в напоминании молчащему — последним писал Евгений.
+        messages.append({'role': 'user', 'content': u'(человек пока ничего не ответил)'})
     messages.append({'role': 'system', 'content': task})
     return messages
 
