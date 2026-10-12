@@ -149,7 +149,14 @@ def _card(user_id: int) -> str:
     if said:
         lines.append(u'Ответы в марафоне на вопрос «получилось ли»: ' + u', '.join(said))
     if db.passed_marathon(user_id):
-        lines.append(u'Марафон прошёл до 4-го дня.')
+        lines.append(u'Марафон пройден до конца (дошёл до 4-го дня).')
+    else:
+        # Евгения включают из пульта кому угодно — и тем, кто ещё на 1–3 дне
+        # (12.10.2026: «а вдруг человеку ещё не всё пришло»)
+        days = sorted(db.days_of(user_id))
+        lines.append(u'Марафон ещё не пройден до конца: ' + (
+            u'получил записи дней %s.' % u', '.join(str(d) for d in days) if days
+            else u'записи дней ещё не приходили.'))
     return u'\n'.join(lines)
 
 

@@ -301,6 +301,19 @@ async def test_команде_и_закрывшим_бота_евгения_не
     assert u'закрыл бота' in evgeny.enable(FakeBot(), 1, SHARP)
 
 
+def test_евгений_знает_пройден_ли_марафон():
+    u"""Из пульта Евгения включают кому угодно — и тем, кто ещё на 1–3 дне: его
+    не поздравляют с окончанием (12.10.2026: «а вдруг человеку ещё не всё пришло»)."""
+    _человек(1)
+    assert u'Марафон пройден до конца' in evgeny._card(1)
+    _человек(2, прошёл=False)
+    db._run("INSERT INTO events (user_id, kind, ref, at) VALUES (2, 'day', '1', ?)", (time.time(),))
+    db._run("INSERT INTO events (user_id, kind, ref, at) VALUES (2, 'day', '2', ?)", (time.time(),))
+    assert u'ещё не пройден до конца: получил записи дней 1, 2' in evgeny._card(2)
+    _человек(3, прошёл=False)
+    assert u'записи дней ещё не приходили' in evgeny._card(3)
+
+
 def test_факты_правятся_и_возвращаются():
     assert evgeny.facts() == texts.EVGENY_FACTS
     evgeny.set_facts(u'Акция: месяц в подарок до 20.10')
