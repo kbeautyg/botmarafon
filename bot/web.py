@@ -25,7 +25,7 @@ import urllib.parse
 
 from aiohttp import web
 
-from . import blacklist, broadcast, chatlog, config, db, delivery, evgeny, keyboards, record
+from . import blacklist, broadcast, chatlog, config, db, delivery, evgeny, keyboards, owner, record
 
 log = logging.getLogger(__name__)
 
@@ -1245,6 +1245,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/partner/launched', api_partner_launched)
     app.router.add_post('/api/file', api_file)
     app.router.add_get('/static/{name}', _static)
+    owner.register(app)                    # вторая админка: панель владельца /owner
     return app
 
 

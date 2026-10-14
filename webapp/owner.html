@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Панель владельца</title>
+<style>
+  :root {
+    --bg: #0e1116; --card: #161b22; --line: #273040; --ink: #e8edf4;
+    --soft: #9aa7b8; --accent: #f0a93b; --accent-ink: #1a1205;
+    --danger: #e5484d; --ok: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--soft); font-size: 13px; margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  label { display: block; font-size: 13px; color: var(--soft); margin-bottom: 6px; }
+  input[type=password], input[type=text] {
+    width: 100%; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--line);
+    background: #0b0e13; color: var(--ink); font-size: 16px;
+  }
+  input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer; border: 0; border-radius: 9px;
+    padding: 12px 18px; background: var(--accent); color: var(--accent-ink);
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button.danger { background: var(--danger); color: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+  .stat { background: #0b0e13; border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .stat b { display: block; font-size: 26px; }
+  .stat span { color: var(--soft); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 7px 0; border-bottom: 1px solid var(--line); }
+  td.num { text-align: right; color: var(--soft); font-variant-numeric: tabular-nums; }
+  .msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .msg.bad { color: var(--danger); }
+  .msg.ok { color: var(--ok); }
+  .hidden { display: none; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+  h2 { font-size: 15px; margin: 0 0 12px; color: var(--soft); text-transform: uppercase; letter-spacing: .06em; }
+  .hint { color: var(--soft); font-size: 13px; margin: 0 0 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- вход -->
+  <section id="gate">
+    <h1>Панель владельца</h1>
+    <p class="sub">Марафон · доступ только для создателя проекта</p>
+    <div class="card" style="max-width:360px">
+      <label for="pw">Пароль</label>
+      <input id="pw" type="password" autocomplete="current-password" autofocus>
+      <div class="row" style="margin-top:14px">
+        <button id="enter">Войти</button>
+      </div>
+      <div class="msg" id="gateMsg" role="status"></div>
+    </div>
+  </section>
+
+  <!-- панель -->
+  <section id="panel" class="hidden">
+    <div class="head">
+      <div>
+        <h1>Панель владельца</h1>
+        <p class="sub">Марафон · <span id="url"></span></p>
+      </div>
+      <button class="ghost" id="logout">Выйти</button>
+    </div>
+
+    <div class="card">
+      <h2>Сводка</h2>
+      <div class="grid" id="stats"></div>
+    </div>
+
+    <div class="card">
+      <h2>Данные по таблицам</h2>
+      <table><tbody id="tables"></tbody></table>
+      <p class="hint" id="sizes" style="margin-top:12px"></p>
+    </div>
+
+    <div class="card">
+      <h2>Выгрузка</h2>
+      <p class="hint">Данные — база и медиа одним архивом. Код — исходники проекта (без паролей и базы), чтобы перенести на другой хостинг.</p>
+      <div class="row">
+        <button id="dlData">Выгрузить данные</button>
+        <button class="ghost" id="dlCode">Выгрузить код</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="color:var(--danger)">Опасная зона</h2>
+      <p class="hint">Полная очистка стирает всех участников, очередь, ответы, переписку и все медиа марафона (кружки, видео дней, отзывы). Отменить нельзя — сначала выгрузите данные. Для подтверждения введите слово <b>УДАЛИТЬ</b>.</p>
+      <label for="confirm">Подтверждение</label>
+      <input id="confirm" type="text" placeholder="УДАЛИТЬ" autocomplete="off" style="max-width:260px">
+      <div class="row" style="margin-top:14px">
+        <button class="danger" id="wipe" disabled>Стереть все данные</button>
+      </div>
+      <div class="msg" id="panelMsg" role="status"></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var api = function (path, opts) {
+    return fetch('/owner/api/' + path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+  };
+  var jpost = function (path, body) {
+    return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify(body || {}) });
+  };
+
+  function say(el, text, kind) { el.className = 'msg' + (kind ? ' ' + kind : ''); el.textContent = text || ''; }
+  function fmtBytes(n) {
+    if (!n) return '0 Б';
+    var u = ['Б', 'КБ', 'МБ', 'ГБ'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : n) + ' ' + u[i];
+  }
+  var TITLES = {
+    users: 'участники', launched: 'запустили марафон', jobs: 'в очереди',
+    purchases: 'заявок на оплату', presses: 'нажатий «оплатить»'
+  };
+
+  function showPanel(data) {
+    $('gate').classList.add('hidden');
+    $('panel').classList.remove('hidden');
+    $('url').textContent = data.webapp_url || location.host;
+    var s = data.stats || {};
+    $('stats').innerHTML = Object.keys(TITLES).map(function (k) {
+      return '<div class="stat"><b>' + (s[k] != null ? s[k] : '—') + '</b><span>' + TITLES[k] + '</span></div>';
+    }).join('');
+    var t = data.tables || {};
+    $('tables').innerHTML = Object.keys(t).sort().map(function (name) {
+      return '<tr><td>' + name + '</td><td class="num">' + t[name] + '</td></tr>';
+    }).join('');
+    $('sizes').textContent = 'База: ' + fmtBytes(data.db_bytes) + ' · медиа: ' + fmtBytes(data.media_bytes);
+  }
+
+  function load() {
+    return api('overview').then(function (r) {
+      if (r.status === 401) { return false; }
+      if (!r.ok) { throw new Error('сводка не загрузилась'); }
+      return r.json().then(function (d) { showPanel(d); return true; });
+    });
+  }
+
+  function enter() {
+    var pw = $('pw').value;
+    if (!pw) { say($('gateMsg'), 'Введите пароль', 'bad'); return; }
+    $('enter').disabled = true;
+    say($('gateMsg'), 'Проверяем…');
+    jpost('login', { password: pw }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, d: d }; });
+    }).then(function (res) {
+      $('enter').disabled = false;
+      if (!res.ok) { say($('gateMsg'), res.d.error || 'Не вышло', 'bad'); return; }
+      $('pw').value = '';
+      say($('gateMsg'), '');
+      load();
+    }).catch(function () { $('enter').disabled = false; say($('gateMsg'), 'Сеть недоступна', 'bad'); });
+  }
+
+  function download(path) { window.location.href = '/owner/api/' + path; }
+
+  function wipe() {
+    if ($('confirm').value.trim() !== 'УДАЛИТЬ') return;
+    $('wipe').disabled = true;
+    say($('panelMsg'), 'Стираем…');
+    jpost('wipe', { confirm: 'УДАЛИТЬ' }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, d: d }; });
+    }).then(function (res) {
+      if (!res.ok) { say($('panelMsg'), res.d.error || 'Не вышло', 'bad'); $('wipe').disabled = false; return; }
+      say($('panelMsg'), 'Готово. Данные стёрты, файлов удалено: ' + res.d.media_files, 'ok');
+      $('confirm').value = '';
+      load();
+    }).catch(function () { say($('panelMsg'), 'Сеть недоступна', 'bad'); $('wipe').disabled = false; });
+  }
+
+  $('enter').addEventListener('click', enter);
+  $('pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') enter(); });
+  $('logout').addEventListener('click', function () { jpost('logout').then(function () { location.reload(); }); });
+  $('dlData').addEventListener('click', function () { download('export/data'); });
+  $('dlCode').addEventListener('click', function () { download('export/project'); });
+  $('confirm').addEventListener('input', function () { $('wipe').disabled = this.value.trim() !== 'УДАЛИТЬ'; });
+  $('wipe').addEventListener('click', wipe);
+
+  load().then(function (inside) { if (!inside) { $('pw').focus(); } });
+})();
+</script>
+</body>
+</html>

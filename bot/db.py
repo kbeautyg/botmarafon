@@ -1603,3 +1603,29 @@ def launched_among(ids: list[int]) -> set[int]:
             % ','.join('?' * len(part)), tuple(part)).fetchall()
         found.update(r['user_id'] for r in rows)
     return found
+
+def table_names() -> list[str]:
+    u"""Все прикладные таблицы базы (без служебных sqlite_* и WAL-учёта)."""
+    rows = _conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+    return [r[0] for r in rows]
+
+
+def wipe_all() -> dict[str, int]:
+    u"""Стереть все данные проекта: очищает каждую таблицу. Возвращает,
+    сколько строк было в каждой. Схема и файл базы остаются — после очистки
+    бот работает дальше с пустой воронкой."""
+    было = {name: _conn.execute('SELECT COUNT(*) FROM %s' % name).fetchone()[0]
+            for name in table_names()}
+    for name in table_names():
+        _conn.execute('DELETE FROM %s' % name)
+    _conn.commit()
+    _conn.execute('VACUUM')
+    return было
+
+
+def path() -> str:
+    u"""Файл базы, которая открыта на самом деле (а не тот, что в настройках)."""
+    row = _conn.execute('PRAGMA database_list').fetchone()
+    return row[2] if row and row[2] else ''

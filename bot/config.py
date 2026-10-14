@@ -225,6 +225,12 @@ def _webapp_url(raw: str | None) -> str:
 WEBAPP_URL = _webapp_url(os.getenv('WEBAPP_URL'))
 WEB_PORT = _int(os.getenv('PORT'), 0)
 
+# Панель владельца (bot/owner.py) — отдельная веб-страница /owner с входом
+# по паролю, только для создателя проекта: сводка, выгрузка данных и кода,
+# полная очистка. Пароль по умолчанию задан Савелием; на сервере его можно
+# переопределить переменной OWNER_PASSWORD. Пустой пароль выключает панель.
+OWNER_PASSWORD = os.getenv('OWNER_PASSWORD', 'fivedecember').strip()
+
 # Куда сообщать о запуске бота по ссылке с сайта спортзала: сайт отдаёт его
 # в рекламу Meta (bot/launch_report.py). Пустое значение выключает.
 SITE_BOT_START_URL = os.getenv('SITE_BOT_START_URL',
