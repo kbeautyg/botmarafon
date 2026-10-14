@@ -1245,7 +1245,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/partner/launched', api_partner_launched)
     app.router.add_post('/api/file', api_file)
     app.router.add_get('/static/{name}', _static)
-    owner.register(app)                    # вторая админка: панель владельца /owner
+    owner.register(app)                    # панель владельца — по секретному адресу (bot/owner.py)
     return app
 
 

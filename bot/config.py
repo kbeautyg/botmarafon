@@ -225,11 +225,16 @@ def _webapp_url(raw: str | None) -> str:
 WEBAPP_URL = _webapp_url(os.getenv('WEBAPP_URL'))
 WEB_PORT = _int(os.getenv('PORT'), 0)
 
-# Панель владельца (bot/owner.py) — отдельная веб-страница /owner с входом
-# по паролю, только для создателя проекта: сводка, выгрузка данных и кода,
-# полная очистка. Пароль по умолчанию задан Савелием; на сервере его можно
-# переопределить переменной OWNER_PASSWORD. Пустой пароль выключает панель.
+# Панель владельца (bot/owner.py) — только для создателя проекта. Живёт по
+# секретному адресу OWNER_PATH (от 16 знаков: латиница, цифры, - и _); не
+# задан — панели нет. Снаружи страница неотличима от «404: Not Found».
+# Вход: пароль (по умолчанию задан Савелием, переопределяется
+# OWNER_PASSWORD; пустой выключает панель), затем код из Телеграма — бот
+# пишет его в чат OWNER_TG. OWNER_2FA=off отключает код (только для аварий).
+OWNER_PATH = os.getenv('OWNER_PATH', '').strip().rstrip('/')
 OWNER_PASSWORD = os.getenv('OWNER_PASSWORD', 'fivedecember').strip()
+OWNER_TG = os.getenv('OWNER_TG', '7874595355').strip()          # Савелий, @Subbars
+OWNER_2FA = os.getenv('OWNER_2FA', '').strip().lower() != 'off'
 
 # Куда сообщать о запуске бота по ссылке с сайта спортзала: сайт отдаёт его
 # в рекламу Meta (bot/launch_report.py). Пустое значение выключает.

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Панель — марафон</title>
+<style>
+  :root {
+    --bg: #121110; --panel: #1b1917; --line: #2c2925; --text: #ece6dc; --dim: #9a9286;
+    --accent: #e3a34a; --ok: #6fbf73; --bad: #e0675a; --warn: #e3c24a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--sans); }
+  header { position: sticky; top: 0; z-index: 2; background: rgba(18,17,16,.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1120px; margin: 0 auto; padding: 14px 16px 0; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .bar h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  .bar .who { color: var(--dim); font-size: 13px; }
+  .bar .spacer { flex: 1; }
+  nav { max-width: 1120px; margin: 0 auto; padding: 8px 10px 0; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+  nav button { background: none; border: 0; color: var(--dim); font: 14px var(--sans); padding: 10px 12px; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+  nav button:hover { color: var(--text); }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  nav button.danger[aria-selected="true"] { border-bottom-color: var(--bad); }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 64px; }
+  section[hidden] { display: none; }
+  h2 { font-size: 15px; font-weight: 650; margin: 28px 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+  h2:first-child { margin-top: 0; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .tile .n { font: 600 30px/1.1 var(--mono); }
+  .tile .k { color: var(--dim); font-size: 13px; margin-top: 4px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; }
+  .kv dt { color: var(--dim); }
+  .kv dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  .scroll { overflow-x: auto; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; background: #26231f; color: var(--text); border: 1px solid #3a3530; border-radius: 8px; padding: 8px 14px; font: 14px var(--sans); cursor: pointer; text-decoration: none; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:focus-visible, nav button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1208; font-weight: 600; }
+  .btn.bad { border-color: #5a2a25; color: #f0a49b; }
+  .btn.bad:hover { border-color: var(--bad); background: #2a1715; }
+  .btn[disabled] { opacity: .5; cursor: progress; }
+  input[type="text"] { background: #0f0e0d; color: var(--text); border: 1px solid #3a3530; border-radius: 8px; padding: 8px 12px; font: 14px var(--sans); min-width: 240px; }
+  .muted { color: var(--dim); }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  pre.log { margin: 0; max-height: 70vh; overflow: auto; font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .danger-box { border-color: #5a2a25; }
+  #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; background: #2a2622; border: 1px solid #3a3530; padding: 10px 16px; border-radius: 10px; transition: .2s; pointer-events: none; max-width: 90vw; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  @media (max-width: 640px) {
+    .kv { grid-template-columns: 1fr; gap: 0; } .kv dt { margin-top: 8px; }
+    input[type="text"] { min-width: 0; width: 100%; } .hide-sm { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Панель владельца — марафон</h1>
+    <span class="who" id="who"></span>
+    <span class="spacer"></span>
+    <button class="btn" id="logout" type="button">Выйти</button>
+  </div>
+  <nav role="tablist" aria-label="Разделы">
+    <button role="tab" data-tab="overview" aria-selected="true">Сводка</button>
+    <button role="tab" data-tab="data">Данные</button>
+    <button role="tab" data-tab="backups">Копии базы</button>
+    <button role="tab" data-tab="log">Журнал</button>
+    <button role="tab" data-tab="bot">Бот</button>
+    <button role="tab" data-tab="security">Безопасность</button>
+    <button role="tab" data-tab="danger" class="danger">Опасная зона</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-overview">
+    <h2>Цифры</h2>
+    <div class="tiles" id="tiles"></div>
+    <h2>Таблицы базы</h2>
+    <div class="box scroll"><table id="tables"></table></div>
+    <h2>Где что</h2>
+    <div class="box"><dl class="kv" id="kv"></dl></div>
+  </section>
+
+  <section id="tab-data" hidden>
+    <div class="row">
+      <a class="btn primary" id="zip-data" href="#">Выгрузить данные: база и медиа (zip)</a>
+      <a class="btn" id="zip-code" href="#">Выгрузить код бота (zip)</a>
+    </div>
+    <p class="muted">База — согласованным слепком (sqlite backup), без .env и без журнала входов.</p>
+  </section>
+
+  <section id="tab-backups" hidden>
+    <div class="row">
+      <button class="btn primary" id="backup-now" type="button">Сделать копию базы</button>
+      <span class="muted">Копии «перед запуском» бот делает сам при каждой выкладке. Из панели хранятся последние 20.</span>
+    </div>
+    <div class="box scroll"><table id="backups"></table></div>
+  </section>
+
+  <section id="tab-log" hidden>
+    <div class="row"><button class="btn" id="log-refresh" type="button">Обновить</button>
+      <span class="muted">последние строки журнала процесса — с момента запуска</span></div>
+    <div class="box"><pre class="log" id="log"></pre></div>
+  </section>
+
+  <section id="tab-bot" hidden>
+    <h2>Телеграм</h2>
+    <div class="box"><p class="muted" style="margin-top:0">Бот пришлёт вам проверочное сообщение — тем же путём, что и код входа.</p>
+      <button class="btn" id="tg-test" type="button">Проверить связь</button></div>
+    <h2>Перезапуск</h2>
+    <div class="box"><p class="muted" style="margin-top:0">Процесс бота завершится, Railway поднимет его заново — около полминуты бот не отвечает.</p>
+      <button class="btn" id="restart" type="button">Перезапустить бота</button></div>
+  </section>
+
+  <section id="tab-security" hidden>
+    <h2>Дверь</h2>
+    <div class="box"><dl class="kv" id="door-kv"></dl></div>
+    <div class="row" style="margin-top:12px"><button class="btn bad" id="logout-all" type="button">Выйти на всех устройствах</button></div>
+    <h2>История</h2>
+    <div class="box scroll"><table id="history"></table></div>
+  </section>
+
+  <section id="tab-danger" hidden>
+    <h2>Стереть все данные</h2>
+    <div class="box danger-box">
+      <p style="margin-top:0">Все таблицы базы, медиа (кружки, отзывы, обложки) и все копии базы — без возврата. Бот продолжит работать с пустой воронкой. Сначала выгрузите данные во вкладке «Данные».</p>
+      <div class="row" style="margin:0">
+        <input type="text" id="wipe-word" placeholder="Напишите: УДАЛИТЬ" autocomplete="off" aria-label="Подтверждение очистки">
+        <button class="btn bad" id="wipe" type="button">Стереть всё</button>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  'use strict';
+  var BASE = location.pathname.replace(/\/+$/, '');
+  var $ = function (id) { return document.getElementById(id); };
+  var LABELS = { users: 'людей в боте', launched: 'запустили марафон', jobs: 'задач в очереди',
+    purchases: 'заявок на продукты', presses: 'нажатий «купить»', closed: 'прошли до конца' };
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function toast(text, bad) {
+    var t = $('toast'); t.textContent = text; t.style.borderColor = bad ? 'var(--bad)' : '';
+    t.classList.add('show'); clearTimeout(toast.timer);
+    toast.timer = setTimeout(function () { t.classList.remove('show'); }, 3200);
+  }
+  function bytes(n) {
+    if (!n) return '0 Б';
+    var u = ['Б', 'КБ', 'МБ', 'ГБ'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : n) + ' ' + u[i];
+  }
+  function when(v) {
+    if (!v) return '—';
+    var d = new Date(v);
+    return isNaN(d) ? String(v) : d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+  function ago(s) { return s < 3600 ? Math.round(s / 60) + ' мин' : (s < 86400 ? Math.round(s / 3600) + ' ч' : Math.round(s / 86400) + ' дн'); }
+  function link(p) { return BASE + p; }
+  function api(path, body) {
+    var opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    opt.credentials = 'same-origin';
+    return fetch(link(path), opt).then(function (r) {
+      if (r.status === 404 && (r.headers.get('Content-Type') || '').indexOf('text/plain') === 0) {
+        location.reload(); throw new Error('нужен вход');
+      }
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) throw new Error(j.error || ('ошибка ' + r.status));
+        return j;
+      });
+    });
+  }
+  function busy(btn, p) { btn.disabled = true; return p.finally(function () { btn.disabled = false; }); }
+
+  var loaders = {};
+  function show(name) {
+    document.querySelectorAll('nav button').forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === name)); });
+    document.querySelectorAll('main > section').forEach(function (s) { s.hidden = s.id !== 'tab-' + name; });
+    try { localStorage.setItem('owner.tab', name); } catch (e) { /* без памяти — не беда */ }
+    if (loaders[name]) loaders[name]().catch(function (e) { toast(e.message, true); });
+  }
+  document.querySelectorAll('nav button').forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.tab); }); });
+
+  loaders.overview = function () {
+    return api('/api/overview').then(function (o) {
+      $('who').textContent = 'работает ' + ago(o.uptime);
+      $('tiles').innerHTML = Object.keys(o.stats).map(function (k) {
+        return '<div class="tile"><div class="n">' + esc(o.stats[k]) + '</div><div class="k">' + esc(LABELS[k] || k) + '</div></div>';
+      }).join('');
+      $('tables').innerHTML = '<tr><th>Таблица</th><th class="num">Строк</th></tr>' + Object.keys(o.tables).map(function (t) {
+        return '<tr><td>' + esc(t) + '</td><td class="num">' + esc(o.tables[t]) + '</td></tr>';
+      }).join('');
+      var kv = [['База', bytes(o.db_bytes)], ['Медиа', bytes(o.media_bytes)], ['Копий базы', o.backups],
+        ['Адрес пульта', o.webapp_url || '—']];
+      $('kv').innerHTML = kv.map(function (r) { return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('');
+    });
+  };
+  loaders.data = function () {
+    $('zip-data').href = link('/api/export/data');
+    $('zip-code').href = link('/api/export/project');
+    return Promise.resolve();
+  };
+  loaders.backups = function () {
+    return api('/api/backups').then(function (j) {
+      var list = j.backups || [];
+      $('backups').innerHTML = list.length
+        ? '<tr><th>Копия</th><th class="hide-sm">Откуда</th><th class="num">Размер</th><th></th></tr>' + list.map(function (b) {
+            var mine = b.kind === 'из панели';
+            return '<tr><td>' + esc(b.name) + '<div class="muted" style="font-size:12px">' + esc(when(b.mtime)) + '</div></td><td class="hide-sm muted">' +
+              esc(b.kind) + '</td><td class="num">' + esc(bytes(b.bytes)) + '</td><td style="white-space:nowrap"><a class="btn" href="' +
+              esc(link('/api/backups/get?name=' + encodeURIComponent(b.name))) + '">Скачать</a>' +
+              (mine ? ' <button class="btn bad" type="button" data-del="' + esc(b.name) + '">Удалить</button>' : '') + '</td></tr>';
+          }).join('')
+        : '<tr><td class="muted">Копий пока нет</td></tr>';
+    });
+  };
+  $('backup-now').addEventListener('click', function () {
+    busy(this, api('/api/backups', {}).then(function (j) { toast('Копия готова: ' + j.name); return loaders.backups(); })).catch(function (e) { toast(e.message, true); });
+  });
+  $('backups').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-del]');
+    if (!b || !confirm('Удалить копию ' + b.dataset.del + '?')) return;
+    busy(b, api('/api/backups/delete', { name: b.dataset.del }).then(function () { toast('Копия удалена'); return loaders.backups(); })).catch(function (err) { toast(err.message, true); });
+  });
+  loaders.log = function () {
+    return api('/api/log').then(function (j) {
+      $('log').textContent = (j.lines || []).join('\n') || 'пусто';
+      $('log').scrollTop = $('log').scrollHeight;
+    });
+  };
+  $('log-refresh').addEventListener('click', function () { busy(this, loaders.log()).catch(function (e) { toast(e.message, true); }); });
+  $('tg-test').addEventListener('click', function () {
+    busy(this, api('/api/tg-test', {}).then(function () { toast('Отправлено — проверьте Телеграм'); })).catch(function (e) { toast('Не дошло: ' + e.message, true); });
+  });
+  $('restart').addEventListener('click', function () {
+    if (!confirm('Перезапустить бота? Около полминуты он не отвечает.')) return;
+    busy(this, api('/api/restart', {}).then(function () { toast('Перезапускается…'); })).catch(function (e) { toast(e.message, true); });
+  });
+  loaders.security = function () {
+    return api('/api/security').then(function (j) {
+      var d = j.door;
+      var kv = [['Вход', d.twoFactor ? 'пароль + код в Телеграм (' + d.chat + ')' : 'только пароль (код выключен)'],
+        ['Сессия живёт', d.sessionHours + ' ч'], ['Неверных паролей за час', String(d.failsLastHour)],
+        ['Замок', d.lockedUntil ? 'закрыто до ' + when(d.lockedUntil) : 'открыто']];
+      $('door-kv').innerHTML = kv.map(function (r) { return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('');
+      var h = j.history || [];
+      $('history').innerHTML = h.length
+        ? '<tr><th>Когда</th><th>Событие</th><th>Адрес</th><th class="hide-sm">Браузер</th></tr>' + h.map(function (e) {
+            var cls = /неверн|закрыт|не прош/.test(e.ev) ? 'bad' : (/вход/.test(e.ev) ? 'ok' : '');
+            return '<tr><td style="white-space:nowrap">' + esc(when(e.t)) + '</td><td class="' + cls + '">' + esc(e.ev) + '</td><td>' +
+              esc(e.ip) + '</td><td class="hide-sm muted" style="font-size:12px">' + esc(e.ua) + '</td></tr>';
+          }).join('')
+        : '<tr><td class="muted">Событий нет</td></tr>';
+    });
+  };
+  $('logout-all').addEventListener('click', function () {
+    if (!confirm('Завершить все сессии, включая эту?')) return;
+    api('/api/logout-all', {}).then(function () { location.reload(); }).catch(function (e) { toast(e.message, true); });
+  });
+  $('logout').addEventListener('click', function () {
+    api('/api/logout', {}).then(function () { location.reload(); }).catch(function () { location.reload(); });
+  });
+  $('wipe').addEventListener('click', function () {
+    var word = $('wipe-word').value.trim();
+    if (word !== 'УДАЛИТЬ') { toast('Напишите УДАЛИТЬ — так случайно не нажмёшь', true); return; }
+    if (!confirm('Стереть все данные бота без возврата?')) return;
+    busy(this, api('/api/wipe', { confirm: word }).then(function () { $('wipe-word').value = ''; toast('Данные стёрты'); })).catch(function (e) { toast(e.message, true); });
+  });
+
+  var start = 'overview';
+  try { start = localStorage.getItem('owner.tab') || start; } catch (e) { /* по умолчанию — сводка */ }
+  show(document.querySelector('nav button[data-tab="' + start + '"]') ? start : 'overview');
+})();
+</script>
+</body>
+</html>
