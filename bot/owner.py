@@ -31,6 +31,7 @@ import glob
 import hashlib
 import hmac
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -48,8 +49,10 @@ log = logging.getLogger(__name__)
 
 SESSION = '_s'
 PENDING = '_p'
+DEVICE = '_d'
 SESSION_TTL = 12 * 3600
 PENDING_TTL = 5 * 60
+DEVICE_TTL = 90 * 24 * 3600
 CODE_TRIES = 3
 IP_FAILS = 5
 IP_WINDOW = 15 * 60
@@ -63,6 +66,7 @@ LOG_MAX = 1024 * 1024
 KEEP_BACKUPS = 20
 CONFIRM_WORD = u'УДАЛИТЬ'
 MAX_EXPORT = 300 * 1024 * 1024       # предел отдаваемого архива, 300 МБ
+DEFAULT_PASSWORD = 'fivedecember'      # выбран владельцем
 PATH_RE = re.compile(r'^/[A-Za-z0-9_-]{16,}$')
 NONCE_RE = re.compile(r'^[A-Za-z0-9_-]{16,}$')
 CODE_RE = re.compile(r'^[\d\s-]+$')
@@ -142,8 +146,9 @@ def describe() -> str:
         return u'панель владельца: ВЫКЛЮЧЕНА — OWNER_PATH короче 16 знаков или с недопустимыми символами'
     if not config.OWNER_PASSWORD:
         return u'панель владельца: выключена (пустой OWNER_PASSWORD)'
+    two = config.OWNER_2FA or config.OWNER_PASSWORD == DEFAULT_PASSWORD
     return u'панель владельца: включена, вход — пароль' + (
-        u' и код в Телеграм' if config.OWNER_2FA else u' (код выключен OWNER_2FA=off)')
+        u' и код в Телеграм' if two else u' (код выключен OWNER_2FA=off)')
 
 
 # ------------------------------------------------------------------ подписи
@@ -177,15 +182,24 @@ def _numbers(values, now, window):
     return [t for t in (values or []) if isinstance(t, (int, float)) and now - t < window]
 
 
-def _load(now: float | None = None) -> dict:
+def _fresh() -> dict:
+    return {'epoch': 1, 'pending': {}, 'fails': [], 'ip_fails': {}, 'codes': [],
+            'lock_until': 0.0, 'alert_at': 0.0, 'code_alert_at': 0.0}
+
+
+def _load(now: float | None = None) -> dict | None:
+    u"""Состояние двери. None — файл есть, но испорчен: тогда дверь закрыта,
+    а не распахнута с обнулёнными счётчиками."""
     now = time.time() if now is None else now
     try:
         with open(_state_path(), encoding='utf-8') as f:
             raw = json.load(f)
+    except FileNotFoundError:
+        return _fresh()                    # первого входа ещё не было
     except (OSError, ValueError):
-        raw = {}
+        return None
     if not isinstance(raw, dict):
-        raw = {}
+        return None
     pending = raw.get('pending') if isinstance(raw.get('pending'), dict) else {}
     ip_fails = {}
     for ip, times in (raw.get('ip_fails') or {}).items():
@@ -200,6 +214,7 @@ def _load(now: float | None = None) -> dict:
         'codes': _numbers(raw.get('codes'), now, CODE_WINDOW),
         'lock_until': float(raw.get('lock_until') or 0),
         'alert_at': float(raw.get('alert_at') or 0),
+        'code_alert_at': float(raw.get('code_alert_at') or 0),
     }
 
 
@@ -217,8 +232,8 @@ def _save(state: dict) -> None:
 
 def reset_limits() -> None:
     u"""Для тестов: забыть счётчики и коды, эпоху сессий не трогать."""
-    state = _load()
-    state.update(pending={}, fails=[], ip_fails={}, codes=[], lock_until=0, alert_at=0)
+    state = _fresh()
+    state['epoch'] = (_load() or {}).get('epoch', 1)
     _save(state)
 
 
@@ -228,16 +243,27 @@ def _log_path() -> str:
     return os.path.join(_dir(), '.owner-log.jsonl')
 
 
+def _valid_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
 def _ip(request) -> str:
     u"""Адрес посетителя за прокси Railway: X-Real-IP, иначе последний адрес
-    X-Forwarded-For — его дописал сам прокси, а не браузер."""
+    X-Forwarded-For — его дописал сам прокси, а не браузер. Не похожее на
+    адрес не берём."""
     real = request.headers.get('X-Real-IP', '').strip()
-    if real:
-        return real[:64]
+    if real and _valid_ip(real):
+        return real
     forwarded = request.headers.get('X-Forwarded-For', '')
-    if forwarded.strip():
-        return forwarded.split(',')[-1].strip()[:64]
-    return request.remote or '?'
+    last = forwarded.split(',')[-1].strip() if forwarded.strip() else ''
+    if last and _valid_ip(last):
+        return last
+    remote = request.remote or ''
+    return remote if _valid_ip(remote) else 'ip'
 
 
 def _event(request, ev: str, info=None) -> None:
@@ -305,6 +331,11 @@ def _notify(request, text: str) -> None:
 
 # ------------------------------------------------------------------ cookie и сессия
 
+def _two_factor() -> bool:
+    u"""Пароль по умолчанию уже был на виду — с ним код не выключается."""
+    return config.OWNER_2FA or config.OWNER_PASSWORD == DEFAULT_PASSWORD
+
+
 def _secure(request) -> bool:
     return (request.headers.get('X-Forwarded-Proto', '') == 'https' or request.secure
             or config.WEBAPP_URL.startswith('https://'))
@@ -315,47 +346,51 @@ def _cookie(request, name: str, value: str, max_age: int) -> str:
     return out + ('; Secure' if _secure(request) else '')
 
 
-def _session_value(issued: int, epoch: int) -> str:
-    return '%d.%d.%s' % (issued, epoch, _mac('s|%d|%d' % (issued, epoch)))
+def _signed(kind: str, a, b) -> str:
+    return '%s.%s.%s' % (a, b, _mac('%s|%s|%s' % (kind, a, b)))
 
 
-def _pending_value(issued: int, nonce: str) -> str:
-    return '%d.%s.%s' % (issued, nonce, _mac('p|%d|%s' % (issued, nonce)))
-
-
-def logged_in(request) -> bool:
-    value = request.cookies.get(SESSION, '')
-    parts = value.split('.')
+def _unsigned(kind: str, value: str, ttl: int):
+    u"""[a, b] из подписанной cookie, если подпись верна и срок не вышел."""
+    parts = (value or '').split('.')
     if len(parts) != 3:
-        return False
-    try:
-        issued, epoch = int(parts[0]), int(parts[1])
-    except ValueError:
-        return False
-    if not _same(value, _session_value(issued, epoch)):
-        return False
-    if not 0 <= time.time() - issued <= SESSION_TTL:
-        return False
-    return epoch == _load()['epoch']
-
-
-def _pending_nonce(request):
-    value = request.cookies.get(PENDING, '')
-    parts = value.split('.')
-    if len(parts) != 3 or not NONCE_RE.match(parts[1]):
         return None
     try:
         issued = int(parts[0])
     except ValueError:
         return None
-    if not _same(value, _pending_value(issued, parts[1])):
+    if not _same(value, _signed(kind, parts[0], parts[1])):
         return None
-    return parts[1] if 0 <= time.time() - issued <= PENDING_TTL else None
+    return parts if 0 <= time.time() - issued <= ttl else None
+
+
+def logged_in(request) -> bool:
+    parts = _unsigned('s', request.cookies.get(SESSION, ''), SESSION_TTL)
+    if not parts:
+        return False
+    state = _load()
+    return state is not None and str(state['epoch']) == parts[1]
+
+
+def _trusted(request, state: dict) -> bool:
+    parts = _unsigned('d', request.cookies.get(DEVICE, ''), DEVICE_TTL)
+    return bool(parts) and str(state['epoch']) == parts[1]
+
+
+def _pending_nonce(request):
+    parts = _unsigned('p', request.cookies.get(PENDING, ''), PENDING_TTL)
+    return parts[1] if parts and NONCE_RE.match(parts[1]) else None
 
 
 def _not_found(cookie: str | None = None):
     u"""Ровно ответ aiohttp на несуществующий адрес, при нужде — с cookie."""
     return web.HTTPNotFound(headers={'Set-Cookie': cookie} if cookie else None)
+
+
+def _hold(request, nonce: str | None = None):
+    u"""404 со свежей cookie ожидания — одинаковый ответ на любой набор."""
+    return _not_found(_cookie(request, PENDING, _signed('p', int(time.time()), nonce or secrets.token_urlsafe(18)),
+                              PENDING_TTL))
 
 
 def _same_origin(request) -> bool:
@@ -367,7 +402,9 @@ def _same_origin(request) -> bool:
 
 def _welcome(request, epoch: int):
     response = web.json_response({'ok': True})
-    response.headers.add('Set-Cookie', _cookie(request, SESSION, _session_value(int(time.time()), epoch), SESSION_TTL))
+    now = int(time.time())
+    response.headers.add('Set-Cookie', _cookie(request, SESSION, _signed('s', now, epoch), SESSION_TTL))
+    response.headers.add('Set-Cookie', _cookie(request, DEVICE, _signed('d', now, epoch), DEVICE_TTL))
     response.headers.add('Set-Cookie', _cookie(request, PENDING, '', 0))
     response.headers['Cache-Control'] = 'no-store'
     return response
@@ -384,8 +421,22 @@ async def page(request):
                         headers={'Cache-Control': 'no-store'})
 
 
+def _lock_if_needed(request, state: dict, now: float, ip: str) -> bool:
+    u"""20 ошибок за час — дверь закрыта на час. True — закрыли сейчас."""
+    if len(state['fails']) < GLOBAL_FAILS or state['lock_until'] > now:
+        return False
+    state['lock_until'] = now + LOCK_FOR
+    _event(request, u'дверь закрыта на час')
+    _notify(request, u'⛔ Панель «марафон» закрыта на час: %d неверных паролей и кодов за час. '
+                     u'Последний — с адреса %s. Браузер, из которого вы уже входили, пускают и сейчас.'
+            % (len(state['fails']), ip))
+    return True
+
+
 async def enter(request):
-    u"""Пароль, затем код. Наружу — всегда 404, кроме верного кода."""
+    u"""Пароль, затем код. Наружу — всегда 404 со свежей cookie ожидания,
+    кроме верного кода: ни по коду ответа, ни по заголовкам не понять, был
+    ли пароль верным."""
     if not _same_origin(request):
         raise _not_found()
     try:
@@ -397,68 +448,76 @@ async def enter(request):
     now = time.time()
     ip = _ip(request)
     state = _load(now)
+    if state is None:
+        _event(request, u'файл состояния испорчен — вход закрыт')
+        raise _hold(request)
+    trusted = _trusted(request, state)
 
     waiting = _pending_nonce(request)
     if waiting and waiting in state['pending']:
-        rec = state['pending'][waiting]
+        rec = state['pending'].pop(waiting)
         if not CODE_RE.match(value):      # не цифры — пароль набран ещё раз: попытку не тратим
-            raise _not_found()
+            nxt = secrets.token_urlsafe(18)
+            state['pending'][nxt] = rec
+            _save(state)
+            raise _hold(request, nxt)
         digits = re.sub(r'\D', '', value)
-        if digits and _same(_mac('c|%s|%s' % (waiting, digits)), rec.get('h', '')):
-            del state['pending'][waiting]
+        # код подписан тем ожиданием, при котором его выдали: после смены cookie — rec['n']
+        if _same(_mac('c|%s|%s' % (rec.get('n', waiting), digits)), rec.get('h', '')):
             _save(state)
             _event(request, u'вход')
             _notify(request, u'✅ Вход в панель: марафон\nадрес %s\n%s' % (ip, request.headers.get('User-Agent', '')[:100]))
             return _welcome(request, state['epoch'])
         rec['tries'] = rec.get('tries', 0) + 1
-        spent = rec['tries'] >= CODE_TRIES
-        if spent:
-            del state['pending'][waiting]
+        state['fails'].append(now)        # неверный код — тоже попытка подбора
+        _event(request, u'неверный код, попытки кончились' if rec['tries'] >= CODE_TRIES else u'неверный код')
+        if now - state['code_alert_at'] > ALERT_EVERY:
+            state['code_alert_at'] = now
+            _notify(request, u'⚠️ Неверный код входа в панель «марафон» с адреса %s. '
+                             u'Пароль, похоже, знает кто-то ещё — смените OWNER_PASSWORD.' % ip)
+        _lock_if_needed(request, state, now, ip)
+        nxt = None
+        if rec['tries'] < CODE_TRIES:
+            nxt = secrets.token_urlsafe(18)
+            state['pending'][nxt] = rec
         _save(state)
-        _event(request, u'неверный код, попытки кончились' if spent else u'неверный код')
-        raise _not_found()
+        raise _hold(request, nxt)
 
-    nonce = secrets.token_urlsafe(18)
-    hold = _cookie(request, PENDING, _pending_value(int(now), nonce), PENDING_TTL)
-    if state['lock_until'] > now or len(state['ip_fails'].get(ip, [])) >= IP_FAILS:
-        raise _not_found(hold)            # пароль даже не смотрим
+    if not trusted and (state['lock_until'] > now or len(state['ip_fails'].get(ip, [])) >= IP_FAILS):
+        raise _hold(request)              # пароль даже не смотрим
 
     if not value or not _same(value, config.OWNER_PASSWORD):
         state['fails'].append(now)
         state['ip_fails'].setdefault(ip, []).append(now)
         _event(request, u'неверный пароль')
-        if len(state['fails']) >= GLOBAL_FAILS:
-            state['lock_until'] = now + LOCK_FOR
-            _event(request, u'дверь закрыта на час')
-            _notify(request, u'⛔ Панель «марафон» закрыта на час: %d неверных паролей за час. '
-                             u'Последний — с адреса %s.' % (len(state['fails']), ip))
-        elif now - state['alert_at'] > ALERT_EVERY:
+        if not _lock_if_needed(request, state, now, ip) and now - state['alert_at'] > ALERT_EVERY:
             state['alert_at'] = now
             _notify(request, u'⚠️ Неверный пароль к панели «марафон» с адреса %s. За последний час: %d.'
                     % (ip, len(state['fails'])))
         _save(state)
-        raise _not_found(hold)
+        raise _hold(request)
 
-    if not config.OWNER_2FA:
+    if not _two_factor():
         _save(state)
         _event(request, u'вход без кода')
         _notify(request, u'✅ Вход в панель: марафон (без кода)\nадрес %s' % ip)
         return _welcome(request, state['epoch'])
 
-    if len(state['codes']) >= CODES_PER_WINDOW:
+    if not trusted and len(state['codes']) >= CODES_PER_WINDOW:
         _save(state)
         _event(request, u'код не отправлен: слишком часто')
-        raise _not_found(hold)
+        raise _hold(request)
 
+    nonce = secrets.token_urlsafe(18)
     code = '%06d' % secrets.randbelow(10 ** 6)
-    state['pending'][nonce] = {'h': _mac('c|%s|%s' % (nonce, code)), 'until': now + PENDING_TTL,
-                               'tries': 0, 'ip': ip}
+    state['pending'][nonce] = {'h': _mac('c|%s|%s' % (nonce, code)), 'n': nonce,
+                               'until': now + PENDING_TTL, 'tries': 0, 'ip': ip}
     state['codes'].append(now)
     _save(state)
-    _event(request, u'код отправлен')
+    _event(request, u'код отправлен (знакомое устройство)' if trusted else u'код отправлен')
     _notify(request, u'🔐 Код входа в панель «марафон»: %s\nДействует 5 минут. Запрос с адреса %s.\n'
                      u'Если входите не вы — пароль знает кто-то ещё: смените OWNER_PASSWORD.' % (code, ip))
-    raise _not_found(hold)
+    raise _hold(request, nonce)
 
 
 def _api(handler):
@@ -492,7 +551,7 @@ async def overview(request):
     except Exception as err:               # база могла быть не открыта
         log.exception(u'панель: сводка не собралась')
         return web.json_response({'error': str(err)[:300]}, status=500)
-    state = _load()
+    state = _load() or _fresh()
     return web.json_response({
         'stats': db.stats(),
         'tables': counts,
@@ -508,7 +567,7 @@ async def overview(request):
 def _door(state: dict) -> dict:
     chat = config.OWNER_TG or ''
     return {
-        'twoFactor': config.OWNER_2FA,
+        'twoFactor': _two_factor(),
         'chat': (chat[:3] + u'…' + chat[-3:]) if chat else '',
         'sessionHours': SESSION_TTL // 3600,
         'lockedUntil': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(state['lock_until']))
@@ -643,7 +702,7 @@ async def process_log(request):
 
 
 async def security(request):
-    return web.json_response({'door': _door(_load()), 'history': history(150)})
+    return web.json_response({'door': _door(_load() or _fresh()), 'history': history(150)})
 
 
 async def tg_test(request):
@@ -668,6 +727,8 @@ async def logout(request):
 
 async def logout_all(request):
     state = _load()
+    if state is None:
+        return web.json_response({'error': u'файл состояния испорчен'}, status=500)
     state['epoch'] += 1
     _save(state)
     _event(request, u'выход на всех устройствах')

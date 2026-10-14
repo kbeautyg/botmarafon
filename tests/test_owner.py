@@ -225,6 +225,77 @@ async def test_чужой_сайт_не_отправит_пароль(мир):
     assert _код(bot) is None
 
 
+async def test_ответ_при_ожидании_кода_как_на_неверный_пароль(мир):
+    client, bot, _ = мир
+    await _ввести(client, PW)                                      # теперь ждём код
+    ждём = await _ввести(client, 'xyz')
+    client.session.cookie_jar.clear()
+    await _ввести(client, 'nope', ip='198.51.100.9')               # кода не ждём
+    не_ждём = await _ввести(client, 'xyz', ip='198.51.100.9')
+    for r in (ждём, не_ждём):
+        assert r.status == 404
+        assert await r.text() == '404: Not Found'
+        assert '_p' in r.cookies, 'cookie ожидания приходит в обоих случаях'
+
+
+async def test_неверный_код_тревога(мир):
+    client, bot, _ = мир
+    await _ввести(client, PW)
+    await asyncio.sleep(0.05)
+    code = _код(bot)
+    bot.sent.clear()
+    await _ввести(client, '000001' if code != '000001' else '000002')
+    await asyncio.sleep(0.05)
+    assert any('Неверный код входа' in t for t in _тексты(bot))
+
+
+async def test_знакомое_устройство_пускают_при_закрытой_двери(мир):
+    client, bot, _ = мир
+    await _войти(client, bot, ip='198.51.100.30')
+    assert (await client.post(P + '/api/logout', json={})).status == 200
+    свои = {c.key: c.value for c in client.session.cookie_jar}
+    assert '_d' in свои and '_s' not in свои
+    client.session.cookie_jar.clear()
+    for i in range(20):
+        await _ввести(client, 'guess%d' % i, ip='192.0.2.%d' % (i + 1))
+    client.session.cookie_jar.clear()
+    client.session.cookie_jar.update_cookies({'_d': свои['_d']})
+    bot.sent.clear()
+    await _ввести(client, PW, ip='198.51.100.31')
+    await asyncio.sleep(0.05)
+    code = _код(bot)
+    assert code, 'код приходит, хотя дверь для остальных закрыта'
+    assert (await _ввести(client, code, ip='198.51.100.31')).status == 200
+
+
+async def test_с_паролем_по_умолчанию_код_не_выключить(мир, monkeypatch):
+    client, bot, _ = мир
+    monkeypatch.setattr(config, 'OWNER_2FA', False)
+    assert (await _ввести(client, PW)).status == 404
+    await asyncio.sleep(0.05)
+    assert _код(bot), 'код всё равно нужен'
+    monkeypatch.setattr(config, 'OWNER_PASSWORD', 'another-long-secret')
+    client.session.cookie_jar.clear()
+    assert (await _ввести(client, 'another-long-secret', ip='198.51.100.40')).status == 200
+
+
+async def test_испорченное_состояние_дверь_закрыта(мир):
+    client, bot, _ = мир
+    with open(owner._state_path(), 'w', encoding='utf-8') as f:
+        f.write('{не json')
+    await _ввести(client, PW)
+    await asyncio.sleep(0.05)
+    assert _код(bot) is None
+
+
+async def test_не_адрес_не_становится_ключом(мир):
+    client, bot, _ = мир
+    r = await _ввести(client, 'nope', ip='__proto__')
+    assert r.status == 404
+    history = owner.history(5)
+    assert history and history[0]['ip'] != '__proto__'
+
+
 async def test_выйти_везде(мир):
     client, bot, _ = мир
     await _войти(client, bot)
