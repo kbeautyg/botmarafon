@@ -1133,13 +1133,21 @@ async def on_resend(message: Message):
 
     /resend N всем — запасной ход, когда пометок нет (база пересоздана):
     запись уходит всем, кто этот день уже прошёл, судя по очереди.
+
+    /resend 2 3 5844998243 — записи дней одному человеку по ID из пульта
+    (AleX 16.10.2026: «случайно нажала «Да», не посмотрела вторую часть —
+    можно ей ещё раз 2–3 день отправить?»).
     """
     if not _is_admin(message.from_user.id):
         return
     words = (message.text or '').split()
     days = [int(w) for w in words[1:] if w in ('1', '2', '3', '4')]
     if not days:
-        await message.answer(u'Какой день? Например: /resend 1')
+        await message.answer(u'Какой день? Например: /resend 1 или /resend 2 3 5844998243')
+        return
+    people = [int(w) for w in words[1:] if w.isdigit() and len(w) >= 5]
+    if people:
+        await _resend_to(message, sorted(set(days)), people)
         return
     day = days[0]
     if not (db.get_content('day%d' % day) or config.DAY_ENV.get(day)):
@@ -1178,6 +1186,49 @@ async def on_resend(message: Message):
                             u', закрыли бота: %d' % gone if gone else u'',
                             u', не доставлено: %d' % failed if failed else u''))
     log.info(u'админ %s дослал день %d: %d/%d', message.from_user.id, day, sent, len(targets))
+
+
+async def _resend_to(message: Message, days: list[int], people: list[int]) -> None:
+    u"""Дослать записи дней конкретным людям — только тех дней, что они уже получили.
+
+    Вперёд досылка не ведёт: день, которого у человека ещё не было, бот
+    пришлёт сам, когда подойдёт срок. Закрытые записи (bot/closing.py) не
+    возвращаем, как и /resend всем.
+    """
+    lines = []
+    for uid in people:
+        person = db.get_user(uid)
+        if not person:
+            lines.append(u'%d — нет в базе бота' % uid)
+            continue
+        who = html.escape(person.get('first_name') or person.get('username') or str(uid))
+        if person.get('closed_at'):
+            lines.append(u'%s — записи уже закрыты, не досылаю' % who)
+            continue
+        had = db.days_of(uid)
+        sent_days, skipped = [], [d for d in days if d not in had]
+        for day in (d for d in days if d in had):
+            if not (db.get_content('day%d' % day) or config.DAY_ENV.get(day)):
+                skipped.append(day)
+                continue
+            try:
+                if await delivery.resend_day(message.bot, uid, day):
+                    sent_days.append(day)
+            except delivery.Gone:
+                lines.append(u'%s — закрыл(а) бота' % who)
+                break
+            except Exception as err:                   # отчитаемся и пойдём дальше
+                log.warning(u'не дослали день %d человеку %s: %s', day, uid, err)
+            await asyncio.sleep(0.05)
+        else:
+            note = u'%s — дослал: %s' % (who, u', '.join(u'день %d' % d for d in sent_days)) \
+                if sent_days else u'%s — ничего не дослал' % who
+            if skipped:
+                note += u' (не досылаю день %s: ещё не получал или записи нет)' \
+                        % u', '.join(str(d) for d in sorted(skipped))
+            lines.append(note)
+        log.info(u'админ %s дослал %s дни %s', message.from_user.id, uid, days)
+    await message.answer(u'\n'.join(lines))
 
 
 @router.message(Command('test'))

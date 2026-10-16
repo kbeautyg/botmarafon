@@ -433,6 +433,32 @@ async def test_дослать_без_записи_отказывает():
     assert u'не задана' in message.answers[-1]
 
 
+async def test_дослать_одному_человеку_только_полученные_дни():
+    u"""AleX 16.10.2026: «случайно нажала «Да», не посмотрела вторую часть —
+    можно ей ещё раз 2–3 день отправить?» Вперёд досылка не ведёт."""
+    bot = FakeBot()
+    for day in (1, 2, 3, 4):
+        db.put_content('day%d' % day, 'link', 'https://example.com/day%d' % day)
+    uid = 5844998243
+    db.remember_user(uid, None, u'Наталья')
+    db.mark_launched(uid)
+    for day in (1, 2, 3):
+        db.log_event(uid, 'day', str(day))
+
+    message = админ_сообщение(text='/resend 2 3 4 %d' % uid, bot=bot)
+    await admin.on_resend(message)
+
+    ей = [p for k, c, p in bot.sent if c == uid]
+    assert any('/day2' in p for p in ей) and any('/day3' in p for p in ей)
+    assert not any('/day4' in p for p in ей), 'четвёртого дня у неё ещё не было'
+    assert u'Наталья — дослал: день 2, день 3' in message.answers[-1]
+    assert u'не досылаю день 4' in message.answers[-1]
+
+    message = админ_сообщение(text='/resend 2 777777777', bot=bot)
+    await admin.on_resend(message)
+    assert u'нет в базе' in message.answers[-1]
+
+
 def test_доставка_дня_по_очереди():
     from bot import funnel
     assert funnel.day_delivered(set(), 1)
