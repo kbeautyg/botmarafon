@@ -411,6 +411,30 @@ async def resend_day(bot: Bot, user_id: int, day: int) -> bool:
     return True
 
 
+async def resend_day_to(bot: Bot, user_id: int, day: int) -> str:
+    u"""Дослать запись дня одному человеку — кнопкой в пульте и /resend 2 3 ID.
+
+    AleX 16–17.10.2026: участница случайно нажала «Да», не посмотрев второй
+    день. Только дни, которые человек уже получил: вперёд досылка не ведёт.
+    Закрытые записи (bot/closing.py) не возвращаем. Вопрос дня заново не
+    откроется тому, кто на него уже ответил (may_open). Пустая строка —
+    запись ушла, иначе — почему нет, словами.
+    """
+    person = db.get_user(user_id)
+    if not person:
+        return u'человека нет в базе'
+    if person.get('closed_at'):
+        return u'записи у человека уже закрыты'
+    if day not in db.days_of(user_id):
+        return u'ещё не получал(а)'
+    try:
+        if not await resend_day(bot, user_id, day):
+            return u'запись дня не задана'
+    except Gone:
+        return u'человек закрыл бота'
+    return ''
+
+
 async def send_poll(bot: Bot, user_id: int, name: str) -> Message | None:
     if not may_open(user_id, name):
         # Пока вопрос ждал очереди (или досылки через /дошли), человек

@@ -53,7 +53,7 @@ STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
                   'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream',
                   'баннер', 'banner',
-                  'евгений', 'evgeny', 'евгений_факты', 'evgeny_facts')
+                  'евгений', 'evgeny', 'евгений_факты', 'evgeny_facts', 'resend')
 
 
 def _command(message: Message) -> str:
@@ -1138,14 +1138,16 @@ async def on_resend(message: Message):
     (AleX 16.10.2026: «случайно нажала «Да», не посмотрела вторую часть —
     можно ей ещё раз 2–3 день отправить?»).
     """
-    if not _is_admin(message.from_user.id):
-        return
     words = (message.text or '').split()
     days = [int(w) for w in words[1:] if w in ('1', '2', '3', '4')]
+    people = [int(w) for w in words[1:] if w.isdigit() and len(w) >= 5]
+    # Одному человеку — вся команда проекта (AleX 17.10.2026: «написал, энтер
+    # бахнул, и ничего» — команда была только у админов); всем — только админы.
+    if not (_is_admin(message.from_user.id) or (people and config.is_team(message.from_user.id))):
+        return
     if not days:
         await message.answer(u'Какой день? Например: /resend 1 или /resend 2 3 5844998243')
         return
-    people = [int(w) for w in words[1:] if w.isdigit() and len(w) >= 5]
     if people:
         await _resend_to(message, sorted(set(days)), people)
         return
@@ -1189,12 +1191,8 @@ async def on_resend(message: Message):
 
 
 async def _resend_to(message: Message, days: list[int], people: list[int]) -> None:
-    u"""Дослать записи дней конкретным людям — только тех дней, что они уже получили.
-
-    Вперёд досылка не ведёт: день, которого у человека ещё не было, бот
-    пришлёт сам, когда подойдёт срок. Закрытые записи (bot/closing.py) не
-    возвращаем, как и /resend всем.
-    """
+    u"""Дослать записи дней конкретным людям — та же логика, что у кнопки в пульте
+    (delivery.resend_day_to): только полученные дни, закрытые записи не возвращаем."""
     lines = []
     for uid in people:
         person = db.get_user(uid)
@@ -1202,32 +1200,24 @@ async def _resend_to(message: Message, days: list[int], people: list[int]) -> No
             lines.append(u'%d — нет в базе бота' % uid)
             continue
         who = html.escape(person.get('first_name') or person.get('username') or str(uid))
-        if person.get('closed_at'):
-            lines.append(u'%s — записи уже закрыты, не досылаю' % who)
-            continue
-        had = db.days_of(uid)
-        sent_days, skipped = [], [d for d in days if d not in had]
-        for day in (d for d in days if d in had):
-            if not (db.get_content('day%d' % day) or config.DAY_ENV.get(day)):
-                skipped.append(day)
-                continue
+        sent_days, refused = [], []
+        for day in days:
             try:
-                if await delivery.resend_day(message.bot, uid, day):
-                    sent_days.append(day)
-            except delivery.Gone:
-                lines.append(u'%s — закрыл(а) бота' % who)
-                break
+                why = await delivery.resend_day_to(message.bot, uid, day)
             except Exception as err:                   # отчитаемся и пойдём дальше
                 log.warning(u'не дослали день %d человеку %s: %s', day, uid, err)
+                why = u'не доставлено'
+            if why:
+                refused.append(u'день %d — %s' % (day, why))
+            else:
+                sent_days.append(day)
             await asyncio.sleep(0.05)
-        else:
-            note = u'%s — дослал: %s' % (who, u', '.join(u'день %d' % d for d in sent_days)) \
-                if sent_days else u'%s — ничего не дослал' % who
-            if skipped:
-                note += u' (не досылаю день %s: ещё не получал или записи нет)' \
-                        % u', '.join(str(d) for d in sorted(skipped))
-            lines.append(note)
-        log.info(u'админ %s дослал %s дни %s', message.from_user.id, uid, days)
+        note = (u'%s — дослал: %s' % (who, u', '.join(u'день %d' % d for d in sent_days))
+                if sent_days else u'%s — ничего не дослал' % who)
+        if refused:
+            note += u' (' + u'; '.join(refused) + u')'
+        lines.append(note)
+        log.info(u'%s дослал(а) %s дни %s', message.from_user.id, uid, days)
     await message.answer(u'\n'.join(lines))
 
 

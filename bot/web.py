@@ -403,6 +403,9 @@ def _card(person: dict) -> dict:
     u"""Путь человека по марафону: когда начал, что получил, что ответил."""
     answers = db.answers_of(person['user_id'])
     days = db.days_of(person['user_id'])
+    # «Прислать ещё раз» (AleX 17.10.2026): только полученный день, есть сама
+    # запись, записи человеку не закрыты и бота он не закрыл.
+    open_records = not person.get('closed_at') and not person.get('blocked_at')
     return {
         'started_at': person.get('started_at'),
         'launched_at': person.get('launched_at'),
@@ -410,7 +413,9 @@ def _card(person: dict) -> dict:
         'lead_no': person.get('lead_no'),
         'days': [{'day': day,
                   'at': days.get(day),
-                  'answer': (answers.get('day%d' % day) or (None,))[0]}
+                  'answer': (answers.get('day%d' % day) or (None,))[0],
+                  'can_resend': bool(open_records and days.get(day)
+                                     and (db.get_content('day%d' % day) or config.DAY_ENV.get(day)))}
                  for day in (1, 2, 3, 4)],
     }
 
@@ -1073,6 +1078,34 @@ async def _send_record(bot, user_id: int, kind: str, blob: bytes, name: str,
 
 
 @route
+async def api_resend(request, user):
+    u"""Кнопка «Прислать ещё раз» у дня в карточке участника (AleX 17.10.2026:
+    «команду /resend упаковать в кнопочку»). Логика — delivery.resend_day_to:
+    только полученные дни, закрытые записи не возвращаются, вопрос дня тому,
+    кто на него ответил, заново не открывается."""
+    body = await _body(request)
+    user_id = int(body.get('id') or 0)
+    try:
+        day = int(body.get('day') or 0)
+    except (TypeError, ValueError):
+        day = 0
+    if day not in (1, 2, 3, 4):
+        return web.json_response({'error': u'какой день?'}, status=400)
+    person = db.get_user(user_id)
+    if not person:
+        return web.json_response({'error': u'человека нет в базе'}, status=404)
+    try:
+        why = await delivery.resend_day_to(request.app['bot'], user_id, day)
+    except Exception as err:                       # Telegram отказал не «закрыл бота»
+        log.warning(u'пульт: не дослали день %d человеку %s: %s', day, user_id, err)
+        return web.json_response({'error': u'Telegram не принял: %s' % _telegram_reason(err)}, status=409)
+    if why:
+        return web.json_response({'error': u'день %d не досылаю: %s' % (day, why)}, status=409)
+    log.info(u'пульт: %s дослал(а) день %d человеку %s', user['id'], day, user_id)
+    return web.json_response({'ok': True, 'card': _card(db.get_user(user_id) or person)})
+
+
+@route
 async def api_ai(request, user):
     u"""Кнопка 🤖 в пульте (AleX 11.10.2026): подключить Евгения к диалогу —
     он сразу пишет и дальше ведёт человека к спортзалу — или выключить."""
@@ -1242,6 +1275,7 @@ def build(bot) -> web.Application:
     app.router.add_post('/api/drop', api_drop)
     app.router.add_post('/api/ban', api_ban)
     app.router.add_post('/api/ai', api_ai)
+    app.router.add_post('/api/resend', api_resend)
     app.router.add_post('/api/partner/launched', api_partner_launched)
     app.router.add_post('/api/file', api_file)
     app.router.add_get('/static/{name}', _static)

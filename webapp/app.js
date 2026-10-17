@@ -644,13 +644,48 @@
       var value = item.at ? 'получил ' + moment(item.at) : 'ещё не получил';
       if (item.answer) { value += ' · ' + (ANSWERS[item.answer] || item.answer); }
       else if (item.at && item.day < 4) { value += ' · без ответа'; }
-      box.appendChild(cardLine('День ' + item.day, value));
+      var row = cardLine('День ' + item.day, value);
+      if (item.can_resend) {
+        var again = document.createElement('button');
+        again.type = 'button';
+        again.className = 'card__again';
+        again.textContent = '↻ прислать ещё раз';
+        again.addEventListener('click', function () { resendDay(item.day, again); });
+        row.lastChild.appendChild(document.createTextNode(' '));
+        row.lastChild.appendChild(again);
+      }
+      box.appendChild(row);
     });
 
     var chats = data.chats || state.chats || [];
     box.appendChild(cardLine('Чаты ФИНИШ', chats.length
       ? chats.map(function (c) { return c.title + ' — ' + c.status; }).join('; ')
       : 'бот не состоит ни в одном чате — добавьте его, и будет видно'));
+  }
+
+  // «Прислать ещё раз» у дня в карточке (AleX 17.10.2026: «команду /resend
+  // упаковать в кнопочку»). Запись уходит человеку заново; на вопрос дня,
+  // на который он уже ответил, бот не переспрашивает.
+  function resendDay(day, button) {
+    if (!state.id) { return; }
+    var id = state.id;
+    var ask = 'Прислать запись ' + day + '-го дня ещё раз? Человек получит её заново, '
+      + 'его ответы по марафону не сбросятся.';
+    var run = function () {
+      button.disabled = true;
+      api('resend', { id: id, day: day })
+        .then(function (data) {
+          toast('Запись ' + day + '-го дня ушла ещё раз');
+          if (state.id === id && data.card) {
+            state.card = data.card;
+            drawCard({ person: state.person, card: data.card, chats: state.chats });
+          }
+        })
+        .catch(function (err) { toast(err.message); })
+        .then(function () { button.disabled = false; });
+    };
+    if (tg && tg.showConfirm) { tg.showConfirm(ask, function (ok) { if (ok) { run(); } }); }
+    else if (window.confirm(ask)) { run(); }
   }
 
   function drawChat(data) {

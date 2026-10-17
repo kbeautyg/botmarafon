@@ -674,3 +674,30 @@ async def test_в_ленте_видно_шаги_воронки_а_не_толь
     assert u'Бот прислал запись первого дня' in строки
     assert u'Бот спросил: посмотрел первый день?' in строки
     assert u'Ответ на вопрос первого дня: Да' in строки
+
+
+# ------------------------------------------------------------------ «прислать ещё раз»
+
+async def test_прислать_день_ещё_раз_кнопкой_в_карточке(пульт):
+    u"""AleX 17.10.2026: «команду /resend упаковать в кнопочку» — у полученного
+    дня в карточке «↻ прислать ещё раз»; вперёд не досылает."""
+    for day in (1, 2, 3, 4):
+        db.put_content('day%d' % day, 'link', 'https://example.com/day%d' % day)
+    uid = 5844998243
+    db.remember_user(uid, None, u'Наталья')
+    db.mark_launched(uid)
+    for day in (1, 2, 3):
+        db.log_event(uid, 'day', str(day))
+
+    r = await пульт.post('/api/chat', json={'initData': подпись(), 'id': uid})
+    дни = {d['day']: d['can_resend'] for d in (await r.json())['card']['days']}
+    assert дни == {1: True, 2: True, 3: True, 4: False}, 'кнопка — только у полученных дней'
+
+    r = await пульт.post('/api/resend', json={'initData': подпись(), 'id': uid, 'day': 2})
+    assert r.status == 200 and (await r.json())['ok'] is True
+    assert any('/day2' in str(p) for k, c, p in пульт.bot.sent if c == uid)
+
+    r = await пульт.post('/api/resend', json={'initData': подпись(), 'id': uid, 'day': 4})
+    assert r.status == 409 and u'ещё не получал' in (await r.json())['error']
+    r = await пульт.post('/api/resend', json={'initData': подпись(ЧУЖОЙ), 'id': uid, 'day': 2})
+    assert r.status == 403, 'посторонним — нет'

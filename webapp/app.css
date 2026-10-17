@@ -624,3 +624,15 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .screen { transition: none; }
 }
+
+/* «↻ прислать ещё раз» у дня в карточке (17.10.2026) */
+.card__again {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.card__again:disabled { opacity: .5; cursor: default; }

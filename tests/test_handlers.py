@@ -452,11 +452,32 @@ async def test_дослать_одному_человеку_только_пол�
     assert any('/day2' in p for p in ей) and any('/day3' in p for p in ей)
     assert not any('/day4' in p for p in ей), 'четвёртого дня у неё ещё не было'
     assert u'Наталья — дослал: день 2, день 3' in message.answers[-1]
-    assert u'не досылаю день 4' in message.answers[-1]
+    assert u'день 4 — ещё не получал' in message.answers[-1]
 
     message = админ_сообщение(text='/resend 2 777777777', bot=bot)
     await admin.on_resend(message)
     assert u'нет в базе' in message.answers[-1]
+
+
+async def test_дослать_одному_может_команда_а_всем_только_админ(monkeypatch):
+    u"""AleX 17.10.2026: «написал, энтер бахнул, и ничего» — он в команде, а не в админах."""
+    monkeypatch.setattr(config, 'STATS_IDS', (350631550,))
+    bot = FakeBot()
+    db.put_content('day2', 'link', 'https://example.com/day2')
+    uid = 5844998243
+    db.remember_user(uid, None, u'Наталья')
+    db.mark_launched(uid)
+    db.log_event(uid, 'day', '2')
+    алекс = FakeUser(350631550, 'alex', u'AleX')
+
+    message = FakeMessage(text='/resend 2 %d' % uid, bot=bot, user=алекс)
+    assert admin.from_admin(message), 'роутер пропускает /resend от команды'
+    await admin.on_resend(message)
+    assert u'Наталья — дослал: день 2' in message.answers[-1]
+
+    message = FakeMessage(text=u'/resend 2 всем', bot=bot, user=алекс)
+    await admin.on_resend(message)
+    assert message.answers == [], '«всем» — только админам'
 
 
 def test_доставка_дня_по_очереди():
