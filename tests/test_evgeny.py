@@ -282,6 +282,49 @@ async def test_последняя_реплика_в_запросе_всегда_
         assert запрос[-1]['role'] == 'system', 'задание — в конце, как и было'
 
 
+async def test_включили_снова_там_где_уже_писал_продолжает_а_не_здоровается(monkeypatch):
+    u"""AleX 19.10.2026: после повторного включения Евгений поздравил и представился
+    посреди разговора — «ты не запоминаешь историю»."""
+    _человек(1)
+    db.save_message(1, 'out', 'text', u'Анна, приветствую! Это Евгений.', author=evgeny.EVGENY)
+    db.save_message(1, 'in', 'text', u'Первый день не посмотрел')
+    db.save_message(1, 'out', 'text', u'Понимаю, такое бывает.', author=evgeny.EVGENY)
+    bot = FakeBot()
+    фальшивый = ИИ(u'В первом дне — предназначение.')
+    monkeypatch.setattr(ai, 'complete', фальшивый)
+    evgeny.enable(bot, 1, SHARP)
+    await asyncio.sleep(0.2)
+    assert фальшивый.запросы[0][-1]['content'] == texts.EVGENY_CONTINUE_TASK
+
+
+async def test_не_посмотрел_день_евгений_присылает_запись_сам(monkeypatch):
+    u"""[DAY 1] — запись дня следом за словами Евгения; только полученный день."""
+    _человек(1)
+    db.put_content('day1', 'link', 'https://example.com/day1')
+    db.put_content('day3', 'link', 'https://example.com/day3')
+    db._run("INSERT INTO events (user_id, kind, ref, at) VALUES (1, 'day', '1', ?)", (time.time(),))
+    db.save_message(1, 'in', 'text', u'Первый день не посмотрел')
+    bot = FakeBot()
+    monkeypatch.setattr(ai, 'complete', ИИ(u'Пришлю запись первого дня ещё раз 👇\n[DAY 1]\n[DAY 3]'))
+    evgeny.enable(bot, 1, SHARP)
+    await asyncio.sleep(0.3)
+    человеку = [p for k, c, p in bot.sent if c == 1]
+    assert человеку[0] == u'Пришлю запись первого дня ещё раз 👇', 'тег из текста убран'
+    assert any('/day1' in str(p) for p in человеку), 'запись первого дня ушла следом'
+    assert not any('/day3' in str(p) for p in человеку), 'третьего дня у человека не было'
+
+    # тот же день второй раз подряд — не шлём (не чаще раза в DAY_RESEND_GAP)
+    monkeypatch.setattr(ai, 'complete', ИИ(u'Прислать запись ещё раз?\n[DAY 1]'))
+    db.save_message(1, 'in', 'text', u'А о чём первый день?')
+    await evgeny._turn(bot, 1, texts.EVGENY_REPLY_TASK)
+    assert sum('/day1' in str(p) for k, c, p in bot.sent if c == 1) == 1
+
+
+def test_в_фактах_есть_дни_марафона():
+    assert u'День 1 — ПРЕДНАЗНАЧЕНИЕ' in texts.EVGENY_FACTS and u'День 4 — ФИНАНСЫ' in texts.EVGENY_FACTS
+    assert u'[DAY N]' in texts.EVGENY_PROMPT and u'Никогда не проси напомнить' in texts.EVGENY_PROMPT
+
+
 async def test_включили_когда_человек_ждёт_ответа_евгений_отвечает(monkeypatch):
     _человек(1)
     db.save_message(1, 'in', 'text', u'Сколько стоит спортзал?')

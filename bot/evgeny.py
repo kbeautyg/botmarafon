@@ -40,6 +40,7 @@ log = logging.getLogger(__name__)
 EVGENY = -1                 # author в messages: написал Евгений, а не человек из команды
 DEBOUNCE = 25.0             # секунд ждём, не допишет ли человек ещё
 HISTORY = 40                # сколько последних сообщений переписки видит ИИ
+DAY_RESEND_GAP = 6 * 3600   # одну и ту же запись дня Евгений шлёт человеку не чаще
 TICK = 30                   # как часто проверять очередь и молчащих
 NUDGE_AFTER = 24 * 3600     # напоминание молчащему — через сутки
 MAX_NUDGES = 2
@@ -49,6 +50,8 @@ DAY_HOURS = (9, 21)         # писать первым — только с 9 д
 FACTS_KEY = 'evgeny:facts'
 
 _TAG = re.compile(r'\[(BUY|TEAM|STOP)\]([^\n\[]*)', re.I)
+# [DAY 1] — прислать запись дня ещё раз (AleX 19.10.2026: «первый день не посмотрел»)
+_DAY_TAG = re.compile(r'\[DAY\s*([1-4])\]', re.I)
 _KIND_NAMES = {'voice': u'голосовое сообщение', 'video_note': u'видео-кружок',
                'photo': u'фото', 'video': u'видео', 'audio': u'аудио', 'document': u'файл',
                'sticker': u'стикер', 'animation': u'гифка'}
@@ -193,7 +196,10 @@ def parse(raw: str) -> tuple[str, dict]:
     tags = {}
     for found in _TAG.finditer(raw or ''):
         tags[found.group(1).lower()] = found.group(2).strip(u' :—-')
-    text = _TAG.sub('', raw or '')
+    days = sorted({int(found.group(1)) for found in _DAY_TAG.finditer(raw or '')})
+    if days:
+        tags['day'] = days
+    text = _DAY_TAG.sub('', _TAG.sub('', raw or ''))
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text, tags
@@ -262,6 +268,21 @@ async def _turn(bot, user_id: int, task: str) -> bool:
         if not text:
             text = texts.EVGENY_FALLBACK if 'team' in tags else ''
         sent = bool(text) and await _say(bot, user_id, text, buy='buy' in tags)
+        for day in tags.get('day', ()):
+            # запись следом за словами Евгения; только уже полученный день (delivery.resend_day_to)
+            # и не чаще раза в DAY_RESEND_GAP: модель любит прислать ещё раз, переспрашивая «прислать?»
+            mark = 'evgeny:day:%d:%d' % (user_id, day)
+            last = db.get_content(mark)
+            if last and time.time() - float(last[1] or 0) < DAY_RESEND_GAP:
+                continue
+            try:
+                why = await delivery.resend_day_to(bot, user_id, day)
+            except Exception as err:               # не дослали — Евгений всё равно ответил
+                why = str(err) or err.__class__.__name__
+            if why:
+                log.warning(u'Евгений: запись дня %d человеку %s не ушла: %s', day, user_id, why)
+            else:
+                db.put_content(mark, 'ts', str(time.time()))
         if 'stop' in tags:
             disable(user_id, u'человек отказался')
             await _team(bot, user_id, texts.EVGENY_TEAM_STOP.format(who=_who(user_id)))
@@ -276,9 +297,15 @@ async def _open(bot, user_id: int) -> None:
     u"""Евгения включили из пульта: если человек ждёт ответа — отвечает,
     иначе начинает разговор сам."""
     try:
-        history = db.chat_history(user_id, 1)
-        waiting = bool(history) and history[-1]['side'] == 'in'
-        await _turn(bot, user_id, texts.EVGENY_REPLY_TASK if waiting else texts.EVGENY_OPEN_TASK)
+        history = db.chat_history(user_id, HISTORY)
+        if any(m.get('author') == EVGENY for m in history):
+            # уже писал — продолжает, а не здоровается заново (AleX 19.10.2026)
+            task = texts.EVGENY_CONTINUE_TASK
+        elif history and history[-1]['side'] == 'in':
+            task = texts.EVGENY_REPLY_TASK
+        else:
+            task = texts.EVGENY_OPEN_TASK
+        await _turn(bot, user_id, task)
     except Exception:
         log.exception(u'Евгений: не смог начать диалог с %s', user_id)
 
