@@ -38,6 +38,7 @@ def база(tmp_path, monkeypatch):
     monkeypatch.setattr(evgeny, 'OPEN_PER_MINUTE', 6000)      # без пауз между первыми сообщениями
     evgeny._waiting.clear()
     evgeny._locks.clear()
+    evgeny._voice_told.clear()
     yield
 
 

@@ -246,7 +246,7 @@ async def to_support(message: Message):
     db.remember_user(message.from_user.id, message.from_user.username,
                      message.from_user.first_name)
     chatlog.save(message, message.from_user.id, 'in', tg_id=message.message_id)
-    if evgeny.is_on(message.from_user.id):
+    if evgeny.listening(message.from_user.id):
         # Диалог ведёт Евгений: команда всё равно видит сообщение, а отвечает он —
         # без «Получили 🤝» (bot/evgeny.py).
         await _mirror(message, ai=True)

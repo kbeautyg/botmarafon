@@ -1254,16 +1254,21 @@ async def on_live_speed(message: Message):
 
 # ------------------------------------------------------------- Евгений (ИИ)
 
-def _evgeny_keys(found: int, active: int) -> InlineKeyboardMarkup | None:
+def _evgeny_keys(found: int, active: int) -> InlineKeyboardMarkup:
     rows = []
     if found:
         rows.append([InlineKeyboardButton(text=texts.EVGENY_GO.format(n=found), callback_data='ev:go')])
+    # координатор (06.11.2026) включён по умолчанию — кнопка выключить или включить снова
+    if evgeny.coach_enabled():
+        rows.append([InlineKeyboardButton(text=texts.EVGENY_COACH_OFF_BUTTON, callback_data='ev:coach:off')])
+    else:
+        rows.append([InlineKeyboardButton(text=texts.EVGENY_COACH_ON_BUTTON, callback_data='ev:coach:on')])
     if active:
         rows.append([InlineKeyboardButton(text=texts.EVGENY_STOP_ALL, callback_data='ev:stop')])
-    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _evgeny_status() -> tuple[str, InlineKeyboardMarkup | None]:
+def _evgeny_status() -> tuple[str, InlineKeyboardMarkup]:
     counts = db.evgeny_counts()
     found = len(evgeny.candidates())
     if not ai.ready():
@@ -1273,8 +1278,13 @@ def _evgeny_status() -> tuple[str, InlineKeyboardMarkup | None]:
         state = u'есть ключ, модель %s' % html.escape(config.AI_MODEL)
         if error:
             state += u' · ⚠️ последняя ошибка: %s' % html.escape(error)
+    if not evgeny.coach_enabled():
+        coach = texts.EVGENY_COACH_STATE_OFF
+    else:
+        coach = texts.EVGENY_COACH_STATE_ON if ai.ready() else texts.EVGENY_COACH_STATE_NO_KEY
     text = texts.EVGENY_STATUS.format(
-        ai=state, active=counts['active'], pending=counts['pending'], ever=counts['ever'],
+        ai=state, coach=coach, pay_min=evgeny.PAY_WAIT // 60, coach_active=counts['coach'],
+        active=counts['active'] - counts['coach'], pending=counts['pending'], ever=counts['ever'],
         found=found, per_min=evgeny.OPEN_PER_MINUTE, nudges=evgeny.MAX_NUDGES,
         sample=html.escape(evgeny.opener(u'Анна')))
     return text, _evgeny_keys(found if ai.ready() else 0, counts['active'])
@@ -1291,12 +1301,18 @@ async def on_evgeny(message: Message):
     await message.answer(text, reply_markup=keys)
 
 
-@router.callback_query(F.data.in_({'ev:go', 'ev:stop'}))
+@router.callback_query(F.data.in_({'ev:go', 'ev:stop', 'ev:coach:on', 'ev:coach:off'}))
 async def on_evgeny_button(call: CallbackQuery):
     if not config.is_team(call.from_user.id):
         await call.answer()
         return
-    if call.data == 'ev:go':
+    if call.data.startswith('ev:coach:'):
+        on = call.data == 'ev:coach:on'
+        evgeny.set_coach(on)
+        note = texts.EVGENY_COACH_NOW_ON if on else texts.EVGENY_COACH_NOW_OFF
+        if on and not ai.ready():
+            note += u'\n\n' + texts.EVGENY_NO_KEY
+    elif call.data == 'ev:go':
         if not ai.ready():
             await call.answer(u'Нет ключа ИИ', show_alert=True)
             return

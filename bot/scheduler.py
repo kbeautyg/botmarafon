@@ -13,7 +13,7 @@ import time
 
 from aiogram import Bot
 
-from . import config, db, delivery, funnel
+from . import config, db, delivery, evgeny, funnel
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +80,17 @@ def _plan_next(user_id: int, chain: str, pos: int, step: funnel.Step,
     following = funnel.next_after(chain, pos)
     if following:
         schedule(user_id, following[0], following[1], following[2], base=base)
+
+
+def _plan_evgeny(user_id: int, day: int) -> None:
+    u"""Сообщения Евгения-координатора после записи дня (funnel.EVGENY_AFTER_DAY):
+    знакомство после первой записи и вопрос об ощущениях тому, кто сам ответил
+    на вопрос под прошлым днём. Евгений выключен — не ставим ничего."""
+    if not evgeny.coach_on():
+        return
+    for chain, poll in funnel.EVGENY_AFTER_DAY.get(day, ()):
+        if poll is None or db.answered(user_id, poll):
+            start_chain(user_id, chain)
 
 
 def requeue_poll(user_id: int, poll: str) -> bool:
@@ -159,7 +170,10 @@ async def run_job(bot: Bot, job: dict) -> None:
     closed = _close_poll(job)
 
     try:
-        await delivery.perform(bot, job['user_id'], step)
+        if step.kind == 'evgeny':
+            await evgeny.coach(bot, job['user_id'], step.ref)
+        else:
+            await delivery.perform(bot, job['user_id'], step)
     except delivery.Gone:
         # Человек закрыл бота: снимаем всё, что ему было запланировано,
         # иначе очередь будет биться о него до конца воронки.
@@ -197,13 +211,21 @@ async def run_job(bot: Bot, job: dict) -> None:
     log.info(u'%s ← %s#%s (%s %s)', job['user_id'], job['chain'], job['pos'],
              step.kind, step.ref if step.ref is not None else '')
     _plan_next(job['user_id'], job['chain'], job['pos'], step, base=job['run_at'])
+    if step.kind == 'day':
+        try:
+            _plan_evgeny(job['user_id'], step.ref)
+        except Exception as err:            # Евгений — не повод рвать воронку
+            log.warning(u'не поставили сообщение Евгения после дня %s у %s: %s',
+                        step.ref, job['user_id'], err)
     # Для статистики — строго ПОСЛЕ планирования следующего шага: сбой записи
     # не должен оставить человека без марафона (ревью 11.09.2026). Кружки и
     # отзывы не пишем — их полтора десятка, о пути они ничего не говорят.
     if step.kind in ('day', 'poll', 'offer'):
         _for_stats(db.log_event, job['user_id'], step.kind, step.ref)
-    # дошло — значит, бот у человека открыт, даже если раньше он его закрывал
-    _for_stats(db.unblock, job['user_id'])
+    # дошло — значит, бот у человека открыт, даже если раньше он его закрывал.
+    # Шаг Евгения не в счёт: он молча пропускается и тем, кто бота закрыл.
+    if step.kind != 'evgeny':
+        _for_stats(db.unblock, job['user_id'])
 
 
 def _for_stats(write, *args) -> None:

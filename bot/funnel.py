@@ -20,6 +20,7 @@ MINUTE = 60
 #   day    — запись дня ref плюс текст под ней
 #   poll   — вопрос с кнопками «Да»/«Нет»; цепочка встаёт и ждёт ответа
 #   offer  — кнопки покупки
+#   evgeny — сообщение Евгения-координатора (bot/evgeny.coach), ref — какое
 Step = namedtuple('Step', ('kind', 'delay', 'ref'))
 Chain = namedtuple('Chain', ('steps', 'next'))
 
@@ -99,8 +100,35 @@ DAY_CHAINS = {
     4: ('day3_yes', 'day3_no'),
 }
 
-# Цепочки в порядке воронки — чтобы сравнивать «раньше/позже».
+# Цепочки в порядке воронки — чтобы сравнивать «раньше/позже». Цепочек
+# Евгения здесь нет: они идут рядом с воронкой и о месте человека в ней
+# ничего не говорят.
 ORDER = tuple(CHAINS)
+
+# Евгений — координатор марафона (заказчик 06.11.2026): через минуту после
+# записи первого дня знакомится, а тому, кто нажал «Да» или «Нет» под днём,
+# через минуту после следующей записи пишет — какие были ощущения по телу.
+# Под четвёртым днём кнопок нет: про него спрашивает через два часа, когда
+# запись (1 ч 44 мин) досмотрена. Свои цепочки, а не шаги внутри воронки:
+# сроки дней («ровно через 120 минут») от Евгения не сдвигаются.
+EVGENY_CHAINS = {
+    'evgeny_intro': Chain((Step('evgeny', MINUTE, 'intro'),), None),
+    'evgeny_day1': Chain((Step('evgeny', MINUTE, 'day1'),), None),
+    'evgeny_day2': Chain((Step('evgeny', MINUTE, 'day2'),), None),
+    'evgeny_day3': Chain((Step('evgeny', MINUTE, 'day3'),), None),
+    'evgeny_day4': Chain((Step('evgeny', 120 * MINUTE, 'day4'),), None),
+}
+CHAINS.update(EVGENY_CHAINS)
+
+# Что ставить после записи дня: цепочка Евгения и вопрос, на который человек
+# должен был ответить сам (None — без условия). Про первый день Евгений
+# спрашивает, когда пришёл второй, — то есть после нажатия под первым.
+EVGENY_AFTER_DAY = {
+    1: (('evgeny_intro', None),),
+    2: (('evgeny_day1', 'day1'),),
+    3: (('evgeny_day2', 'day2'),),
+    4: (('evgeny_day3', 'day3'), ('evgeny_day4', 'day3')),
+}
 
 
 def day_delivered(pending, day: int) -> bool:
@@ -111,7 +139,7 @@ def day_delivered(pending, day: int) -> bool:
     пройдена до конца, запись давно ушла.
     """
     last = max(ORDER.index(chain) for chain in DAY_CHAINS[day])
-    return all(ORDER.index(chain) > last for chain in pending if chain in CHAINS)
+    return all(ORDER.index(chain) > last for chain in pending if chain in ORDER)
 
 
 def step_at(chain: str, pos: int) -> Step | None:

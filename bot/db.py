@@ -216,7 +216,13 @@ CREATE TABLE IF NOT EXISTS evgeny (
   last_in    REAL,                        -- когда человек писал последний раз
   nudges     INTEGER NOT NULL DEFAULT 0,  -- сколько напоминаний молчащему
   stopped_at REAL,
-  reason     TEXT                         -- почему выключился
+  reason     TEXT,                        -- почему выключился
+  -- 06.11.2026: координатор марафона пишет каждому сам (bot/evgeny.coach).
+  mode       TEXT NOT NULL DEFAULT 'sales',  -- coach — ведёт марафон, sales — дожим
+  off_kind   TEXT,     -- почему выключен, для бота: team | refused | manual | gone | auto
+  pay_at     REAL,     -- когда сказали команде, что человек пишет про оплату
+  pay_due    REAL,     -- когда Евгений позовёт коллегу, если команда не ответит
+  pay_ask    TEXT      -- что именно спросил — для напоминания команде
 );
 '''
 
@@ -288,6 +294,24 @@ def connect(path: str) -> sqlite3.Connection:
     live_columns = [row[1] for row in _conn.execute('PRAGMA table_info(lives)')]
     if live_columns and 'targets' not in live_columns:
         _conn.execute('ALTER TABLE lives ADD COLUMN targets TEXT')
+    # 06.11.2026: Евгений-координатор и передача команде вопросов об оплате.
+    evgeny_columns = [row[1] for row in _conn.execute('PRAGMA table_info(evgeny)')]
+    for column, kind in (('mode', "TEXT NOT NULL DEFAULT 'sales'"), ('off_kind', 'TEXT'),
+                         ('pay_at', 'REAL'), ('pay_due', 'REAL'), ('pay_ask', 'TEXT')):
+        if evgeny_columns and column not in evgeny_columns:
+            try:
+                _conn.execute('ALTER TABLE evgeny ADD COLUMN %s %s' % (column, kind))
+            except sqlite3.OperationalError:     # колонку успел добавить соседний процесс выкладки
+                pass
+    # Выключенные до 06.11.2026 знают причину только словами: по ней — причину для
+    # бота, иначе координатор заговорил бы с тем, кто просил не писать (ревью 06.11).
+    _conn.execute(
+        "UPDATE evgeny SET off_kind = CASE "
+        "WHEN reason LIKE '%отказал%' THEN 'refused' "
+        "WHEN reason LIKE '%пульт%' OR reason LIKE '%выключили всех%' THEN 'manual' "
+        "WHEN reason LIKE '%ответил%' OR reason LIKE '%команд%' THEN 'team' "
+        "WHEN reason LIKE '%закрыл бота%' OR reason LIKE '%чёрном списке%' THEN 'gone' "
+        "ELSE 'auto' END WHERE active = 0 AND off_kind IS NULL")
     _conn.commit()
     return _conn
 
@@ -1508,20 +1532,32 @@ def evgeny_get(user_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def evgeny_on(user_id: int, by_id: int, pending: bool = False) -> None:
-    u"""Включить Евгения человеку. pending — первое сообщение ещё отправить."""
-    _run('INSERT INTO evgeny (user_id, active, since, by_id, pending, nudges) '
-         'VALUES (?, 1, ?, ?, ?, 0) '
+def evgeny_on(user_id: int, by_id: int, pending: bool = False, mode: str = 'sales') -> None:
+    u"""Включить Евгения человеку. pending — первое сообщение ещё отправить;
+    mode — coach (ведёт марафон) или sales (дожим до спортзала)."""
+    _run('INSERT INTO evgeny (user_id, active, since, by_id, pending, nudges, mode) '
+         'VALUES (?, 1, ?, ?, ?, 0, ?) '
          'ON CONFLICT(user_id) DO UPDATE SET active=1, since=excluded.since, '
          'by_id=excluded.by_id, pending=excluded.pending, nudges=0, '
-         'stopped_at=NULL, reason=NULL',
-         (user_id, time.time(), by_id, 1 if pending else 0))
+         'stopped_at=NULL, reason=NULL, off_kind=NULL, mode=excluded.mode',
+         (user_id, time.time(), by_id, 1 if pending else 0, mode))
 
 
-def evgeny_off(user_id: int, reason: str) -> bool:
-    u"""Выключить. False — и так не вёл диалог."""
-    cur = _run('UPDATE evgeny SET active=0, pending=0, stopped_at=?, reason=? '
-               'WHERE user_id=? AND active=1', (time.time(), reason[:200], user_id))
+def evgeny_coach_on(user_id: int) -> None:
+    u"""Координатор заговорил с человеком — дальше на его ответы отвечает он.
+    Режим не трогаем: кого команда уже отдала в дожим, тот в дожиме и остаётся."""
+    _run("INSERT INTO evgeny (user_id, active, since, by_id, pending, nudges, mode) "
+         "VALUES (?, 1, ?, 0, 0, 0, 'coach') "
+         'ON CONFLICT(user_id) DO UPDATE SET active=1, pending=0, stopped_at=NULL, '
+         'reason=NULL, off_kind=NULL', (user_id, time.time()))
+
+
+def evgeny_off(user_id: int, reason: str, kind: str = 'auto') -> bool:
+    u"""Выключить. False — и так не вёл диалог. kind — причина для бота
+    (team, refused, manual, gone, auto): координатор снова заговорит только
+    там, где замолчал не по просьбе человека и не по решению команды."""
+    cur = _run('UPDATE evgeny SET active=0, pending=0, stopped_at=?, reason=?, off_kind=? '
+               'WHERE user_id=? AND active=1', (time.time(), reason[:200], kind, user_id))
     return cur.rowcount > 0
 
 
@@ -1546,9 +1582,11 @@ def evgeny_pending(limit: int) -> list[int]:
 
 
 def evgeny_silent(before: float, max_nudges: int, limit: int) -> list[dict]:
-    u"""Кому пора напомнить: последним писал Евгений, и было это до before."""
+    u"""Кому пора напомнить: последним писал Евгений, и было это до before.
+    Только дожим: координатору напоминают сами дни марафона."""
     rows = _conn.execute(
-        'SELECT * FROM evgeny WHERE active=1 AND pending=0 AND last_out IS NOT NULL '
+        "SELECT * FROM evgeny WHERE active=1 AND pending=0 AND mode != 'coach' "
+        'AND last_out IS NOT NULL '
         'AND last_out <= ? AND (last_in IS NULL OR last_in < last_out) AND nudges < ? '
         'ORDER BY last_out LIMIT ?', (before, max_nudges, limit)).fetchall()
     return [dict(r) for r in rows]
@@ -1561,14 +1599,65 @@ def evgeny_nudged(user_id: int) -> None:
 def evgeny_counts() -> dict[str, int]:
     one = lambda sql: _conn.execute(sql).fetchone()[0]
     return {'active': one('SELECT COUNT(*) FROM evgeny WHERE active=1'),
+            'coach': one("SELECT COUNT(*) FROM evgeny WHERE active=1 AND mode='coach'"),
             'pending': one('SELECT COUNT(*) FROM evgeny WHERE active=1 AND pending=1'),
             'ever': one('SELECT COUNT(*) FROM evgeny')}
 
 
 def evgeny_off_all(reason: str) -> int:
-    cur = _run('UPDATE evgeny SET active=0, pending=0, stopped_at=?, reason=? WHERE active=1',
-               (time.time(), reason[:200]))
+    u"""Выключить всех. Дожим — насовсем (manual), а координатора — до того, как
+    команда включит его снова: тогда он продолжит вести тех же людей."""
+    cur = _run("UPDATE evgeny SET active=0, pending=0, stopped_at=?, reason=?, "
+               "off_kind = CASE WHEN mode = 'coach' THEN 'auto' ELSE 'manual' END "
+               'WHERE active=1', (time.time(), reason[:200]))
     return cur.rowcount
+
+
+# Оплата (06.11.2026): человек пишет про деньги — команде уведомление; не
+# ответит за несколько минут — Евгений зовёт коллегу (bot/evgeny.py).
+
+def evgeny_pay(user_id: int, due: float | None, ask: str) -> None:
+    u"""Команде сказали про оплату сейчас; due — когда звать коллегу (None — не звать)."""
+    _run('UPDATE evgeny SET pay_at=?, pay_due=?, pay_ask=? WHERE user_id=?',
+         (time.time(), due, (ask or '')[:300], user_id))
+
+
+def evgeny_pay_due(now: float, limit: int) -> list[dict]:
+    rows = _conn.execute('SELECT * FROM evgeny WHERE pay_due IS NOT NULL AND pay_due <= ? '
+                         'ORDER BY pay_due LIMIT ?', (now, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def evgeny_pay_done(user_id: int) -> None:
+    u"""Коллегу позвали — ждать больше нечего; сам вопрос ещё за командой."""
+    _run('UPDATE evgeny SET pay_due=NULL WHERE user_id=?', (user_id,))
+
+
+def evgeny_pay_clear(user_id: int) -> None:
+    u"""Команда написала человеку — вопрос об оплате закрыт."""
+    _run('UPDATE evgeny SET pay_at=NULL, pay_due=NULL, pay_ask=NULL WHERE user_id=?', (user_id,))
+
+
+def team_wrote_since(user_id: int, since: float) -> bool:
+    u"""Писал ли человеку кто-то из команды сам (не рассылка, не бот, не Евгений)."""
+    return _conn.execute(
+        "SELECT 1 FROM messages WHERE user_id=? AND side='out' AND mass=0 AND gone=0 "
+        'AND author IS NOT NULL AND author > 0 AND at >= ? LIMIT 1',
+        (user_id, since)).fetchone() is not None
+
+
+def wrote_as(user_id: int, author: int) -> bool:
+    u"""Писал ли этот автор человеку хоть раз (Евгений — author = -1)."""
+    return _conn.execute('SELECT 1 FROM messages WHERE user_id=? AND author=? LIMIT 1',
+                         (user_id, author)).fetchone() is not None
+
+
+def feedback_days(user_id: int) -> set[int]:
+    u"""После каких дней человек рассказал Евгению об ощущениях — в этом прогоне
+    марафона: «пройти заново» стирает шаги вместе с отметками."""
+    rows = _conn.execute("SELECT DISTINCT ref FROM events WHERE user_id=? AND kind='feedback'",
+                         (user_id,)).fetchall()
+    return {int(r['ref']) for r in rows if str(r['ref']).isdigit()}
 
 
 def evgeny_candidates(day4_before: float) -> list[dict]:
@@ -1578,8 +1667,11 @@ def evgeny_candidates(day4_before: float) -> list[dict]:
     марафона не сделал». Прошёл — дошёл до четвёртого дня и с тех пор прошло
     72 часа (записи закрыты, баннер с кнопкой был). Ничего не сделал — ни
     разу не нажал «купить» (и «ДА» на акцию — это тоже нажатие), бот не
-    закрыт, не в чёрном списке, в очереди ничего не ждёт. Кому Евгений уже
-    писал — второй раз не берём. Команду отсеивает вызывающий (config).
+    закрыт, не в чёрном списке, в очереди ничего не ждёт. Кого Евгений уже
+    дожимал — второй раз не берём; с кем он только вёл марафон координатором
+    (06.11.2026), того берём, если человек не просил не писать, команда не
+    выключала Евгения сама и не вела разговор с человеком (например, про
+    оплату). Команду отсеивает вызывающий (config).
     """
     rows = _conn.execute(
         'SELECT u.* FROM users u '
@@ -1588,7 +1680,8 @@ def evgeny_candidates(day4_before: float) -> list[dict]:
         'AND u.blocked_at IS NULL AND NOT ' + ACTIVE_BAN + ' '
         'AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = u.user_id) '
         'AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.user_id = u.user_id) '
-        'AND NOT EXISTS (SELECT 1 FROM evgeny g WHERE g.user_id = u.user_id) '
+        'AND NOT EXISTS (SELECT 1 FROM evgeny g WHERE g.user_id = u.user_id '
+        "                AND (g.mode != 'coach' OR g.off_kind IN ('refused', 'manual', 'team'))) "
         'ORDER BY u.user_id', (day4_before,)).fetchall()
     return [dict(r) for r in rows]
 

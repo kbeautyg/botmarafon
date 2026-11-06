@@ -216,7 +216,8 @@ def model(snap: dict | None = None) -> dict:
             people[b['user_id']]['buys'].append(b)
     for j in snap['jobs']:
         p = people.get(j['user_id'])
-        if p:
+        # сообщения Евгения идут рядом с воронкой — о месте человека в ней не говорят
+        if p and j['chain'] in funnel.ORDER:
             p['pending'].add(j['chain'])
             if p['next'] is None or j['run_at'] < p['next']['run_at']:
                 p['next'] = j

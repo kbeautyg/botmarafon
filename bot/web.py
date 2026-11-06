@@ -1118,7 +1118,8 @@ async def api_ai(request, user):
         if wrong:
             return web.json_response({'error': u'Евгения не включить: ' + wrong}, status=409)
     else:
-        evgeny.disable(user_id, u'выключил(а) в пульте %s' % (user.get('first_name') or ''))
+        evgeny.disable(user_id, u'выключил(а) в пульте %s' % (user.get('first_name') or ''),
+                       'manual')
     return web.json_response({'ai': evgeny.is_on(user_id)})
 
 

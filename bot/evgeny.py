@@ -24,6 +24,19 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 - Массовый дожим: первое сообщение — готовый текст (texts.EVGENY_OPENERS),
   по OPEN_PER_MINUTE в минуту и только днём; очередь в базе переживает
   перезапуск бота.
+
+Координатор марафона (заказчик 06.11.2026): Евгений ведёт каждого с первого
+дня, сам, без кнопки в пульте.
+- Его сообщения по сценарию — шаги воронки evgeny (funnel.EVGENY_CHAINS):
+  знакомство через минуту после записи первого дня; нажавшему «Да» или «Нет»
+  под днём — через минуту после следующей записи вопрос, что он чувствовал.
+  Рассказал об ощущениях сам (тег [FEEDBACK N]) — про этот день не спрашивает;
+  рассказывал после прошлого дня — «так же жду обратную связь».
+- Отвечает по «мозгам» заказчика (texts.EVGENY_SENSES): сторона тела — линия
+  рода, что значат тяжесть, жар, мысли, картинки.
+- Об оплате не говорит: тег [PAY] — команде уведомление с кнопкой в пульт;
+  не напишет никто за PAY_WAIT — Евгений зовёт коллегу и напоминает команде.
+- Без ключа ИИ или выключенный командой (/евгений) — молчит весь.
 """
 import asyncio
 import html
@@ -48,16 +61,29 @@ OPEN_PER_MINUTE = 20        # массовый дожим: первых сооб
 DAY4_WAIT = 72 * 3600       # «после марафона»: с 4-го дня прошло 72 часа (записи закрыты)
 DAY_HOURS = (9, 21)         # писать первым — только с 9 до 21 по Москве
 FACTS_KEY = 'evgeny:facts'
+COACH_KEY = 'evgeny:coach'  # 'off' — координатора выключила команда (/евгений)
+PAY_WAIT = 5 * 60           # столько ждём, что про оплату человеку напишет команда
+PAY_EPISODE = 3 * 3600      # то же оплатное дело: команде второй раз не пишем
+TEAM_QUIET = 6 * 3600       # команда недавно писала человеку — координатор не встревает
+# Так выключенного Евгения координатор сам не включает: человек просил не писать,
+# команда выключила вручную.
+HOLD = ('refused', 'manual')
 
-_TAG = re.compile(r'\[(BUY|TEAM|STOP)\]([^\n\[]*)', re.I)
+_TAG = re.compile(r'\[(BUY|TEAM|STOP|PAY)\]([^\n\[]*)', re.I)
 # [DAY 1] — прислать запись дня ещё раз (AleX 19.10.2026: «первый день не посмотрел»)
 _DAY_TAG = re.compile(r'\[DAY\s*([1-4])\]', re.I)
+# [FEEDBACK 2] — человек рассказал, что чувствовал после второго дня
+_FEEDBACK_TAG = re.compile(r'\[FEEDBACK\s*([1-4])\]', re.I)
 _KIND_NAMES = {'voice': u'голосовое сообщение', 'video_note': u'видео-кружок',
                'photo': u'фото', 'video': u'видео', 'audio': u'аудио', 'document': u'файл',
                'sticker': u'стикер', 'animation': u'гифка'}
 
+VOICE_GAP = 10 * 60         # просьба «напиши текстом» — не чаще раза в 10 минут
+
 _waiting: dict[int, asyncio.Task] = {}
 _locks: dict[int, asyncio.Lock] = {}
+_voice_told: dict[int, float] = {}
+_replies: set[asyncio.Task] = set()
 
 
 # ------------------------------------------------------------------ факты
@@ -77,6 +103,22 @@ def set_facts(text: str | None) -> None:
 def is_on(user_id: int) -> bool:
     row = db.evgeny_get(user_id)
     return bool(row and row['active'])
+
+
+def _mode(user_id: int) -> str:
+    u"""coach — ведёт марафон, sales — дожим до спортзала."""
+    return (db.evgeny_get(user_id) or {}).get('mode') or 'sales'
+
+
+def listening(user_id: int) -> bool:
+    u"""Отвечает ли Евгений человеку прямо сейчас. Нет ключа ИИ или команда
+    выключила координатора — сообщения идут команде обычным путем, с «Получили 🤝»
+    (ревью 06.11.2026: иначе человек оставался без ответа вовсе)."""
+    row = db.evgeny_get(user_id)
+    if not (row and row['active']) or not ai.ready():
+        return False
+    # включила команда кнопкой 🤖 (by_id — кто) — её решение, а не сценарий
+    return row.get('mode') != 'coach' or bool(row.get('by_id')) or coach_enabled()
 
 
 def daytime(now: float | None = None) -> bool:
@@ -101,29 +143,35 @@ def why_not(user_id: int) -> str:
 
 
 def enable(bot, user_id: int, by_id: int) -> str:
-    u"""Включить Евгения из пульта: он сразу пишет. Возвращает причину отказа."""
+    u"""Включить Евгения из пульта: он сразу пишет. Возвращает причину отказа.
+    Кто марафон ещё не прошёл — тому он координатор, прошедшему — дожим."""
     wrong = why_not(user_id)
     if wrong:
         return wrong
-    db.evgeny_on(user_id, by_id)
+    db.evgeny_on(user_id, by_id, mode='sales' if db.passed_marathon(user_id) else 'coach')
     asyncio.create_task(_open(bot, user_id))
     log.info(u'Евгений включён у %s (включил %s)', user_id, by_id)
     return ''
 
 
-def disable(user_id: int, reason: str) -> bool:
+def disable(user_id: int, reason: str, kind: str = 'auto') -> bool:
+    u"""kind — почему, для бота (db.evgeny_off): после refused и manual
+    координатор сам больше не заговорит."""
     task = _waiting.pop(user_id, None)
     if task is not None and not task.done():
         task.cancel()
-    done = db.evgeny_off(user_id, reason)
+    done = db.evgeny_off(user_id, reason, kind)
     if done:
         log.info(u'Евгений выключен у %s: %s', user_id, reason)
     return done
 
 
 def team_wrote(user_id: int, who: str = u'') -> bool:
-    u"""Команда ответила человеку сама — Евгений в этом диалоге замолкает."""
-    return disable(user_id, u'ответил(а) сам(а) %s' % who if who else u'команда ответила сама')
+    u"""Команда ответила человеку сама — Евгений в этом диалоге замолкает,
+    а вопрос об оплате, если был, закрыт: звать коллегу уже не нужно."""
+    db.evgeny_pay_clear(user_id)
+    return disable(user_id, u'ответил(а) сам(а) %s' % who if who else u'команда ответила сама',
+                   'team')
 
 
 # ------------------------------------------------------------------ разговор
@@ -160,7 +208,26 @@ def _card(user_id: int) -> str:
         lines.append(u'Марафон ещё не пройден до конца: ' + (
             u'получил записи дней %s.' % u', '.join(str(d) for d in days) if days
             else u'записи дней ещё не приходили.'))
+    told = sorted(db.feedback_days(user_id))
+    lines.append(u'Обратную связь по ощущениям уже давал после дней: %s.'
+                 % u', '.join(str(d) for d in told) if told
+                 else u'Обратной связи по ощущениям пока не давал.')
     return u'\n'.join(lines)
+
+
+def _brief(user_id: int) -> str:
+    u"""Кто это — одной строкой для команды: откуда пришёл и докуда дошёл."""
+    person = db.get_user(user_id) or {}
+    days = sorted(db.days_of(user_id))
+    answers = db.answers_of(user_id)
+    said = [u'после %s-го — %s' % (poll[3:], u'Да' if got[0] == 'yes' else u'Нет')
+            for poll, got in sorted(answers.items()) if poll.startswith('day')]
+    parts = [u'Пришёл: %s' % stats.source_label(person),
+             u'марафон: ' + (u'дни %s' % u', '.join(str(d) for d in days) if days
+                             else u'записи дней ещё не приходили')]
+    if said:
+        parts.append(u'ответы: ' + u', '.join(said))
+    return u' · '.join(parts)
 
 
 def _history(user_id: int) -> list[dict]:
@@ -177,7 +244,9 @@ def _history(user_id: int) -> list[dict]:
 
 
 def _request(user_id: int, task: str) -> list[dict]:
-    system = (texts.EVGENY_PROMPT + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts()
+    role = texts.EVGENY_COACH_TASK if _mode(user_id) == 'coach' else texts.EVGENY_SALES_TASK
+    system = (texts.EVGENY_PROMPT + u'\n\n' + role + u'\n\n' + texts.EVGENY_SENSES
+              + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts()
               + u'\n\nЧТО ИЗВЕСТНО О ЧЕЛОВЕКЕ\n' + _card(user_id))
     messages = [{'role': 'system', 'content': system}] + _history(user_id)
     if len(messages) == 1:              # переписки нет: шлюзу нужна хоть одна реплика
@@ -192,14 +261,16 @@ def _request(user_id: int, task: str) -> list[dict]:
 
 
 def parse(raw: str) -> tuple[str, dict]:
-    u"""Текст без тегов и сами теги: {'buy': '', 'team': 'вопрос', 'stop': ''}."""
+    u"""Текст без тегов и сами теги: {'buy': '', 'team': 'вопрос', 'stop': '',
+    'pay': 'суть', 'day': [1], 'feedback': [2]}."""
     tags = {}
     for found in _TAG.finditer(raw or ''):
         tags[found.group(1).lower()] = found.group(2).strip(u' :—-')
-    days = sorted({int(found.group(1)) for found in _DAY_TAG.finditer(raw or '')})
-    if days:
-        tags['day'] = days
-    text = _DAY_TAG.sub('', _TAG.sub('', raw or ''))
+    for name, tag in (('day', _DAY_TAG), ('feedback', _FEEDBACK_TAG)):
+        days = sorted({int(found.group(1)) for found in tag.finditer(raw or '')})
+        if days:
+            tags[name] = days
+    text = _FEEDBACK_TAG.sub('', _DAY_TAG.sub('', _TAG.sub('', raw or '')))
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
     return text, tags
@@ -209,27 +280,42 @@ def _typing_seconds(text: str) -> float:
     return min(8.0, max(2.0, len(text) / 18.0))
 
 
-async def _say(bot, user_id: int, text: str, *, buy: bool = False, mass: bool = False) -> bool:
-    u"""Отправить человеку от имени бота и записать в переписку как сообщение Евгения."""
+async def _say(bot, user_id: int, text: str, *, buy: bool = False, mass: bool = False,
+               typing: bool = True, strict: bool = False) -> bool:
+    u"""Отправить человеку от имени бота и записать в переписку как сообщение Евгения.
+
+    typing — сначала «печатает…»: пауза в несколько секунд. Шагу воронки она не
+    годится — планировщик идёт по очереди, и пауза задержала бы всех.
+    strict — сбой не глотать: шаг воронки повторит планировщик, как любой другой.
+    """
     keys = keyboards.finish('evgeny') if buy else None
     try:
-        try:
-            await bot.send_chat_action(user_id, 'typing')
-            await asyncio.sleep(_typing_seconds(text))
-        except Exception:               # «печатает…» — украшение, не повод молчать
-            pass
+        if typing:
+            try:
+                await bot.send_chat_action(user_id, 'typing')
+                await asyncio.sleep(_typing_seconds(text))
+            except Exception:           # «печатает…» — украшение, не повод молчать
+                pass
         sent = await delivery._guard(bot.send_message(user_id, text, parse_mode=None,
                                                       reply_markup=keys))
     except delivery.Gone:
         db.mark_blocked(user_id)
-        disable(user_id, u'человек закрыл бота')
+        disable(user_id, u'человек закрыл бота', 'gone')
+        if strict:
+            raise
         return False
     except Exception as err:
         log.warning(u'Евгений не смог написать %s: %s', user_id, err)
+        if strict:
+            raise
         return False
-    db.save_message(user_id, 'out', 'text', text, None, author=EVGENY,
-                    tg_id=getattr(sent, 'message_id', None), mass=mass)
-    db.evgeny_touch(user_id, 'out')
+    # Ушло — значит, ушло: сбой записи не повод слать второй раз (повтор шага).
+    try:
+        db.save_message(user_id, 'out', 'text', text, None, author=EVGENY,
+                        tg_id=getattr(sent, 'message_id', None), mass=mass)
+        db.evgeny_touch(user_id, 'out')
+    except Exception as err:
+        log.warning(u'Евгений: не записали в переписку %s: %s', user_id, err)
     return True
 
 
@@ -255,7 +341,7 @@ async def _turn(bot, user_id: int, task: str) -> bool:
     u"""Спросить ИИ и ответить человеку. True — что-то отправили."""
     lock = _locks.setdefault(user_id, asyncio.Lock())
     async with lock:
-        if not is_on(user_id):
+        if not listening(user_id):
             return False
         try:
             raw = await ai.complete(_request(user_id, task))
@@ -264,10 +350,23 @@ async def _turn(bot, user_id: int, task: str) -> bool:
             await _team(bot, user_id, u'🤖 <b>Евгений не смог ответить</b>\n%s\n%s\n%s' % (
                 _who(user_id), html.escape(str(err)), texts.REPLY_HINT))
             return False
+        if not listening(user_id):
+            # пока ИИ думал, человеку ответила команда — второй ответ следом не нужен
+            return False
         text, tags = parse(raw)
+        coach_mode = _mode(user_id) == 'coach'
+        # координатор кнопку покупки не даёт: об оплате за него говорит команда
+        buy = 'buy' in tags and not coach_mode
+        if coach_mode and 'pay' in tags:
+            text = without_money(text)
         if not text:
-            text = texts.EVGENY_FALLBACK if 'team' in tags else ''
-        sent = bool(text) and await _say(bot, user_id, text, buy='buy' in tags)
+            text = texts.EVGENY_FALLBACK if 'team' in tags and 'pay' not in tags else ''
+        sent = bool(text) and await _say(bot, user_id, text, buy=buy)
+        for day in tags.get('feedback', ()):
+            try:
+                db.log_event(user_id, 'feedback', str(day))
+            except Exception as err:            # отметка — не повод молчать
+                log.warning(u'Евгений: не отметили обратную связь %s у %s: %s', day, user_id, err)
         for day in tags.get('day', ()):
             # запись следом за словами Евгения; только уже полученный день (delivery.resend_day_to)
             # и не чаще раза в DAY_RESEND_GAP: модель любит прислать ещё раз, переспрашивая «прислать?»
@@ -283,14 +382,172 @@ async def _turn(bot, user_id: int, task: str) -> bool:
                 log.warning(u'Евгений: запись дня %d человеку %s не ушла: %s', day, user_id, why)
             else:
                 db.put_content(mark, 'ts', str(time.time()))
+        if 'pay' in tags:
+            await _pay(bot, user_id, tags['pay'], wait=not buy)
         if 'stop' in tags:
-            disable(user_id, u'человек отказался')
+            disable(user_id, u'человек отказался', 'refused')
             await _team(bot, user_id, texts.EVGENY_TEAM_STOP.format(who=_who(user_id)))
-        elif 'team' in tags:
-            disable(user_id, u'позвал команду')
+        elif 'team' in tags and 'pay' not in tags:
+            disable(user_id, u'позвал команду', 'team')
             await _team(bot, user_id, texts.EVGENY_TEAM_ASK.format(
                 who=_who(user_id), ask=html.escape(tags['team'] or u'нужен человек из команды')))
         return sent
+
+
+# ------------------------------------------------------------------ оплата
+
+# Фраза об оплате в ответе координатора. Модель (gpt-4.1-mini, 06.11.2026) и
+# с запретом в задаче называла цену и обещала «уточнить у команды», а про оплату
+# заказчик решил: говорит команда, не дождался — Евгений зовёт коллегу.
+_MONEY = re.compile(u'оплат|плат[её]ж|рассроч|₽|\\bруб|стоимост|\\bцен[аеуыо]|\\d\\s?\\d{3}|'
+                    u'команд|коллег', re.I)
+_SENTENCE = re.compile(u'(?<=[.!?…])\\s+')
+
+
+def without_money(text: str) -> str:
+    u"""Ответ координатора без фраз об оплате и «передам команде»: про оплату
+    за него скажет команда или, не дождавшись её, он сам — «позову коллегу».
+    Остался один вопрос («что ещё почувствовал?») — не шлём и его: на вопрос
+    о цене такой ответ звучит как уход от ответа."""
+    kept = [s for s in _SENTENCE.split(text or '') if s.strip() and not _MONEY.search(s)]
+    if all(s.rstrip().endswith('?') for s in kept):
+        return ''
+    return u' '.join(kept).strip()
+
+
+def _master(text: str | None) -> bool:
+    u"""Речь о записи к мастеру на диагностику, а не об оплате спортзала."""
+    return u'диагност' in (text or '').lower()
+
+
+def _last_in(user_id: int) -> str:
+    u"""Последнее, что человек написал, — команде видно, о чём речь."""
+    for m in reversed(db.chat_history(user_id, 20)):
+        if m['side'] == 'in' and (m.get('text') or '').strip():
+            return m['text'].strip()
+    return ''
+
+
+async def _pay(bot, user_id: int, ask: str, *, wait: bool) -> None:
+    u"""Человек пишет про оплату (заказчик 06.11.2026): команде — кто это, что
+    спросил, и кнопка «ответить в пульте». wait — Евгений про оплату промолчал:
+    не напишет команда за PAY_WAIT — он позовёт коллегу (tick → _pay_waits)."""
+    row = db.evgeny_get(user_id) or {}
+    if (row.get('pay_at') and time.time() - row['pay_at'] < PAY_EPISODE
+            and not db.team_wrote_since(user_id, row['pay_at'])):
+        return                          # команда уже знает и ещё не ответила — не дублируем
+    said = _last_in(user_id)
+    # суть — до первой точки: модель, бывает, дописывает после тега вопрос человеку
+    ask = re.split(u'(?<=[.!?])\\s', (ask or '').strip())[0].rstrip(u'.').strip()
+    # суть модель иногда не пишет — запись к мастеру узнаём и по словам человека
+    master = _master(ask) or _master(said)
+    ask = ask or (texts.EVGENY_PAY_ASK_MASTER if master else texts.EVGENY_PAY_ASK)
+    db.evgeny_pay(user_id, time.time() + PAY_WAIT if wait else None, ask)
+    await _team(bot, user_id, texts.EVGENY_TEAM_PAY.format(
+        title=texts.EVGENY_PAY_TITLE_MASTER if master else texts.EVGENY_PAY_TITLE,
+        who=_who(user_id), card=html.escape(_brief(user_id)), ask=html.escape(ask),
+        said=texts.EVGENY_PAY_SAID.format(text=html.escape(said[:300])) if said else u'',
+        next=(texts.EVGENY_PAY_WAIT_NOTE.format(minutes=PAY_WAIT // 60) if wait
+              else texts.EVGENY_PAY_BUY_NOTE)))
+
+
+async def _pay_waits(bot, now: float) -> int:
+    u"""Про оплату за PAY_WAIT из команды никто не написал: Евгений говорит
+    человеку, что зовёт коллегу, и в диалоге замолкает, а команде — «срочно»."""
+    done = 0
+    for row in db.evgeny_pay_due(now, 20):
+        user_id = row['user_id']
+        db.evgeny_pay_done(user_id)
+        if db.team_wrote_since(user_id, row['pay_at'] or 0):
+            continue
+        state = texts.EVGENY_PAY_LATE_OFF
+        colleague = (texts.EVGENY_PAY_COLLEAGUE_MASTER if _master(row.get('pay_ask'))
+                     else texts.EVGENY_PAY_COLLEAGUE)
+        if row['active'] and await _say(bot, user_id, colleague, typing=False):
+            disable(user_id, u'позвал коллегу про оплату', 'team')
+            state = texts.EVGENY_PAY_LATE_CALLED
+        await _team(bot, user_id, texts.EVGENY_TEAM_PAY_LATE.format(
+            who=_who(user_id), ask=html.escape(row.get('pay_ask') or u'пишет про оплату'),
+            minutes=max(1, int((now - (row['pay_at'] or now)) // 60)), state=state))
+        done += 1
+    return done
+
+
+# ------------------------------------------------------------------ координатор марафона
+
+def coach_enabled() -> bool:
+    u"""Команда координатора не выключала (/евгений)."""
+    stored = db.get_content(COACH_KEY)
+    return not (stored and stored[1] == 'off')
+
+
+def coach_on() -> bool:
+    u"""Координатор работает: включён и есть ключ ИИ — без ИИ отвечать некому."""
+    return ai.ready() and coach_enabled()
+
+
+def set_coach(on: bool) -> None:
+    db.put_content(COACH_KEY, 'evgeny', 'on' if on else 'off')
+    log.info(u'Евгений-координатор %s', u'включён' if on else u'выключен')
+
+
+def coach_text(user_id: int, ref: str) -> str:
+    u"""Что написать по сценарию (ref — intro, day1…day4). Пусто — писать нечего:
+    уже знакомились или об ощущениях этого дня человек рассказал сам."""
+    wrote = db.wrote_as(user_id, EVGENY)
+    if ref == 'intro':
+        return '' if wrote else texts.EVGENY_COACH_INTRO
+    day = int(ref[3:])
+    told = db.feedback_days(user_id)
+    if day in told:
+        return ''
+    before = [d for d in told if d < day]
+    if before:
+        text = texts.EVGENY_COACH_AGAIN.format(after=texts.EVGENY_COACH_AFTER[max(before)],
+                                               sphere=texts.EVGENY_COACH_SPHERE[day])
+    else:
+        text = texts.EVGENY_COACH_ASK.format(day=texts.EVGENY_COACH_DAY[day])
+    return text if wrote else texts.EVGENY_COACH_HELLO + text
+
+
+def _coach_may(user_id: int) -> bool:
+    u"""Можно ли координатору писать: бот не закрыт, человек не в чёрном списке,
+    не просил не писать, и команда не выключала ему Евгения сама."""
+    person = db.get_user(user_id)
+    if not person or person.get('blocked_at') or db.is_banned(user_id):
+        return False
+    row = db.evgeny_get(user_id)
+    return not row or bool(row['active']) or row.get('off_kind') not in HOLD
+
+
+def _listen(user_id: int) -> None:
+    u"""Координатор спросил — он и ответит. Команде не отвечает (её сообщения
+    боту — команды), а где команда сама недавно писала человеку, в разговор не
+    встревает: ответ человека увидит она."""
+    row = db.evgeny_get(user_id)
+    if config.is_team(user_id) or (row and row['active']):
+        return
+    if row and row.get('mode') != 'coach':
+        return                      # дожим команда завершила сама — координатор его не оживляет
+    if db.team_wrote_since(user_id, time.time() - TEAM_QUIET):
+        return
+    db.evgeny_coach_on(user_id)
+
+
+async def coach(bot, user_id: int, ref: str) -> None:
+    u"""Сообщение координатора по сценарию — шаг воронки evgeny.
+
+    Сбой отправки — исключением, как у любого шага: планировщик повторит, а
+    закрывшего бота снимет с марафона. Команде по сценарию тоже пишет — так
+    прогон /test показывает и Евгения, — но отвечает ей не он (_listen)."""
+    if not coach_on() or not _coach_may(user_id):
+        log.info(u'Евгений-координатор: %s для %s пропущено (выключен, нет ключа ИИ или '
+                 u'человеку писать нельзя)', ref, user_id)
+        return
+    text = coach_text(user_id, ref)
+    if text and await _say(bot, user_id, text, typing=False, strict=True):
+        _listen(user_id)
+        log.info(u'Евгений-координатор → %s: %s', user_id, ref)
 
 
 async def _open(bot, user_id: int) -> None:
@@ -315,11 +572,17 @@ def heard(bot, message) -> bool:
     ответит (сообщение уже в переписке и у команды). Голосовое ИИ не
     услышит — просим написать текстом."""
     user_id = message.from_user.id
-    if not is_on(user_id):
+    if not listening(user_id):
         return False
     db.evgeny_touch(user_id, 'in')
     if getattr(message, 'voice', None) or getattr(message, 'video_note', None):
-        asyncio.create_task(_say(bot, user_id, texts.EVGENY_VOICE))
+        # на серию голосовых — одна просьба, а не по одной на каждое
+        if time.time() - _voice_told.get(user_id, 0) > VOICE_GAP:
+            _voice_told[user_id] = time.time()
+            voice = texts.EVGENY_VOICE_TY if _mode(user_id) == 'coach' else texts.EVGENY_VOICE
+            task = asyncio.create_task(_say(bot, user_id, voice))
+            _replies.add(task)                  # ссылка — чтобы задачу не собрал сборщик
+            task.add_done_callback(_replies.discard)
         return True
     if not (message.text or message.caption):
         return True                     # стикер или файл без слов — увидит команда
@@ -336,8 +599,9 @@ async def _later(bot, user_id: int) -> None:
     except asyncio.CancelledError:
         return
     _waiting.pop(user_id, None)
+    task = texts.EVGENY_COACH_REPLY_TASK if _mode(user_id) == 'coach' else texts.EVGENY_REPLY_TASK
     try:
-        await _turn(bot, user_id, texts.EVGENY_REPLY_TASK)
+        await _turn(bot, user_id, task)
     except Exception:
         log.exception(u'Евгений: ответ %s упал', user_id)
 
@@ -359,9 +623,11 @@ def push(by_id: int) -> int:
 
 
 def stop_all(reason: str) -> int:
+    u"""Выключить Евгения у всех — и координатора: «у всех» значит и у новых."""
     for task in list(_waiting.values()):
         task.cancel()
     _waiting.clear()
+    set_coach(False)
     return db.evgeny_off_all(reason)
 
 
@@ -369,10 +635,15 @@ async def _openers(bot, limit: int) -> int:
     done = 0
     for user_id in db.evgeny_pending(limit):
         if why_not(user_id):
-            disable(user_id, why_not(user_id))
+            disable(user_id, why_not(user_id), 'gone')
             continue
         person = db.get_user(user_id) or {}
-        if await _say(bot, user_id, opener(person.get('first_name') or ''), mass=True):
+        if db.wrote_as(user_id, EVGENY):
+            # вёл его марафон координатором — продолжает тот разговор, а не здоровается
+            sent = await _turn(bot, user_id, texts.EVGENY_PUSH_TASK)
+        else:
+            sent = await _say(bot, user_id, opener(person.get('first_name') or ''), mass=True)
+        if sent:
             done += 1
         else:
             db.evgeny_off(user_id, u'первое сообщение не ушло')
@@ -385,7 +656,7 @@ async def _nudges(bot, limit: int) -> int:
     for row in db.evgeny_silent(time.time() - NUDGE_AFTER, MAX_NUDGES, limit):
         user_id = row['user_id']
         if why_not(user_id):
-            disable(user_id, why_not(user_id))
+            disable(user_id, why_not(user_id), 'gone')
             continue
         if await _turn(bot, user_id, texts.EVGENY_NUDGE_TASK.format(n=row['nudges'] + 1)):
             db.evgeny_nudged(user_id)
@@ -404,13 +675,24 @@ async def tick(bot, now: float | None = None) -> None:
     await _nudges(bot, 5)
 
 
-async def loop(bot) -> None:
-    log.info(u'Евгений: цикл дожима запущен')
+async def pay_tick(bot, now: float | None = None) -> int:
+    u"""Про оплату — как только вышел срок, в любое время суток."""
+    return await _pay_waits(bot, now or time.time())
+
+
+async def _every(name: str, step, bot) -> None:
     while True:
         try:
-            await tick(bot)
+            await step(bot)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception(u'Евгений: проход упал')
+            log.exception(u'Евгений: проход «%s» упал', name)
         await asyncio.sleep(TICK)
+
+
+async def loop(bot) -> None:
+    u"""Два цикла рядом: оплата не ждёт, пока уйдут первые сообщения дожима
+    (ревью 06.11.2026: обещанные 5 минут иначе растягивались на 6–8)."""
+    log.info(u'Евгений: циклы дожима и оплаты запущены')
+    await asyncio.gather(_every(u'дожим', tick, bot), _every(u'оплата', pay_tick, bot))

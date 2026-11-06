@@ -33,7 +33,7 @@ from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 
-from .. import (config, contact, db, delivery, keyboards, launch_report, scheduler,
+from .. import (config, contact, db, delivery, funnel, keyboards, launch_report, scheduler,
                 stats, texts)
 
 log = logging.getLogger(__name__)
@@ -136,7 +136,8 @@ def _repeat_start_text(user_id: int) -> str:
     вопрос приходит заново: ответ продолжит марафон с того же места, а
     «пройти заново» стёрло бы весь путь. Иначе честно: новых дней нет.
     """
-    if user_id in _launching or db.pending_chains(user_id):
+    # сообщение Евгения в очереди — не марафон: оно идёт рядом с воронкой
+    if user_id in _launching or db.pending_chains(user_id) & set(funnel.ORDER):
         return texts.ALREADY_RUNNING
     poll = (db.get_user(user_id) or {}).get('poll')
     if poll and scheduler.requeue_poll(user_id, poll):
