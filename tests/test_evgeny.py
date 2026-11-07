@@ -39,6 +39,8 @@ def база(tmp_path, monkeypatch):
     evgeny._waiting.clear()
     evgeny._locks.clear()
     evgeny._voice_told.clear()
+    # с 07.11.2026 участникам Евгений пишет, только когда команда его запустила
+    evgeny.set_coach(True)
     yield
 
 

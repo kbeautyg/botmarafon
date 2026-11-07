@@ -180,13 +180,34 @@ def menu(chat_id: int | None = None) -> InlineKeyboardMarkup:
                  InlineKeyboardButton(text=texts.MENU_BAN, callback_data='mn:ban')])
     rows.append([InlineKeyboardButton(text=texts.MENU_LINKS, callback_data='mn:links'),
                  InlineKeyboardButton(text=texts.MENU_CHATS, callback_data='mn:chats')])
+    # Sharp 07.11.2026: Евгения сначала проверяет команда — на себе
+    rows.append([InlineKeyboardButton(text=texts.EVGENY_TRY_BUTTON, callback_data='mn:evgeny')])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def evgeny_try() -> InlineKeyboardMarkup:
+    u"""Под сообщением о проверке Евгения: спросить про день, как спрашивают
+    участника, начать заново и закончить."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=texts.EVGENY_TRY_DAY.format(n=n), callback_data='ev:t:%d' % n)
+         for n in (1, 2, 3, 4)],
+        [InlineKeyboardButton(text=texts.EVGENY_TRY_RESTART, callback_data='ev:try'),
+         InlineKeyboardButton(text=texts.EVGENY_TRY_END, callback_data='ev:t:end')]])
+
+
+def panel_for(user_id: int) -> InlineKeyboardMarkup | None:
+    u"""Одна кнопка «ответить в пульте» на диалог с человеком — под уведомлением
+    проверки Евгения: там чёрный список ни к чему, человек — сам проверяющий."""
+    button = panel_button(user_id)
+    return InlineKeyboardMarkup(inline_keyboard=[[button]]) if button else None
+
+
 def team_keys() -> ReplyKeyboardMarkup:
-    u"""Кнопка «Меню» под полем ввода у своих — чтобы не искать команду."""
+    u"""Кнопки под полем ввода у своих — «Меню», чтобы не искать команду, и
+    проверка Евгения (Sharp 07.11.2026: «там всегда будет кнопка»)."""
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=texts.MENU_BUTTON)]],
+        keyboard=[[KeyboardButton(text=texts.MENU_BUTTON),
+                   KeyboardButton(text=texts.EVGENY_TRY_BUTTON)]],
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder=u'Ник и текст — уйдёт человеку от имени бота')

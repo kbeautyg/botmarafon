@@ -42,6 +42,8 @@ def база(tmp_path, monkeypatch):
     evgeny._voice_told.clear()
     for day in (1, 2, 3, 4):
         db.put_content('day%d' % day, 'link', 'https://example.com/day%d' % day)
+    # с 07.11.2026 участникам координатор пишет, только когда его включила команда
+    evgeny.set_coach(True)
     yield
 
 
@@ -303,13 +305,22 @@ async def test_команда_недавно_писала_вопрос_уход�
     assert not evgeny.is_on(1), 'но в разговор команды Евгений не встревает'
 
 
-async def test_команде_по_сценарию_пишет_но_не_отвечает():
-    u"""Прогон /test: команда видит сообщения Евгения, а её ответы — команды боту."""
+async def test_команде_по_сценарию_пишет_и_отвечает_это_проверка(monkeypatch):
+    u"""Прогон /test — проверка Евгения (Sharp 07.11.2026): своему он пишет по сценарию
+    и отвечает, даже когда участникам координатор выключен; команде не дублирует."""
     bot = FakeBot()
+    evgeny.set_coach(False)
     db.remember_user(ALEX, 'alex', u'AleX')
     await _шаг(bot, ALEX, 'evgeny_intro')
     assert _человеку(bot, ALEX) == [texts.EVGENY_COACH_INTRO]
-    assert not evgeny.is_on(ALEX)
+    assert evgeny.listening(ALEX)
+    monkeypatch.setattr(ai, 'complete', ИИ(u'Тепло — это энергия пошла 🙏'))
+    ответ = FakeMessage(text=u'Было тепло в руках', user=FakeUser(ALEX), bot=bot)
+    await support.to_support(ответ)
+    await asyncio.sleep(0.2)
+    assert u'Тепло — это энергия пошла 🙏' in _человеку(bot, ALEX)
+    assert ответ.answers == [], 'не «это сообщение от команды»'
+    assert not [c for k, c, p in bot.sent if c in (SHARP, PAVEL)], 'остальной команде не дублируем'
 
 
 async def test_закрыл_бота_снимаем_как_любой_шаг():

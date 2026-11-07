@@ -37,6 +37,14 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 - Об оплате не говорит: тег [PAY] — команде уведомление с кнопкой в пульт;
   не напишет никто за PAY_WAIT — Евгений зовёт коллегу и напоминает команде.
 - Без ключа ИИ или выключенный командой (/евгений) — молчит весь.
+
+Проверка командой (Sharp 07.11.2026: «не запускай пока… нужно протестить
+Евгения администрации… сейчас убери, чтобы клиенты с ним не общались»).
+Участникам Евгений — и координатор, и дожим по кнопке 🤖 — пишет, только когда
+команда его запустила (/евгений); до того — никому. Своим (config.is_team) —
+всегда: кнопка «🤖 Проверить
+Евгения» стирает прошлый разговор, Евгений знакомится заново и отвечает, как
+участнику. Что получила бы команда, видит только проверяющий.
 """
 import asyncio
 import html
@@ -61,7 +69,9 @@ OPEN_PER_MINUTE = 20        # массовый дожим: первых сооб
 DAY4_WAIT = 72 * 3600       # «после марафона»: с 4-го дня прошло 72 часа (записи закрыты)
 DAY_HOURS = (9, 21)         # писать первым — только с 9 до 21 по Москве
 FACTS_KEY = 'evgeny:facts'
-COACH_KEY = 'evgeny:coach'  # 'off' — координатора выключила команда (/евгений)
+COACH_KEY = 'evgeny:coach'  # 'on' — команда включила координатора участникам (/евгений)
+TRY_KEY = 'evgeny:try:%d'   # проверка командой: про какой день Евгений спросил своего (0 — знакомство)
+TRY_IDLE = 24 * 3600        # проверку забросили на сутки — свой снова пишет боту как команда
 PAY_WAIT = 5 * 60           # столько ждём, что про оплату человеку напишет команда
 PAY_EPISODE = 3 * 3600      # то же оплатное дело: команде второй раз не пишем
 TEAM_QUIET = 6 * 3600       # команда недавно писала человеку — координатор не встревает
@@ -117,8 +127,11 @@ def listening(user_id: int) -> bool:
     row = db.evgeny_get(user_id)
     if not (row and row['active']) or not ai.ready():
         return False
-    # включила команда кнопкой 🤖 (by_id — кто) — её решение, а не сценарий
-    return row.get('mode') != 'coach' or bool(row.get('by_id')) or coach_enabled()
+    if config.is_team(user_id):
+        return testing(user_id)     # свои говорят с Евгением только в проверке
+    # участникам — только когда команда запустила Евгения (/евгений): и координатору,
+    # и дожиму по кнопке 🤖 (Sharp 07.11.2026: «клиенты с ним не общались»)
+    return coach_enabled()
 
 
 def daytime(now: float | None = None) -> bool:
@@ -144,7 +157,10 @@ def why_not(user_id: int) -> str:
 
 def enable(bot, user_id: int, by_id: int) -> str:
     u"""Включить Евгения из пульта: он сразу пишет. Возвращает причину отказа.
-    Кто марафон ещё не прошёл — тому он координатор, прошедшему — дожим."""
+    Кто марафон ещё не прошёл — тому он координатор, прошедшему — дожим.
+    Пока команда не запустила Евгения участникам, не включается никому."""
+    if not coach_enabled() and not config.is_team(user_id):
+        return texts.EVGENY_NOT_LAUNCHED
     wrong = why_not(user_id)
     if wrong:
         return wrong
@@ -189,7 +205,7 @@ def opener(name: str, rng=random) -> str:
 def _card(user_id: int) -> str:
     u"""Что известно о человеке — ИИ знает, с кем говорит."""
     person = db.get_user(user_id) or {}
-    answers = db.answers_of(user_id)
+    days, answers, passed = _progress(user_id)
     lines = [u'Имя: %s' % (person.get('first_name') or u'не указано'),
              u'Откуда пришёл: %s' % stats.source_label(person)]
     said = []
@@ -199,12 +215,11 @@ def _card(user_id: int) -> str:
             said.append(u'после %d-го дня — «%s»' % (day, u'Да' if got[0] == 'yes' else u'Нет'))
     if said:
         lines.append(u'Ответы в марафоне на вопрос «получилось ли»: ' + u', '.join(said))
-    if db.passed_marathon(user_id):
+    if passed:
         lines.append(u'Марафон пройден до конца (дошёл до 4-го дня).')
     else:
         # Евгения включают из пульта кому угодно — и тем, кто ещё на 1–3 дне
         # (12.10.2026: «а вдруг человеку ещё не всё пришло»)
-        days = sorted(db.days_of(user_id))
         lines.append(u'Марафон ещё не пройден до конца: ' + (
             u'получил записи дней %s.' % u', '.join(str(d) for d in days) if days
             else u'записи дней ещё не приходили.'))
@@ -218,8 +233,7 @@ def _card(user_id: int) -> str:
 def _brief(user_id: int) -> str:
     u"""Кто это — одной строкой для команды: откуда пришёл и докуда дошёл."""
     person = db.get_user(user_id) or {}
-    days = sorted(db.days_of(user_id))
-    answers = db.answers_of(user_id)
+    days, answers, _passed = _progress(user_id)
     said = [u'после %s-го — %s' % (poll[3:], u'Да' if got[0] == 'yes' else u'Нет')
             for poll, got in sorted(answers.items()) if poll.startswith('day')]
     parts = [u'Пришёл: %s' % stats.source_label(person),
@@ -328,7 +342,18 @@ def _who(user_id: int) -> str:
 
 
 async def _team(bot, user_id: int, text: str) -> None:
-    u"""Сообщение команде о человеке; реплай на него — ответ человеку."""
+    u"""Сообщение команде о человеке; реплай на него — ответ человеку.
+    Человек — свой, который проверяет Евгения: уведомление только ему, без
+    чёрного списка — остальной команде его проверка не нужна."""
+    if config.is_team(user_id):
+        # без привязки для реплая: ответ на эту пометку — ответ Евгению (support._relay),
+        # а не «команда ответила сама», после которого Евгений замолкает
+        try:
+            await delivery.note(bot, user_id, texts.EVGENY_TRY_TEAM + text,
+                                keyboards.panel_for(user_id))
+        except Exception as err:
+            log.warning(u'Евгений: проверяющему %s не ушло: %s', user_id, err)
+        return
     chats = (((config.SUPPORT_CHAT_ID,) if config.SUPPORT_CHAT_ID else ())
              + config.purchase_recipients())
     for chat in dict.fromkeys(chats):
@@ -371,6 +396,10 @@ async def _turn(bot, user_id: int, task: str) -> bool:
             except Exception as err:            # отметка — не повод молчать
                 log.warning(u'Евгений: не отметили обратную связь %s у %s: %s', day, user_id, err)
         for day in tags.get('day', ()):
+            if config.is_team(user_id):
+                # проверка: записей дней у своего нет — говорим, что участнику пришло бы
+                await _try_note(bot, user_id, texts.EVGENY_TRY_DAY_NOTE.format(day=day))
+                continue
             # запись следом за словами Евгения; только уже полученный день (delivery.resend_day_to)
             # и не чаще раза в DAY_RESEND_GAP: модель любит прислать ещё раз, переспрашивая «прислать?»
             mark = 'evgeny:day:%d:%d' % (user_id, day)
@@ -466,7 +495,9 @@ async def _pay_waits(bot, now: float) -> int:
         state = texts.EVGENY_PAY_LATE_OFF
         colleague = (texts.EVGENY_PAY_COLLEAGUE_MASTER if _master(row.get('pay_ask'))
                      else texts.EVGENY_PAY_COLLEAGUE)
-        if row['active'] and await _say(bot, user_id, colleague, typing=False):
+        # Евгений говорит, только если ещё ведёт диалог (и участникам он запущен);
+        # команде «срочно» — в любом случае: человек про оплату ждёт ответа
+        if listening(user_id) and await _say(bot, user_id, colleague, typing=False):
             disable(user_id, u'позвал коллегу про оплату', 'team')
             state = texts.EVGENY_PAY_LATE_CALLED
         await _team(bot, user_id, texts.EVGENY_TEAM_PAY_LATE.format(
@@ -479,14 +510,21 @@ async def _pay_waits(bot, now: float) -> int:
 # ------------------------------------------------------------------ координатор марафона
 
 def coach_enabled() -> bool:
-    u"""Команда координатора не выключала (/евгений)."""
+    u"""Команда включила координатора участникам (/евгений). Не включала — выключен:
+    Sharp 07.11.2026 — сначала команда проверяет Евгения на себе, потом запускает."""
     stored = db.get_content(COACH_KEY)
-    return not (stored and stored[1] == 'off')
+    return bool(stored and stored[1] == 'on')
 
 
 def coach_on() -> bool:
-    u"""Координатор работает: включён и есть ключ ИИ — без ИИ отвечать некому."""
+    u"""Координатор работает у участников: включён и есть ключ ИИ — без ИИ отвечать некому."""
     return ai.ready() and coach_enabled()
+
+
+def coach_for(user_id: int) -> bool:
+    u"""Пишет ли координатор этому человеку по сценарию: участнику — когда его
+    включила команда, своему — всегда: так команда проверяет Евгения (/test)."""
+    return ai.ready() and (coach_enabled() or config.is_team(user_id))
 
 
 def set_coach(on: bool) -> None:
@@ -524,11 +562,15 @@ def _coach_may(user_id: int) -> bool:
 
 
 def _listen(user_id: int) -> None:
-    u"""Координатор спросил — он и ответит. Команде не отвечает (её сообщения
-    боту — команды), а где команда сама недавно писала человеку, в разговор не
-    встревает: ответ человека увидит она."""
+    u"""Координатор спросил — он и ответит. Где команда сама недавно писала
+    человеку, в разговор не встревает: ответ человека увидит она. Своему в
+    прогоне /test отвечает всегда — это проверка (try_start)."""
+    if config.is_team(user_id):
+        if not testing(user_id):
+            db.evgeny_on(user_id, user_id, mode='coach')
+        return
     row = db.evgeny_get(user_id)
-    if config.is_team(user_id) or (row and row['active']):
+    if row and row['active']:
         return
     if row and row.get('mode') != 'coach':
         return                      # дожим команда завершила сама — координатор его не оживляет
@@ -541,9 +583,9 @@ async def coach(bot, user_id: int, ref: str) -> None:
     u"""Сообщение координатора по сценарию — шаг воронки evgeny.
 
     Сбой отправки — исключением, как у любого шага: планировщик повторит, а
-    закрывшего бота снимет с марафона. Команде по сценарию тоже пишет — так
-    прогон /test показывает и Евгения, — но отвечает ей не он (_listen)."""
-    if not coach_on() or not _coach_may(user_id):
+    закрывшего бота снимет с марафона. Участникам — только когда координатора
+    включила команда; своим — всегда: прогон /test показывает и Евгения."""
+    if not coach_for(user_id) or not _coach_may(user_id):
         log.info(u'Евгений-координатор: %s для %s пропущено (выключен, нет ключа ИИ или '
                  u'человеку писать нельзя)', ref, user_id)
         return
@@ -551,6 +593,119 @@ async def coach(bot, user_id: int, ref: str) -> None:
     if text and await _say(bot, user_id, text, typing=False, strict=True):
         _listen(user_id)
         log.info(u'Евгений-координатор → %s: %s', user_id, ref)
+
+
+# ------------------------------------------------------------------ проверка командой
+
+def testing(user_id: int) -> bool:
+    u"""Свой проверяет Евгения: разговор включён и не заброшен дольше TRY_IDLE."""
+    if not config.is_team(user_id):
+        return False
+    row = db.evgeny_get(user_id)
+    if not (row and row['active']):
+        return False
+    last = max(row.get('since') or 0, row.get('last_in') or 0, row.get('last_out') or 0)
+    return time.time() - last < TRY_IDLE
+
+
+def _stage(user_id: int) -> int | None:
+    u"""Про какой день Евгений спросил своего в проверке (0 — только познакомился).
+    None — не проверка кнопкой: участник или свой в прогоне /test."""
+    if not config.is_team(user_id):
+        return None
+    stored = db.get_content(TRY_KEY % user_id)
+    value = (stored[1] if stored else '') or ''
+    return int(value) if value.isdigit() else None
+
+
+def _progress(user_id: int) -> tuple[list[int], dict, bool]:
+    u"""Полученные дни, ответы под днями и пройден ли марафон — для карточки ИИ.
+    У своего в проверке — как у участника в ту минуту, когда Евгений пишет ему
+    по сценарию: знакомство — после первой записи, вопрос про день N — после
+    записи N+1 тому, кто под днём N нажал «Да» (funnel.EVGENY_AFTER_DAY)."""
+    stage = _stage(user_id)
+    if stage is None:
+        return sorted(db.days_of(user_id)), db.answers_of(user_id), db.passed_marathon(user_id)
+    days = list(range(1, min(stage + 1, 4) + 1))
+    answers = {'day%d' % d: ('yes', None) for d in range(1, min(stage, 3) + 1)}
+    return days, answers, stage >= 3
+
+
+async def _try_note(bot, user_id: int, text: str) -> None:
+    u"""Пометка проверяющему от бота — не реплика Евгения, в переписку не пишем."""
+    try:
+        await bot.send_message(user_id, text)
+    except Exception as err:
+        log.warning(u'Евгений: пометка проверки %s не ушла: %s', user_id, err)
+
+
+def _forget(user_id: int) -> None:
+    u"""Стереть разговор с Евгением — только своему: переписку участника не трогаем."""
+    if not config.is_team(user_id):
+        return
+    task = _waiting.pop(user_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+    _voice_told.pop(user_id, None)
+    db.evgeny_forget(user_id)
+
+
+async def try_start(user_id: int, username: str | None, first_name: str | None) -> str:
+    u"""Кнопка «🤖 Проверить Евгения»: Евгений начинает со своим заново — как с
+    участником, которому только что пришёл первый день. Прошлая проверка
+    стирается. Возвращает, почему нельзя (пусто — можно).
+
+    Под тем же замком, что и ответ ИИ (_turn): ответ, который Евгений уже
+    готовит, уходит до стирания, а не после нового знакомства."""
+    if not config.is_team(user_id):
+        return texts.EVGENY_TRY_TEAM_ONLY
+    if not ai.ready():
+        return texts.EVGENY_NO_KEY
+    async with _locks.setdefault(user_id, asyncio.Lock()):
+        db.remember_user(user_id, username, first_name)
+        _forget(user_id)
+        db.put_content(TRY_KEY % user_id, 'evgeny', '0')
+        db.evgeny_on(user_id, user_id, mode='coach')
+    log.info(u'Евгений: проверка командой — %s начал(а) заново', user_id)
+    return ''
+
+
+async def try_intro(bot, user_id: int) -> bool:
+    u"""Первое сообщение проверки — то же знакомство, что получает участник."""
+    return await _say(bot, user_id, coach_text(user_id, 'intro') or texts.EVGENY_COACH_INTRO)
+
+
+async def try_day(bot, user_id: int, day: int) -> str:
+    u"""Кнопка «N-й день»: свой как будто посмотрел день и нажал «Да» — Евгений
+    спрашивает про ощущения теми же словами, что участника, и так же молчит,
+    если об этом дне уже рассказали. Пусто — спросил, иначе — почему нет."""
+    if _stage(user_id) is None:
+        return texts.EVGENY_TRY_NOT_STARTED
+    if not ai.ready():
+        return texts.EVGENY_NO_KEY
+    if not _coach_may(user_id):
+        return texts.EVGENY_TRY_HELD
+    db.put_content(TRY_KEY % user_id, 'evgeny', str(day))
+    text = coach_text(user_id, 'day%d' % day)
+    if not text:
+        return texts.EVGENY_TRY_TOLD.format(day=day)
+    if not await _say(bot, user_id, text, typing=False):
+        return texts.EVGENY_TRY_FAILED
+    _listen(user_id)
+    return ''
+
+
+def try_end(user_id: int) -> None:
+    u"""Закончить проверку: свой снова пишет боту как команда, а не участник."""
+    db.put_content(TRY_KEY % user_id, 'evgeny', '')
+    disable(user_id, u'проверка закончена', 'manual')
+
+
+def try_reset(user_id: int) -> None:
+    u"""Прогон /test начинается заново — и разговор с Евгением: знакомство придёт снова."""
+    if config.is_team(user_id):
+        _forget(user_id)
+        db.put_content(TRY_KEY % user_id, 'evgeny', '')
 
 
 async def _open(bot, user_id: int) -> None:
@@ -671,8 +826,8 @@ async def _nudges(bot, limit: int) -> int:
 
 async def tick(bot, now: float | None = None) -> None:
     u"""Один проход: первые сообщения из очереди и напоминания молчащим —
-    только днём и только когда есть ключ ИИ."""
-    if not ai.ready() or not daytime(now):
+    только днём, только когда есть ключ ИИ и Евгений запущен участникам."""
+    if not ai.ready() or not coach_enabled() or not daytime(now):
         return
     await _openers(bot, max(1, int(OPEN_PER_MINUTE * TICK / 60)))
     await _nudges(bot, 5)

@@ -1604,6 +1604,19 @@ def evgeny_counts() -> dict[str, int]:
             'ever': one('SELECT COUNT(*) FROM evgeny')}
 
 
+def evgeny_forget(user_id: int) -> None:
+    u"""Евгений начинает с человеком заново: стереть переписку человека с ботом,
+    его отметки обратной связи, досылки дней и состояние Евгения.
+
+    Только для проверки командой (evgeny.try_start, /test): у своих в переписке
+    с ботом — лишь их же проверки. Переписку участника не стираем никогда —
+    вызывающий проверяет, что человек из команды."""
+    _run('DELETE FROM messages WHERE user_id=?', (user_id,))
+    _run("DELETE FROM events WHERE user_id=? AND kind='feedback'", (user_id,))
+    _run('DELETE FROM evgeny WHERE user_id=?', (user_id,))
+    _run('DELETE FROM content WHERE key LIKE ?', ('evgeny:day:%d:%%' % user_id,))
+
+
 def evgeny_off_all(reason: str) -> int:
     u"""Выключить всех. Дожим — насовсем (manual), а координатора — до того, как
     команда включит его снова: тогда он продолжит вести тех же людей."""

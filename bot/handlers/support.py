@@ -48,6 +48,12 @@ def _team_reply(message: Message) -> bool:
 async def _relay(message: Message) -> None:
     u"""Реплай команды — человеку, к чьему сообщению или уведомлению он привязан."""
     user_id = db.care_target(message.chat.id, message.reply_to_message.message_id)
+    if (user_id in (None, 0, message.from_user.id) and message.chat.type == 'private'
+            and evgeny.listening(message.from_user.id)):
+        # свой проверяет Евгения и ответил реплаем на его сообщение или на пометку
+        # проверки о себе самом — это ответ Евгению, а не человеку от команды
+        await _to_evgeny(message)
+        return
     if not user_id:
         await message.reply(u'Не понял, кому это. Отвечайте реплаем на сообщение человека, '
                             u'на уведомление о нём или на его заявку — по ним бот и находит, '
@@ -220,6 +226,13 @@ async def _mirror(message: Message, ai: bool = False) -> int:
     return delivered
 
 
+async def _to_evgeny(message: Message) -> None:
+    u"""Свой проверяет Евгения (кнопка «🤖 Проверить Евгения»): сообщение —
+    Евгению, как от участника. Остальной команде его не дублируем."""
+    chatlog.save(message, message.from_user.id, 'in', tg_id=message.message_id)
+    evgeny.heard(message.bot, message)
+
+
 @router.message(F.chat.type == 'private', F.text.regexp(r'^/\w'))
 async def on_stray_command(message: Message):
     u"""Команда от того, кому она не открыта, — не вопрос в заботу.
@@ -240,6 +253,9 @@ async def to_support(message: Message):
     реплаем, людям ничего не отправляет — подсказываем, как ответить.
     """
     if config.is_team(message.from_user.id):
+        if evgeny.listening(message.from_user.id):
+            await _to_evgeny(message)
+            return
         await message.answer(texts.TEAM_HINT)
         return
 

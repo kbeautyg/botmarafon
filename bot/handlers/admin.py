@@ -56,6 +56,12 @@ STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'евгений', 'evgeny', 'евгений_факты', 'evgeny_facts', 'resend')
 
 
+#: Кнопки под полем ввода у своих (keyboards.team_keys). Это не команды, а
+#: текст, и 07.11.2026 выяснилось: «🧰 Меню» у Павла и AleX не открывалось —
+#: фильтр роутера пропускал текст только от админов, и кнопка уходила в заботу.
+TEAM_BUTTONS = (texts.MENU_BUTTON, texts.EVGENY_TRY_BUTTON)
+
+
 def _command(message: Message) -> str:
     u"""Имя команды без слэша и без @бота: «/stats@finish_marafon_bot 5» → stats."""
     text = (message.text or '').strip()
@@ -85,6 +91,8 @@ def from_admin(message: Message) -> bool:
     if _is_admin(message.from_user.id):
         return True
     if _command(message) in STATS_COMMANDS and _can_stats(message):
+        return True
+    if (message.text or '') in TEAM_BUTTONS and config.is_team(message.from_user.id):
         return True
     # Начатый разговор: команда дала /рассылка или открыла эфир, и следующее
     # сообщение — то, что рассылать, или дата эфира. Оно не команда, и без
@@ -442,6 +450,8 @@ async def on_menu_button_pressed(call: CallbackQuery):
                                   reply_markup=keyboards.panel_only(call.message.chat.id))
     elif what == 'stuck':
         await _stuck_preview(call.message)
+    elif what == 'evgeny':
+        await evgeny_try(call.bot, call.message, call.from_user)
     elif what == 'ban':
         await call.message.answer(insights.render('bl', 'all') + texts.MENU_BAN_HINT)
     elif what in ('links', 'chats'):
@@ -1232,6 +1242,7 @@ async def on_test(message: Message):
     # и «тестовый» прогон растянется на семь с половиной часов.
     db.remember_user(user_id, message.from_user.username, message.from_user.first_name)
     db.reset_funnel(user_id)
+    evgeny.try_reset(user_id)            # и Евгений знакомится заново, а не молчит
     db.set_speed(user_id, TEST_SPEED)
     db.mark_launched(user_id)
     scheduler.start_chain(user_id, 'launch')
@@ -1255,7 +1266,7 @@ async def on_live_speed(message: Message):
 # ------------------------------------------------------------- Евгений (ИИ)
 
 def _evgeny_keys(found: int, active: int) -> InlineKeyboardMarkup:
-    rows = []
+    rows = [[InlineKeyboardButton(text=texts.EVGENY_TRY_BUTTON, callback_data='ev:try')]]
     if found:
         rows.append([InlineKeyboardButton(text=texts.EVGENY_GO.format(n=found), callback_data='ev:go')])
     # координатор (06.11.2026) включён по умолчанию — кнопка выключить или включить снова
@@ -1282,12 +1293,17 @@ def _evgeny_status() -> tuple[str, InlineKeyboardMarkup]:
         coach = texts.EVGENY_COACH_STATE_OFF
     else:
         coach = texts.EVGENY_COACH_STATE_ON if ai.ready() else texts.EVGENY_COACH_STATE_NO_KEY
+    # свои в проверке — тоже «координатор», но участников это не касается
+    testing = len([u for u in db.evgeny_active_ids() if evgeny.testing(u)])
     text = texts.EVGENY_STATUS.format(
-        ai=state, coach=coach, pay_min=evgeny.PAY_WAIT // 60, coach_active=counts['coach'],
+        ai=state, coach=coach, pay_min=evgeny.PAY_WAIT // 60,
+        coach_active=max(0, counts['coach'] - testing), testing=testing,
         active=counts['active'] - counts['coach'], pending=counts['pending'], ever=counts['ever'],
         found=found, per_min=evgeny.OPEN_PER_MINUTE, nudges=evgeny.MAX_NUDGES,
         sample=html.escape(evgeny.opener(u'Анна')))
-    return text, _evgeny_keys(found if ai.ready() else 0, counts['active'])
+    # массовый дожим — участникам, а им Евгений пишет только после запуска
+    return text, _evgeny_keys(found if ai.ready() and evgeny.coach_enabled() else 0,
+                              counts['active'])
 
 
 @router.message(Command('евгений', 'evgeny'))
@@ -1316,6 +1332,9 @@ async def on_evgeny_button(call: CallbackQuery):
         if not ai.ready():
             await call.answer(u'Нет ключа ИИ', show_alert=True)
             return
+        if not evgeny.coach_enabled():         # старая кнопка, нажатая до запуска участникам
+            await call.answer(texts.EVGENY_NOT_LAUNCHED[:200], show_alert=True)
+            return
         n = evgeny.push(call.from_user.id)
         note = (texts.EVGENY_STARTED.format(n=n, per_min=evgeny.OPEN_PER_MINUTE,
                                             minutes=max(1, -(-n // evgeny.OPEN_PER_MINUTE)))
@@ -1329,6 +1348,54 @@ async def on_evgeny_button(call: CallbackQuery):
         log.debug(u'кнопки Евгения не убрали: %s', err)
     await call.answer()
     await call.message.answer(note)
+
+
+async def evgeny_try(bot, target: Message, user) -> None:
+    u"""«🤖 Проверить Евгения» (Sharp 07.11.2026: «администрация запускает — там
+    всегда будет кнопка заставить Евгения написать, и Евгений начинает сначала»).
+    target — сообщение, в чат которого отвечать; user — кто нажал."""
+    if target.chat.id < 0:                 # Евгений пишет в личку, не в рабочий чат
+        await target.answer(texts.EVGENY_TRY_PRIVATE)
+        return
+    why = await evgeny.try_start(user.id, user.username, user.first_name)
+    if why:
+        await target.answer(why)
+        return
+    state = texts.EVGENY_TRY_STATE_ON if evgeny.coach_on() else texts.EVGENY_TRY_STATE_OFF
+    await target.answer(texts.EVGENY_TRY_NOTE.format(state=state), reply_markup=keyboards.evgeny_try())
+    if not await evgeny.try_intro(bot, user.id):
+        await target.answer(texts.EVGENY_TRY_FAILED)
+
+
+@router.message(F.text == texts.EVGENY_TRY_BUTTON)
+async def on_evgeny_try(message: Message):
+    if not _team_message(message):
+        return
+    await evgeny_try(message.bot, message, message.from_user)
+
+
+@router.callback_query(F.data.startswith('ev:t:') | (F.data == 'ev:try'))
+async def on_evgeny_try_button(call: CallbackQuery):
+    u"""Кнопки под сообщением о проверке: «N-й день», «Начать заново», «Закончить»."""
+    if not config.is_team(call.from_user.id):
+        await call.answer()
+        return
+    if call.data == 'ev:try':
+        await call.answer()
+        await evgeny_try(call.bot, call.message, call.from_user)
+        return
+    what = call.data.split(':', 2)[2]
+    if what == 'end':
+        evgeny.try_end(call.from_user.id)
+        await call.answer()
+        await call.message.answer(texts.EVGENY_TRY_ENDED)
+        return
+    why = await evgeny.try_day(call.bot, call.from_user.id, int(what)) if what.isdigit() else ''
+    if len(why) <= 200:                    # всплывающее окно Telegram — до 200 знаков
+        await call.answer(why, show_alert=bool(why))
+        return
+    await call.answer()
+    await call.message.answer(why)
 
 
 @router.message(Command('евгений_факты', 'evgeny_facts'))

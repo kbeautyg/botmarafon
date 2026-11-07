@@ -85,8 +85,9 @@ def _plan_next(user_id: int, chain: str, pos: int, step: funnel.Step,
 def _plan_evgeny(user_id: int, day: int) -> None:
     u"""Сообщения Евгения-координатора после записи дня (funnel.EVGENY_AFTER_DAY):
     знакомство после первой записи и вопрос об ощущениях тому, кто сам ответил
-    на вопрос под прошлым днём. Евгений выключен — не ставим ничего."""
-    if not evgeny.coach_on():
+    на вопрос под прошлым днём. Координатор выключен — участникам не ставим
+    ничего; своим ставим всегда: прогон /test — их проверка Евгения."""
+    if not evgeny.coach_for(user_id):
         return
     for chain, poll in funnel.EVGENY_AFTER_DAY.get(day, ()):
         if poll is None or db.answered(user_id, poll):
