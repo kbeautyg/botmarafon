@@ -1275,7 +1275,7 @@ def _evgeny_status() -> tuple[str, InlineKeyboardMarkup]:
         state = u'⚠️ нет ключа. ' + texts.EVGENY_NO_KEY
     else:
         at, error = ai.health()
-        state = u'есть ключ, модель %s' % html.escape(config.AI_MODEL)
+        state = u'есть ключ — %s' % html.escape(ai.describe())
         if error:
             state += u' · ⚠️ последняя ошибка: %s' % html.escape(error)
     if not evgeny.coach_enabled():

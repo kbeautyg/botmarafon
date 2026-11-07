@@ -25,6 +25,15 @@ def dispatcher():
 
 
 @pytest.fixture(autouse=True)
+def без_ключа_claude(monkeypatch):
+    u"""Ключ Claude из окружения машины не должен уводить проверки в настоящий API:
+    кому нужен Claude, тот ставит ключ сам (tests/test_ai_claude.py)."""
+    from bot import config
+
+    monkeypatch.setattr(config, 'ANTHROPIC_API_KEY', '')
+
+
+@pytest.fixture(autouse=True)
 def без_памяти_между_проверками():
     u"""Отметки «админам про этот день уже сказали» живут в памяти процесса.
 

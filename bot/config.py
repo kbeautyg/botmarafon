@@ -153,6 +153,13 @@ AI_API_KEY = (os.getenv('AI_API_KEY') or os.getenv('OPENAI_API_KEY') or '').stri
 AI_BASE_URL = (os.getenv('AI_BASE_URL') or os.getenv('OPENAI_BASE_URL')
                or 'https://apinet.cloud/v1').strip().rstrip('/')
 AI_MODEL = (os.getenv('AI_MODEL') or os.getenv('OPENAI_MODEL') or 'glm-5.2').strip()
+# 07.11.2026 Sharp: «поставь туда API-ключ от Claude SLIST». Есть ANTHROPIC_API_KEY —
+# Евгений говорит через Claude (bot/ai.py), шлюз apinet (AI_API_KEY) остаётся запасным
+# путём на случай, если ключ Claude уберут. Глубина размышлений Claude для переписки —
+# low: ответы короткие, а каждое лишнее размышление — секунды и деньги.
+ANTHROPIC_API_KEY = (os.getenv('ANTHROPIC_API_KEY') or '').strip()
+ANTHROPIC_MODEL = (os.getenv('ANTHROPIC_MODEL') or 'claude-opus-5-5').strip()
+ANTHROPIC_EFFORT = (os.getenv('ANTHROPIC_EFFORT') or 'low').strip()
 
 # Партнёрский доступ (11.10.2026): программа Soft Finish — регистрационный бот
 # AleX — спрашивает, кто из её людей уже запустил марафон, чтобы Евгений там

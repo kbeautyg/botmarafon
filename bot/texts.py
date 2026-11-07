@@ -1195,7 +1195,8 @@ EVGENY_TEAM_ASK = (u'🤖 <b>Евгений просит помощи</b>\n{who}
 EVGENY_TEAM_STOP = (u'🤖 <b>Евгений закончил диалог</b>\n{who}\n'
                     u'Человек отказался или попросил не писать — Евгений больше не пишет.')
 EVGENY_NO_KEY = (u'Евгению нужен ключ ИИ: в Railway, в сервисе бота марафона, добавьте переменную '
-                 u'<code>AI_API_KEY</code> (ключ apinet.cloud — тот же, что у Евгения с Авито).')
+                 u'<code>ANTHROPIC_API_KEY</code> (ключ Claude) или <code>AI_API_KEY</code> (ключ '
+                 u'apinet.cloud — тот же, что у Евгения с Авито).')
 EVGENY_STATUS = (
     u'🤖 <b>Евгений</b>\n'
     u'ИИ: {ai}\n\n'

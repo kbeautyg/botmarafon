@@ -192,7 +192,10 @@ async def test_ии_координатора_знает_мозги_павла_и
     assert u'ТЫ КООРДИНАТОР МАРАФОНА' in system and u'ДОЖИМ ДО СПОРТЗАЛА' not in system
     assert u'женская линия рода' in system and u'магические воздействия' in system
     assert u'Роспотребнадзоре' in system and u'15 000' in system
-    assert u'Обратной связи по ощущениям пока не давал' in system
+    человек = фальшивый.запросы[0][1]
+    assert человек['role'] == 'system', 'о человеке — отдельно: правила одни на всех и в кэше'
+    assert u'Обратной связи по ощущениям пока не давал' in человек['content']
+    assert u'Обратной связи' not in system
 
 
 async def test_координатор_кнопку_покупки_не_даёт(monkeypatch):

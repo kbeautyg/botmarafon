@@ -5,3 +5,5 @@ tzdata==2025.2
 aiohttp>=3.9
 # Поиск записей дней в старых переписках по MTProto (bot/history.py).
 Telethon==1.44.0
+# Евгений говорит через Claude (bot/ai.py, 07.11.2026); 2.x — нынешняя версия API.
+anthropic==2.3.0

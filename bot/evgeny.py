@@ -129,7 +129,7 @@ def daytime(now: float | None = None) -> bool:
 def why_not(user_id: int) -> str:
     u"""Почему Евгения нельзя включить этому человеку. Пусто — можно."""
     if not ai.ready():
-        return u'нет ключа ИИ — добавьте AI_API_KEY в Railway (сервис бота марафона)'
+        return u'нет ключа ИИ — добавьте ANTHROPIC_API_KEY (Claude) в Railway (сервис бота марафона)'
     person = db.get_user(user_id)
     if not person:
         return u'человека нет в базе'
@@ -245,11 +245,14 @@ def _history(user_id: int) -> list[dict]:
 
 def _request(user_id: int, task: str) -> list[dict]:
     role = texts.EVGENY_COACH_TASK if _mode(user_id) == 'coach' else texts.EVGENY_SALES_TASK
-    system = (texts.EVGENY_PROMPT + u'\n\n' + role + u'\n\n' + texts.EVGENY_SENSES
-              + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts()
-              + u'\n\nЧТО ИЗВЕСТНО О ЧЕЛОВЕКЕ\n' + _card(user_id))
-    messages = [{'role': 'system', 'content': system}] + _history(user_id)
-    if len(messages) == 1:              # переписки нет: шлюзу нужна хоть одна реплика
+    # Первое системное — одно на всех людей в этом режиме: Claude держит его в кэше
+    # (bot/ai.py). Что известно о человеке — отдельным, следом.
+    rules = (texts.EVGENY_PROMPT + u'\n\n' + role + u'\n\n' + texts.EVGENY_SENSES
+             + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts())
+    history = _history(user_id)
+    messages = [{'role': 'system', 'content': rules},
+                {'role': 'system', 'content': u'ЧТО ИЗВЕСТНО О ЧЕЛОВЕКЕ\n' + _card(user_id)}] + history
+    if not history:                     # переписки нет: шлюзу нужна хоть одна реплика
         messages.append({'role': 'user', 'content': u'(переписки ещё не было)'})
     elif messages[-1]['role'] != 'user':
         # Gemini не берёт запрос, где последняя реплика — бота: «Requests ending
