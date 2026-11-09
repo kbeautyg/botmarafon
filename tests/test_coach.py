@@ -165,7 +165,7 @@ async def test_рассказал_сам_про_этот_день_не_спра�
 
     await _шаг(bot, 1, 'evgeny_day2')
     assert _человеку(bot, 1)[-1] == (
-        u'Дорогой мой друг, так же как ты давал после первого и важного дня «Предназначение» '
+        u'Дорогой мой друг, так же как вы давали после первого и важного дня «Предназначение» '
         u'свою обратную связь по ощущениям, день отношений не менее важен, поэтому так же жду '
         u'обратную связь.')
 
@@ -176,7 +176,7 @@ def test_так_же_жду_ссылается_на_последний_день_
     db.log_event(1, 'feedback', '1')
     db.log_event(1, 'feedback', '2')
     assert evgeny.coach_text(1, 'day3') == (
-        u'Дорогой мой друг, так же как ты давал после второго дня «Отношения» свою обратную связь '
+        u'Дорогой мой друг, так же как вы давали после второго дня «Отношения» свою обратную связь '
         u'по ощущениям, день здоровья не менее важен, поэтому так же жду обратную связь.')
     assert u'день финансов' in evgeny.coach_text(1, 'day4')
     assert evgeny.coach_text(1, 'day2') == '', 'про второй день уже рассказал'
@@ -389,7 +389,7 @@ async def test_массовый_дожим_берёт_прошедших_с_ко
     bot = FakeBot()
     await evgeny.tick(bot)
     assert _человеку(bot, 1) == [u'Анна, как ты сейчас? Что из марафона откликнулось больше всего?']
-    assert фальшивый.запросы[0][-1]['content'] == texts.EVGENY_PUSH_TASK
+    assert фальшивый.запросы[0][-1]['content'].startswith(texts.EVGENY_PUSH_TASK)
     assert u'ДОЖИМ ДО СПОРТЗАЛА' in фальшивый.запросы[0][0]['content']
     assert evgeny.candidates() == [], 'второй раз в дожим не берём'
 
@@ -444,7 +444,7 @@ async def test_координатору_в_конце_запроса_напом�
     monkeypatch.setattr(ai, 'complete', фальшивый)
     await support.to_support(FakeMessage(text=u'Спасибо', user=FakeUser(1), bot=bot))
     await asyncio.sleep(0.2)
-    assert фальшивый.запросы[0][-1]['content'] == texts.EVGENY_COACH_REPLY_TASK
+    assert фальшивый.запросы[0][-1]['content'].startswith(texts.EVGENY_COACH_REPLY_TASK)
 
 
 # ------------------------------------------------------------------ по ревью 06.11.2026
@@ -533,7 +533,7 @@ async def test_на_серию_голосовых_одна_просьба_нап
         голос.voice = type('Voice', (), {'file_id': 'v1'})()
         await support.to_support(голос)
     await asyncio.sleep(0.1)
-    assert _человеку(bot, 1).count(texts.EVGENY_VOICE_TY) == 1
+    assert _человеку(bot, 1).count(texts.EVGENY_VOICE) == 1, 'на «вы», пока не предложили «ты»'
 
 
 async def test_сообщение_евгения_в_очереди_не_марафон_для_повторного_старта():

@@ -297,7 +297,7 @@ async def test_включили_снова_там_где_уже_писал_пр�
     monkeypatch.setattr(ai, 'complete', фальшивый)
     evgeny.enable(bot, 1, SHARP)
     await asyncio.sleep(0.2)
-    assert фальшивый.запросы[0][-1]['content'] == texts.EVGENY_CONTINUE_TASK
+    assert фальшивый.запросы[0][-1]['content'].startswith(texts.EVGENY_CONTINUE_TASK)
 
 
 async def test_не_посмотрел_день_евгений_присылает_запись_сам(monkeypatch):

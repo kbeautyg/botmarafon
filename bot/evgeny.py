@@ -45,6 +45,12 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 всегда: кнопка «🤖 Проверить
 Евгения» стирает прошлый разговор, Евгений знакомится заново и отвечает, как
 участнику. Что получила бы команда, видит только проверяющий.
+
+Правки после проверки Павла (09.11.2026): Евгений на «вы»; предложит человек сам
+«давай на ты» — переходит и запоминает (on_ty: слова человека или тег [TY]).
+Чтобы ответы не шли под копирку, ИИ видит, как начинались и заканчивались его
+последние сообщения этому человеку (_echo). Врач — только при неотложном
+состоянии (texts.EVGENY_PROMPT), а не в каждой обратной связи.
 """
 import asyncio
 import html
@@ -72,6 +78,8 @@ FACTS_KEY = 'evgeny:facts'
 COACH_KEY = 'evgeny:coach'  # 'on' — команда включила координатора участникам (/евгений)
 TRY_KEY = 'evgeny:try:%d'   # проверка командой: про какой день Евгений спросил своего (0 — знакомство)
 TRY_IDLE = 24 * 3600        # проверку забросили на сутки — свой снова пишет боту как команда
+TY_KEY = 'evgeny:ty:%d'     # '1' — человек сам предложил перейти на «ты» (стирает db.evgeny_forget)
+ECHO = 4                    # столько своих последних сообщений Евгений видит, чтобы не повторяться
 PAY_WAIT = 5 * 60           # столько ждём, что про оплату человеку напишет команда
 PAY_EPISODE = 3 * 3600      # то же оплатное дело: команде второй раз не пишем
 TEAM_QUIET = 6 * 3600       # команда недавно писала человеку — координатор не встревает
@@ -79,7 +87,14 @@ TEAM_QUIET = 6 * 3600       # команда недавно писала чел�
 # команда выключила вручную.
 HOLD = ('refused', 'manual')
 
-_TAG = re.compile(r'\[(BUY|TEAM|STOP|PAY)\]([^\n\[]*)', re.I)
+_TAG = re.compile(r'\[(BUY|TEAM|STOP|PAY|TY)\]([^\n\[]*)', re.I)
+# «Давай на ты», «можно на ты?», «пишите мне на «ты»», «не надо на вы» — человек сам
+# предлагает перейти на «ты». Чего здесь нет («мы же можем на ты»), узнаёт ИИ: тег [TY].
+_TY_WORDS = u'(?:со\\s+мной\\s+|ко\\s+мне\\s+|мне\\s+|уже\\s+)?на\\s+[«"„\']?%s\\b'
+_OFFER_TY = re.compile(
+    u'\\b(?:давай(?:те)?|можно|лучше|пиши(?:те)?|обращайся|обращайтесь|общайся|общайтесь|'
+    u'перейд[её]м|перейти|переходи(?:те)?)\\s+' + _TY_WORDS % u'ты'
+    + u'|\\bне\\s+(?:надо|нужно|стоит)\\s+' + _TY_WORDS % u'вы', re.I)
 # [DAY 1] — прислать запись дня ещё раз (AleX 19.10.2026: «первый день не посмотрел»)
 _DAY_TAG = re.compile(r'\[DAY\s*([1-4])\]', re.I)
 # [FEEDBACK 2] — человек рассказал, что чувствовал после второго дня
@@ -118,6 +133,23 @@ def is_on(user_id: int) -> bool:
 def _mode(user_id: int) -> str:
     u"""coach — ведёт марафон, sales — дожим до спортзала."""
     return (db.evgeny_get(user_id) or {}).get('mode') or 'sales'
+
+
+def on_ty(user_id: int) -> bool:
+    u"""Евгений с человеком на «ты»: тот сам предложил. Иначе — на «вы» (AleX 09.11.2026)."""
+    stored = db.get_content(TY_KEY % user_id)
+    return bool(stored and stored[1] == '1')
+
+
+def offers_ty(text: str | None) -> bool:
+    u"""Человек сам предлагает перейти на «ты»."""
+    return bool(_OFFER_TY.search(text or ''))
+
+
+def _set_ty(user_id: int) -> None:
+    if not on_ty(user_id):
+        db.put_content(TY_KEY % user_id, 'evgeny', '1')
+        log.info(u'Евгений: с %s теперь на «ты» — человек предложил сам', user_id)
 
 
 def listening(user_id: int) -> bool:
@@ -227,6 +259,56 @@ def _card(user_id: int) -> str:
     lines.append(u'Обратную связь по ощущениям уже давал после дней: %s.'
                  % u', '.join(str(d) for d in told) if told
                  else u'Обратной связи по ощущениям пока не давал.')
+    lines.append(u'Обращение: на «ты» — человек сам предложил перейти.' if on_ty(user_id)
+                 else u'Обращение: на «вы» — на «ты» человек перейти не предлагал.')
+    return u'\n'.join(lines)
+
+
+def _head(sentence: str, size: int = 90) -> str:
+    sentence = sentence.strip()
+    return sentence if len(sentence) <= size else sentence[:size].rsplit(' ', 1)[0] + u'…'
+
+
+def _tail(sentence: str, size: int = 110) -> str:
+    sentence = sentence.strip()
+    return sentence if len(sentence) <= size else u'…' + sentence[-size:].split(' ', 1)[-1]
+
+
+# Слова метода, которые Евгений повторял из ответа в ответ (Павел 09.11.2026: «на все
+# дни однотипно про тонкий план, родовую систему и застои»): ИИ видит, сколько раз они
+# уже звучали, и говорит проще.
+_TERMS = ((u'«тонкий план»', re.compile(u'тонк\\w*\\s+план', re.I)),
+          (u'«родовая система»', re.compile(u'родов\\w*\\s+систем', re.I)),
+          (u'«линия рода»', re.compile(u'лини\\w*\\s+рода', re.I)),
+          (u'«застои»', re.compile(u'засто', re.I)),
+          (u'«низкочастотные энергии»', re.compile(u'низкочастотн|низк\\w*\\s+частот', re.I)))
+
+
+def _echo(user_id: int) -> str:
+    u"""Как начинались и заканчивались последние сообщения Евгения этому человеку и
+    какие слова метода в них уже звучали — чтобы следующее он написал по-другому.
+    Павел 09.11.2026: «на все дни однотипно рассказывает»; AleX: «„какие будут
+    ощущения, хорошо?“ через один день»."""
+    mine = [(m.get('text') or '').strip() for m in db.chat_history(user_id, HISTORY)
+            if m.get('author') == EVGENY and m['side'] == 'out' and (m.get('text') or '').strip()]
+    if not mine:
+        return ''
+    heads, tails = [], []
+    for text in mine[-ECHO:]:
+        parts = [s for s in _SENTENCE.split(text) if s.strip()]
+        heads.append(u'«%s»' % _head(parts[0]))
+        if len(parts) > 1:
+            tails.append(u'«%s»' % _tail(parts[-1]))
+    lines = [u'ТАК ТЫ УЖЕ ПИСАЛ ЭТОМУ ЧЕЛОВЕКУ — не повторяйся: начни и закончи по-другому, '
+             u'а объяснения, которые уже давал, скажи другими словами.',
+             u'Начала: ' + u' · '.join(heads)]
+    if tails:
+        lines.append(u'Концовки: ' + u' · '.join(tails))
+    said = u'\n'.join(mine)
+    used = [u'%s — %d' % (name, len(rx.findall(said))) for name, rx in _TERMS if rx.search(said)]
+    if used:
+        lines.append(u'Слова метода, которые уже звучали (сколько раз): %s. Скажи это проще и '
+                     u'другими словами или обойдись без них.' % u', '.join(used))
     return u'\n'.join(lines)
 
 
@@ -273,7 +355,8 @@ def _request(user_id: int, task: str) -> list[dict]:
         # with a model turn are not supported» (12.10.2026, у Динара последней
         # была рассылка). Так и в напоминании молчащему — последним писал Евгений.
         messages.append({'role': 'user', 'content': u'(человек пока ничего не ответил)'})
-    messages.append({'role': 'system', 'content': task})
+    echo = _echo(user_id)
+    messages.append({'role': 'system', 'content': task + (u'\n\n' + echo if echo else u'')})
     return messages
 
 
@@ -382,6 +465,8 @@ async def _turn(bot, user_id: int, task: str) -> bool:
             # пока ИИ думал, человеку ответила команда — второй ответ следом не нужен
             return False
         text, tags = parse(raw)
+        if 'ty' in tags:
+            _set_ty(user_id)
         coach_mode = _mode(user_id) == 'coach'
         # координатор кнопку покупки не даёт: об оплате за него говорит команда
         buy = 'buy' in tags and not coach_mode
@@ -543,11 +628,14 @@ def coach_text(user_id: int, ref: str) -> str:
     if day in told:
         return ''
     before = [d for d in told if d < day]
+    ty = on_ty(user_id)
     if before:
-        text = texts.EVGENY_COACH_AGAIN.format(after=texts.EVGENY_COACH_AFTER[max(before)],
-                                               sphere=texts.EVGENY_COACH_SPHERE[day])
+        again = texts.EVGENY_COACH_AGAIN_TY if ty else texts.EVGENY_COACH_AGAIN
+        text = again.format(after=texts.EVGENY_COACH_AFTER[max(before)],
+                            sphere=texts.EVGENY_COACH_SPHERE[day])
     else:
-        text = texts.EVGENY_COACH_ASK.format(day=texts.EVGENY_COACH_DAY[day])
+        ask = texts.EVGENY_COACH_ASK_TY if ty else texts.EVGENY_COACH_ASK
+        text = ask.format(day=texts.EVGENY_COACH_DAY[day])
     return text if wrote else texts.EVGENY_COACH_HELLO + text
 
 
@@ -733,11 +821,13 @@ def heard(bot, message) -> bool:
     if not listening(user_id):
         return False
     db.evgeny_touch(user_id, 'in')
+    if offers_ty(message.text or message.caption):
+        _set_ty(user_id)                # до ответа ИИ: в карточке уже будет «на ты»
     if getattr(message, 'voice', None) or getattr(message, 'video_note', None):
         # на серию голосовых — одна просьба, а не по одной на каждое
         if time.time() - _voice_told.get(user_id, 0) > VOICE_GAP:
             _voice_told[user_id] = time.time()
-            voice = texts.EVGENY_VOICE_TY if _mode(user_id) == 'coach' else texts.EVGENY_VOICE
+            voice = texts.EVGENY_VOICE_TY if on_ty(user_id) else texts.EVGENY_VOICE
             task = asyncio.create_task(_say(bot, user_id, voice))
             _replies.add(task)                  # ссылка — чтобы задачу не собрал сборщик
             task.add_done_callback(_replies.discard)
