@@ -46,3 +46,14 @@ def test_павел_и_alex_в_доступе_к_статистике_без_п�
     assert config.can_stats(350631550)
     assert config.can_stats(312701042)
     assert not config.can_stats(555)
+
+
+def test_тестовый_аккаунт_команды_с_доступом_но_без_уведомлений():
+    u"""11.11.2026: @Evgenve4niy проверяет Евгения на чистом аккаунте — меню и кнопки как
+    у команды, но заявки, входы людей и отчёты ему не идут: проверку ничто не перебивает."""
+    tester = 7692784223
+    assert config.is_team(tester)
+    assert config.can_stats(tester)
+    assert tester not in config.purchase_recipients()
+    assert tester not in config.entry_recipients()
+    assert tester not in config.report_recipients()
