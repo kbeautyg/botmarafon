@@ -56,6 +56,11 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 после 2-го пример, после 3-го пример и мягкая рекомендация спортзала, после 4-го
 предложение, согласие — [PAY] команде («Хочет в спортзал»). Примеры — реальные
 истории от команды (cases, /евгений_примеры) или обобщённо: людей не придумывает.
+
+После проверки Павла 11.11.2026 вечером: по имени не обращается — имени человека ИИ не
+видит; программа Павла — «Энергоспортзал», не «спортзал» (energo — страховка на случай,
+если ИИ всё же напишет по-старому); «хорошо, посмотрю», «спасибо», «пока нет вопросов» —
+ответ одной короткой фразой без вопроса, а на второе «спасибо» подряд — тишина (closing).
 """
 import asyncio
 import html
@@ -85,6 +90,9 @@ COACH_KEY = 'evgeny:coach'  # 'on' — команда включила коор�
 TRY_KEY = 'evgeny:try:%d'   # проверка командой: про какой день Евгений спросил своего (0 — знакомство)
 TRY_IDLE = 24 * 3600        # проверку забросили на сутки — свой снова пишет боту как команда
 TY_KEY = 'evgeny:ty:%d'     # '1' — человек сам предложил перейти на «ты» (стирает db.evgeny_forget)
+CLOSED_KEY = 'evgeny:closed:%d'  # когда Евгений ответил на «спасибо» и «хорошо, посмотрю» (closing)
+CLOSING_LEN = 120           # длиннее — человек пишет о деле, а не прощается
+CLOSING_MAX = 160           # ответ на «хорошо, посмотрю» — не длиннее
 ECHO = 4                    # столько своих последних сообщений Евгений видит, чтобы не повторяться
 ASK_BY_AI = True            # вопрос про день словами ИИ; False — всегда текст заказчика
 ASK_TIMEOUT = 20.0          # столько ждём ИИ для вопроса про день — дальше уходит текст заказчика
@@ -250,22 +258,19 @@ def team_wrote(user_id: int, who: str = u'') -> bool:
 
 # ------------------------------------------------------------------ разговор
 
-def opener(name: str, rng=random) -> str:
-    u"""Первое сообщение массового дожима: случайный вариант, с именем или без."""
-    text = rng.choice(texts.EVGENY_OPENERS)
-    name = (name or '').strip()
-    if name:
-        return text.replace('{name}', name)
-    text = text.replace(u', {name}!', u'!').replace(u'{name}, ', u'')
-    return text[:1].upper() + text[1:]
+def opener(rng=random) -> str:
+    u"""Первое сообщение массового дожима: случайный вариант, без имени (Sharp 11.11.2026:
+    «он не должен обращаться по имени»)."""
+    return rng.choice(texts.EVGENY_OPENERS)
 
 
 def _card(user_id: int) -> str:
-    u"""Что известно о человеке — ИИ знает, с кем говорит."""
+    u"""Что известно о человеке — ИИ знает, с кем говорит. Имени нет: Sharp 11.11.2026 —
+    «он не должен видеть имя пользователя» (тестовый аккаунт «Евгений» Евгений назвал
+    Евгением)."""
     person = db.get_user(user_id) or {}
     days, answers, passed = _progress(user_id)
-    lines = [u'Имя: %s' % (person.get('first_name') or u'не указано'),
-             u'Откуда пришёл: %s' % stats.source_label(person)]
+    lines = [u'Откуда пришёл: %s' % stats.source_label(person)]
     said = []
     for day in (1, 2, 3):
         got = answers.get('day%d' % day)
@@ -325,7 +330,8 @@ _OPENINGS = (
 )
 _CLOSINGS = (
     u'закончи тёплой фразой без вопроса',
-    u'закончи коротким вопросом по сути его ощущений',
+    u'закончи коротким вопросом по сути его ощущений — если он о них сейчас рассказал, иначе без '
+    u'вопроса',
     u'закончи пожеланием к следующему дню, без вопроса',
     u'закончи совсем коротко — в 3–6 слов',
     u'закончи мыслью о том, что дальше будет глубже',
@@ -373,6 +379,95 @@ def _echo(user_id: int) -> str:
     return u'\n'.join(lines)
 
 
+# ------------------------------------------------------------------ «Энергоспортзал»
+
+# Sharp 11.11.2026: «он должен говорить не спортзал, а энергоспортзал… спортзал — это где
+# качки, а энергоспортзал — именно от Павла». ИИ так и сказано (texts.EVGENY_PROMPT); это —
+# страховка: «Энергетический спортзал», «энерго спортзал» и просто «спортзал» в словах
+# Евгения становятся «Энергоспортзалом», окончание падежа остаётся («в Энергоспортзале»).
+_GYM_FULL = re.compile(u'(?:энергетическ\\w*|энерго)[\\s\\-]+спортзал', re.I)
+_GYM_BARE = re.compile(u'(?<![\\w\\-])спортзал', re.I)
+
+
+def energo(text: str | None) -> str:
+    return _GYM_BARE.sub(u'Энергоспортзал', _GYM_FULL.sub(u'Энергоспортзал', text or ''))
+
+
+# ------------------------------------------------------------------ человек закрывает разговор
+
+# Павел 11.11.2026: написал «хорошо, посмотрю» — а Евгений понёс лишнее и спросил снова.
+# Сильные слова прощаются всегда; «хорошо», «ок», «ладно» — только если Евгений ничего не
+# спрашивал: на «Рассказать, как там всё устроено?» «хорошо» значит «да, расскажите».
+_CLOSING_STRONG = (
+    u'спасибо|спс|благодарю|благодарствую|пасиб\\w*|понятно|ясно|понял[аи]?|принято|'
+    u'посмотрю|гляну|досмотрю|пересмотрю|посмотрим|буду\\s+смотреть|подумаю|'
+    u'(?:нет|нету)\\s+вопросов|вопросов\\s+(?:пока\\s+)?(?:нет|нету)|без\\s+вопросов|'
+    u'и\\s+вам|вам\\s+тоже|взаимно|до\\s+свидания|всего\\s+доброго|хорошего\\s+(?:дня|вечера)|'
+    u'спокойной\\s+ночи')
+_CLOSING_WEAK = u'хорошо|окей|ок|ok|okay|ладно|договорились|отлично|супер|класс|здорово|прекрасно'
+_STRONG = re.compile(u'\\b(?:%s)\\b' % _CLOSING_STRONG, re.I)
+_ANY = re.compile(u'\\b(?:%s|%s)\\b' % (_CLOSING_STRONG, _CLOSING_WEAK), re.I)
+# слова, которые прощание не меняют: «спасибо большое за марафон», «посмотрю четвёртый день ещё раз»
+_FILLER = re.compile(
+    u'ну|пока|тогда|я|вас|вам|тоже|и|а|уже|обязательно|конечно|всё|все|так|буду|сейчас|позже|'
+    u'попозже|потом|сегодня|завтра|вечером|ещё|еще|раз|мой|друг|евгений|большое|огромное|за|'
+    u'марафон|помощь|поддержку|ответ|ответы|информацию|запись|записи|день|дни|видео|'
+    u'(?:перв|втор|трет|четв[её]рт)\\w*', re.I)
+
+
+def closing(text: str | None, asked: bool = False) -> bool:
+    u"""Человек закрывает разговор: «хорошо, посмотрю», «спасибо», «пока нет вопросов», 🙏.
+    asked — в последнем сообщении бот о чём-то спросил: тогда «хорошо» и 👍 — это ответ."""
+    text = (text or '').strip()
+    if not text or len(text) > CLOSING_LEN or '?' in text:
+        return False
+    if not re.search(r'\w', text):
+        return not asked                # одни эмодзи и скобки: 🙏, 👍, )))
+    if not (_STRONG if asked else _ANY).search(text):
+        return False
+    rest = _ANY.sub(u' ', text)
+    return all(_FILLER.fullmatch(word) for word in re.findall(r'\w+', rest))
+
+
+def _ending(user_id: int) -> tuple[str, bool, float]:
+    u"""Что человек написал после последнего ответа бота, спросил ли бот в том ответе о чём-то
+    и когда тот ответ ушёл."""
+    history = db.chat_history(user_id, HISTORY)
+    said = []
+    while history and history[-1]['side'] == 'in':
+        said.append((history.pop().get('text') or '').strip())
+    said = u'\n'.join(text for text in reversed(said) if text)
+    if not history:
+        return said, False, 0.0
+    last = history[-1]
+    return said, '?' in (last.get('text') or ''), float(last.get('at') or 0)
+
+
+def _closed_after(user_id: int, last_out: float) -> bool:
+    u"""Последнее, что написал бот, — уже ответ на прощание: второе «спасибо» подряд без ответа,
+    иначе вежливости нет конца."""
+    stored = db.get_content(CLOSED_KEY % user_id)
+    return bool(last_out and stored and float(stored[1] or 0) >= last_out)
+
+
+def _closing(text: str, said: str, ty: bool = False) -> str:
+    u"""Ответ на прощание: короткие фразы без вопроса и без Энергоспортзала. Ничего такого ИИ не
+    написал — заготовка по словам человека (texts.EVGENY_CLOSING_FALLBACK)."""
+    kept = []
+    for sentence in (s.strip() for s in _SENTENCE.split(text or '')):
+        if not sentence or '?' in sentence or u'спортзал' in sentence.lower():
+            continue
+        if len(u' '.join(kept + [sentence])) > CLOSING_MAX:
+            break
+        kept.append(sentence)
+    if kept:
+        return u' '.join(kept)
+    for words, vy, on_ty_text in texts.EVGENY_CLOSING_FALLBACK:
+        if re.search(words, said or '', re.I):
+            return on_ty_text if ty else vy
+    return texts.EVGENY_CLOSING_FALLBACK[-1][2 if ty else 1]
+
+
 def _brief(user_id: int) -> str:
     u"""Кто это — одной строкой для команды: откуда пришёл и докуда дошёл."""
     person = db.get_user(user_id) or {}
@@ -400,13 +495,19 @@ def _history(user_id: int) -> list[dict]:
     return out
 
 
-def _request(user_id: int, task: str, mode: str | None = None) -> list[dict]:
+_REPLY_TASKS = (texts.EVGENY_COACH_REPLY_TASK, texts.EVGENY_REPLY_TASK)
+
+
+def _request(user_id: int, task: str, mode: str | None = None, closing_said: str = '') -> list[dict]:
+    u"""closing_said — человек закрывает разговор этими словами: вместо жребия формы — одна
+    короткая фраза (texts.EVGENY_CLOSING_TASK)."""
     role = texts.EVGENY_COACH_TASK if (mode or _mode(user_id)) == 'coach' else texts.EVGENY_SALES_TASK
     # Первое системное — одно на всех людей в этом режиме: Claude держит его в кэше
-    # (bot/ai.py). Что известно о человеке — отдельным, следом.
+    # (bot/ai.py). Что известно о человеке — отдельным, следом. В историях команды —
+    # «пошёл в спортзал»: ИИ видит их уже с «Энергоспортзалом», чтобы не перенял слово.
     rules = (texts.EVGENY_PROMPT + u'\n\n' + role + u'\n\n' + texts.EVGENY_SENSES
-             + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts()
-             + u'\n\nИСТОРИИ УЧАСТНИКОВ\n' + (cases() or texts.EVGENY_CASES_NONE))
+             + u'\n\nФАКТЫ\n' + facts()
+             + u'\n\nИСТОРИИ УЧАСТНИКОВ\n' + (energo(cases()) or texts.EVGENY_CASES_NONE))
     history = _history(user_id)
     messages = [{'role': 'system', 'content': rules},
                 {'role': 'system', 'content': u'ЧТО ИЗВЕСТНО О ЧЕЛОВЕКЕ\n' + _card(user_id)}] + history
@@ -418,7 +519,9 @@ def _request(user_id: int, task: str, mode: str | None = None) -> list[dict]:
         # была рассылка). Так и в напоминании молчащему — последним писал Евгений.
         messages.append({'role': 'user', 'content': u'(человек пока ничего не ответил)'})
     last = [task]
-    if task in (texts.EVGENY_COACH_REPLY_TASK, texts.EVGENY_REPLY_TASK):
+    if closing_said:
+        last.append(texts.EVGENY_CLOSING_TASK.format(said=_head(closing_said, 120)))
+    elif task in _REPLY_TASKS:
         last.append(_style())           # ответ человеку — у остальных задач форма своя
     echo = _echo(user_id)
     if echo:
@@ -455,6 +558,7 @@ async def _say(bot, user_id: int, text: str, *, buy: bool = False, mass: bool = 
     годится — планировщик идёт по очереди, и пауза задержала бы всех.
     strict — сбой не глотать: шаг воронки повторит планировщик, как любой другой.
     """
+    text = energo(text)
     keys = keyboards.finish('evgeny') if buy else None
     try:
         if typing:
@@ -521,8 +625,13 @@ async def _turn(bot, user_id: int, task: str) -> bool:
     async with lock:
         if not listening(user_id):
             return False
+        said, asked, last_out = _ending(user_id) if task in _REPLY_TASKS else ('', False, 0.0)
+        ends = closing(said, asked)
+        if ends and _closed_after(user_id, last_out):
+            log.info(u'Евгений: %s снова прощается — на прощание уже ответили, молчим', user_id)
+            return False
         try:
-            raw = await ai.complete(_request(user_id, task))
+            raw = await ai.complete(_request(user_id, task, closing_said=said if ends else ''))
         except ai.AIError as err:
             log.warning(u'Евгений: ИИ не ответил для %s: %s', user_id, err)
             await _team(bot, user_id, u'🤖 <b>Евгений не смог ответить</b>\n%s\n%s\n%s' % (
@@ -539,9 +648,13 @@ async def _turn(bot, user_id: int, task: str) -> bool:
         buy = 'buy' in tags and not coach_mode
         if coach_mode and 'pay' in tags:
             text = without_money(text)
+        if ends and not ({'team', 'pay', 'stop', 'day'} & set(tags)):
+            text = _closing(text, said, on_ty(user_id))
         if not text:
             text = texts.EVGENY_FALLBACK if 'team' in tags and 'pay' not in tags else ''
         sent = bool(text) and await _say(bot, user_id, text, buy=buy)
+        if sent and ends:
+            db.put_content(CLOSED_KEY % user_id, 'ts', str(time.time()))
         for day in tags.get('feedback', ()):
             try:
                 db.log_event(user_id, 'feedback', str(day))
@@ -873,8 +986,11 @@ async def try_start(user_id: int, username: str | None, first_name: str | None) 
 
 
 async def try_intro(bot, user_id: int) -> bool:
-    u"""Первое сообщение проверки — то же знакомство, что получает участник."""
-    return await _say(bot, user_id, coach_text(user_id, 'intro') or texts.EVGENY_COACH_INTRO)
+    u"""Первое сообщение проверки — то же знакомство, что получает участник. Сразу, без
+    «печатает…»: 11.11.2026 Павел нажал «1-й день», пока знакомство «печаталось» 8 секунд, —
+    вопрос про день пришёл первым, а знакомство следом, второй раз."""
+    return await _say(bot, user_id, coach_text(user_id, 'intro') or texts.EVGENY_COACH_INTRO,
+                      typing=False)
 
 
 async def try_day(bot, user_id: int, day: int) -> str:
@@ -999,12 +1115,11 @@ async def _openers(bot, limit: int) -> int:
         if why_not(user_id):
             disable(user_id, why_not(user_id), 'gone')
             continue
-        person = db.get_user(user_id) or {}
         if db.wrote_as(user_id, EVGENY):
             # вёл его марафон координатором — продолжает тот разговор, а не здоровается
             sent = await _turn(bot, user_id, texts.EVGENY_PUSH_TASK)
         else:
-            sent = await _say(bot, user_id, opener(person.get('first_name') or ''), mass=True)
+            sent = await _say(bot, user_id, opener(), mass=True)
         if sent:
             done += 1
         else:

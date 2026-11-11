@@ -79,14 +79,13 @@ def test_теги_разбираются_и_убираются_из_текста
     assert 'stop' in tags and text.endswith(u'Всего доброго!')
 
 
-def test_первое_сообщение_с_именем_и_без():
+def test_первое_сообщение_без_имени():
+    u"""Sharp 11.11.2026: «он не должен обращаться по имени»."""
     import random
     for seed in range(8):
-        с_именем = evgeny.opener(u'Анна', random.Random(seed))
-        без_имени = evgeny.opener(u'', random.Random(seed))
-        assert u'Анна' in с_именем and u'{name}' not in с_именем
-        assert u'{name}' not in без_имени and без_имени[0].isupper() and u', !' not in без_имени
-        assert u'Евгений' in без_имени
+        текст = evgeny.opener(random.Random(seed))
+        assert текст in texts.EVGENY_OPENERS and u'{name}' not in текст
+        assert текст[0].isupper() and u'Евгений' in текст
 
 
 # ------------------------------------------------------------------ кого берёт массовый дожим
@@ -123,7 +122,7 @@ async def test_массовый_дожим_пишет_днём_готовым_т
     monkeypatch.setattr(evgeny, 'daytime', lambda now=None: True)
     await evgeny.tick(bot)
     (kind, text), = _в(bot, 1)
-    assert u'Ольга' in text and u'Евгений' in text
+    assert u'Евгений' in text and u'Ольга' not in text, 'по имени не обращается (Sharp 11.11.2026)'
     assert фальшивый.запросы == [], 'первое сообщение — готовый текст, без ИИ'
     (m,) = db.chat_history(1)
     assert m['author'] == evgeny.EVGENY and m['mass'] == 1
@@ -166,9 +165,11 @@ async def test_человек_пишет_отвечает_евгений_а_ко
 
     await asyncio.sleep(0.2)
     ответы = [p for k, p in _в(bot, 1) if k == 'text']
-    assert ответы == [u'Здорово, что откликнулось! Хотите продолжить в «Энергетическом спортзале»?']
+    assert ответы == [u'Здорово, что откликнулось! Хотите продолжить в «Энергоспортзале»?'], \
+        'Sharp 11.11.2026: не «спортзал», а «Энергоспортзал»'
     system = фальшивый.запросы[0][0]['content']
-    assert u'ФАКТЫ О СПОРТЗАЛЕ' in system and u'12 000' in system
+    assert u'\n\nФАКТЫ\n' in system and u'12 000' in system
+    assert not any(u'Анна' in m['content'] for m in фальшивый.запросы[0]), 'имени ИИ не видит'
     assert {'role': 'user', 'content': u'Марафон понравился'} in фальшивый.запросы[0]
 
 

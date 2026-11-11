@@ -191,7 +191,7 @@ async def test_ии_координатора_знает_мозги_павла_и
     await support.to_support(FakeMessage(text=u'Шла энергия по телу', user=FakeUser(1), bot=bot))
     await asyncio.sleep(0.2)
     system = фальшивый.запросы[0][0]['content']
-    assert u'ТЫ КООРДИНАТОР МАРАФОНА' in system and u'ДОЖИМ ДО СПОРТЗАЛА' not in system
+    assert u'ТЫ КООРДИНАТОР МАРАФОНА' in system and u'ДОЖИМ ДО ЭНЕРГОСПОРТЗАЛА' not in system
     assert u'женская линия рода' in system and u'магические воздействия' in system
     assert u'Роспотребнадзоре' in system and u'15 000' in system
     человек = фальшивый.запросы[0][1]
@@ -382,15 +382,15 @@ async def test_массовый_дожим_берёт_прошедших_с_ко
 
     evgeny.push(SHARP)
     assert db.evgeny_get(1)['mode'] == 'sales'
-    фальшивый = ИИ(u'Анна, как ты сейчас? Что из марафона откликнулось больше всего?')
+    фальшивый = ИИ(u'Как вы сейчас? Что из марафона откликнулось больше всего?')
     monkeypatch.setattr(ai, 'complete', фальшивый)
     monkeypatch.setattr(evgeny, 'daytime', lambda now=None: True)
     monkeypatch.setattr(evgeny, 'OPEN_PER_MINUTE', 6000)
     bot = FakeBot()
     await evgeny.tick(bot)
-    assert _человеку(bot, 1) == [u'Анна, как ты сейчас? Что из марафона откликнулось больше всего?']
+    assert _человеку(bot, 1) == [u'Как вы сейчас? Что из марафона откликнулось больше всего?']
     assert фальшивый.запросы[0][-1]['content'].startswith(texts.EVGENY_PUSH_TASK)
-    assert u'ДОЖИМ ДО СПОРТЗАЛА' in фальшивый.запросы[0][0]['content']
+    assert u'ДОЖИМ ДО ЭНЕРГОСПОРТЗАЛА' in фальшивый.запросы[0][0]['content']
     assert evgeny.candidates() == [], 'второй раз в дожим не берём'
 
 

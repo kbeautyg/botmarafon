@@ -1301,7 +1301,7 @@ def _evgeny_status() -> tuple[str, InlineKeyboardMarkup]:
         coach_active=max(0, counts['coach'] - testing), testing=testing,
         active=counts['active'] - counts['coach'], pending=counts['pending'], ever=counts['ever'],
         found=found, per_min=evgeny.OPEN_PER_MINUTE, nudges=evgeny.MAX_NUDGES,
-        sample=html.escape(evgeny.opener(u'Анна')))
+        sample=html.escape(evgeny.opener()))
     # массовый дожим — участникам, а им Евгений пишет только после запуска
     return text, _evgeny_keys(found if ai.ready() and evgeny.coach_enabled() else 0,
                               counts['active'])
@@ -1362,9 +1362,11 @@ async def evgeny_try(bot, target: Message, user) -> None:
     if why:
         await target.answer(why)
         return
+    # знакомство — до кнопок дней: нажатый сразу «1-й день» не обгонит его (Павел 11.11.2026)
+    sent = await evgeny.try_intro(bot, user.id)
     state = texts.EVGENY_TRY_STATE_ON if evgeny.coach_on() else texts.EVGENY_TRY_STATE_OFF
     await target.answer(texts.EVGENY_TRY_NOTE.format(state=state), reply_markup=keyboards.evgeny_try())
-    if not await evgeny.try_intro(bot, user.id):
+    if not sent:
         await target.answer(texts.EVGENY_TRY_FAILED)
 
 

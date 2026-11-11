@@ -62,8 +62,13 @@ class ИИ:
         return self.ответы.pop(0) if self.ответы else u'Хорошо.'
 
 
+ПОЯСНЕНИЕ = texts.EVGENY_TRY_NOTE.split(u'\n', 1)[0]     # «🧪 Проверка Евгения» с кнопками дней
+
+
 def _кому(bot, uid):
-    return [p for k, c, p in bot.sent if c == uid and k == 'text']
+    u"""Что пришло в личку — без пояснения о проверке: с 11.11.2026 оно идёт после
+    знакомства Евгения (кнопки дней ниже его), а проверяют здесь слова Евгения."""
+    return [p for k, c, p in bot.sent if c == uid and k == 'text' and not p.startswith(ПОЯСНЕНИЕ)]
 
 
 async def _начать(bot, кто=PAVEL):

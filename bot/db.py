@@ -1616,6 +1616,7 @@ def evgeny_forget(user_id: int) -> None:
     _run('DELETE FROM evgeny WHERE user_id=?', (user_id,))
     _run('DELETE FROM content WHERE key LIKE ?', ('evgeny:day:%d:%%' % user_id,))
     _run('DELETE FROM content WHERE key=?', ('evgeny:ty:%d' % user_id,))   # evgeny.TY_KEY
+    _run('DELETE FROM content WHERE key=?', ('evgeny:closed:%d' % user_id,))   # evgeny.CLOSED_KEY
 
 
 def evgeny_off_all(reason: str) -> int:
