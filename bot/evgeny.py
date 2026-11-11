@@ -51,6 +51,11 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 Чтобы ответы не шли под копирку, ИИ видит, как начинались и заканчивались его
 последние сообщения этому человеку (_echo). Врач — только при неотложном
 состоянии (texts.EVGENY_PROMPT), а не в каждой обратной связи.
+
+11.11.2026: на «ты» — и когда человек сам перешёл (тег [TY]); от дня к дню —
+после 2-го пример, после 3-го пример и мягкая рекомендация спортзала, после 4-го
+предложение, согласие — [PAY] команде («Хочет в спортзал»). Примеры — реальные
+истории от команды (cases, /евгений_примеры) или обобщённо: людей не придумывает.
 """
 import asyncio
 import html
@@ -75,6 +80,7 @@ OPEN_PER_MINUTE = 20        # массовый дожим: первых сооб
 DAY4_WAIT = 72 * 3600       # «после марафона»: с 4-го дня прошло 72 часа (записи закрыты)
 DAY_HOURS = (9, 21)         # писать первым — только с 9 до 21 по Москве
 FACTS_KEY = 'evgeny:facts'
+CASES_KEY = 'evgeny:cases'  # реальные истории участников для примеров (/евгений_примеры)
 COACH_KEY = 'evgeny:coach'  # 'on' — команда включила координатора участникам (/евгений)
 TRY_KEY = 'evgeny:try:%d'   # проверка командой: про какой день Евгений спросил своего (0 — знакомство)
 TRY_IDLE = 24 * 3600        # проверку забросили на сутки — свой снова пишет боту как команда
@@ -121,6 +127,23 @@ def facts() -> str:
 def set_facts(text: str | None) -> None:
     u"""Пустой текст — вернуть стандартные факты."""
     db.put_content(FACTS_KEY, 'evgeny', (text or '').strip())
+
+
+def cases() -> str:
+    u"""Реальные истории участников, которые дала команда (заказчик 11.11.2026: «надо,
+    чтобы он с примером писал»). Своих по умолчанию нет: выдуманный человек с
+    «настоящим» именем — фальшивый отзыв, поэтому пусто — Евгений говорит обобщённо."""
+    stored = db.get_content(CASES_KEY)
+    return (stored[1] or '').strip() if stored else ''
+
+
+def set_cases(text: str | None, *, add: bool = False) -> str:
+    u"""Заменить истории (add — дописать к имеющимся). Пустой текст — очистить."""
+    text = (text or '').strip()
+    if add and text and cases():
+        text = cases() + u'\n\n' + text
+    db.put_content(CASES_KEY, 'evgeny', text)
+    return text
 
 
 # ------------------------------------------------------------------ состояние
@@ -259,8 +282,8 @@ def _card(user_id: int) -> str:
     lines.append(u'Обратную связь по ощущениям уже давал после дней: %s.'
                  % u', '.join(str(d) for d in told) if told
                  else u'Обратной связи по ощущениям пока не давал.')
-    lines.append(u'Обращение: на «ты» — человек сам предложил перейти.' if on_ty(user_id)
-                 else u'Обращение: на «вы» — на «ты» человек перейти не предлагал.')
+    lines.append(u'Обращение: на «ты» — человек сам на него перешёл.' if on_ty(user_id)
+                 else u'Обращение: на «вы» — на «ты» человек не переходил.')
     return u'\n'.join(lines)
 
 
@@ -344,7 +367,8 @@ def _request(user_id: int, task: str) -> list[dict]:
     # Первое системное — одно на всех людей в этом режиме: Claude держит его в кэше
     # (bot/ai.py). Что известно о человеке — отдельным, следом.
     rules = (texts.EVGENY_PROMPT + u'\n\n' + role + u'\n\n' + texts.EVGENY_SENSES
-             + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts())
+             + u'\n\nФАКТЫ О СПОРТЗАЛЕ\n' + facts()
+             + u'\n\nИСТОРИИ УЧАСТНИКОВ\n' + (cases() or texts.EVGENY_CASES_NONE))
     history = _history(user_id)
     messages = [{'role': 'system', 'content': rules},
                 {'role': 'system', 'content': u'ЧТО ИЗВЕСТНО О ЧЕЛОВЕКЕ\n' + _card(user_id)}] + history
@@ -537,6 +561,15 @@ def _master(text: str | None) -> bool:
     return u'диагност' in (text or '').lower()
 
 
+_WANT = re.compile(u'хоч|вступ|купить|куплю|соглас|готов', re.I)
+
+
+def _wants_gym(ask: str | None) -> bool:
+    u"""Суть от ИИ — «хочет в спортзал»: человек согласился, а не спрашивает цену."""
+    ask = (ask or '').lower()
+    return u'спортзал' in ask and bool(_WANT.search(ask))
+
+
 def _last_in(user_id: int) -> str:
     u"""Последнее, что человек написал, — команде видно, о чём речь."""
     for m in reversed(db.chat_history(user_id, 20)):
@@ -560,8 +593,13 @@ async def _pay(bot, user_id: int, ask: str, *, wait: bool) -> None:
     master = _master(ask) or _master(said)
     ask = ask or (texts.EVGENY_PAY_ASK_MASTER if master else texts.EVGENY_PAY_ASK)
     db.evgeny_pay(user_id, time.time() + PAY_WAIT if wait else None, ask)
+    # согласие на спортзал после предложения 4-го дня — команде сразу видно, что это покупка;
+    # «сколько стоит спортзал» — ещё вопрос об оплате, а не согласие
+    title = (texts.EVGENY_PAY_TITLE_MASTER if master
+             else texts.EVGENY_PAY_TITLE_GYM if _wants_gym(ask)
+             else texts.EVGENY_PAY_TITLE)
     await _team(bot, user_id, texts.EVGENY_TEAM_PAY.format(
-        title=texts.EVGENY_PAY_TITLE_MASTER if master else texts.EVGENY_PAY_TITLE,
+        title=title,
         who=_who(user_id), card=html.escape(_brief(user_id)), ask=html.escape(ask),
         said=texts.EVGENY_PAY_SAID.format(text=html.escape(said[:300])) if said else u'',
         next=(texts.EVGENY_PAY_WAIT_NOTE.format(minutes=PAY_WAIT // 60) if wait

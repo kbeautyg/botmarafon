@@ -208,6 +208,74 @@ def test_берёт_только_последние_сообщения_и_обр
     assert all(len(цитата) <= 112 for цитата in цитаты)
 
 
+# ------------------------------------------------------------------ от дня к дню (11.11.2026)
+
+def _команда(args):
+    return type('Cmd', (), {'args': args})()
+
+
+def test_от_дня_к_дню__пример_рекомендация_и_предложение_спортзала():
+    задача = texts.EVGENY_COACH_TASK
+    assert u'после 2-го — обратная связь и один пример' in задача
+    assert u'после 3-го — обратная связь, пример и мягкая рекомендация, без продажи' in задача
+    assert u'после 4-го — обратная связь и прямое предложение' in задача
+    assert u'тег [PAY] хочет в спортзал' in задача
+    assert u'Спортзал сам не предлагаешь и не продаёшь' not in задача
+
+
+def test_людей_для_примеров_не_придумывает():
+    assert u'Людей, имена и случаи не придумывай никогда' in texts.EVGENY_PROMPT
+    _участник(1)
+    правила = evgeny._request(1, texts.EVGENY_REPLY_TASK)[0]['content']
+    assert правила.endswith(u'ИСТОРИИ УЧАСТНИКОВ\n' + texts.EVGENY_CASES_NONE), \
+        'историй нет — Евгению прямо сказано говорить обобщённо'
+
+
+async def test_истории_участников_команда_заменяет_дописывает_и_очищает():
+    from bot.handlers import admin
+    bot = FakeBot()
+    первая = u'Ирина, 52 года: на втором дне сильно кололо слева, потом ушла обида на маму.'
+    вторая = u'Олег: на третьем дне тянуло справа.'
+    сообщение = FakeMessage(text=u'/евгений_примеры', user=FakeUser(ALEX), bot=bot)
+    await admin.on_evgeny_cases(сообщение, _команда(u''))
+    assert u'Пока пусто' in сообщение.answers[-1]
+    await admin.on_evgeny_cases(сообщение, _команда(первая))
+    assert evgeny.cases() == первая
+    await admin.on_evgeny_cases(сообщение, _команда(u'добавить\n' + вторая))
+    assert evgeny.cases() == первая + u'\n\n' + вторая
+    _участник(1)
+    assert evgeny._request(1, texts.EVGENY_REPLY_TASK)[0]['content'].endswith(
+        u'ИСТОРИИ УЧАСТНИКОВ\n' + первая + u'\n\n' + вторая)
+    await admin.on_evgeny_cases(сообщение, _команда(u''))
+    assert u'Ирина, 52 года' in сообщение.answers[-1]
+    await admin.on_evgeny_cases(сообщение, _команда(u'сброс'))
+    assert evgeny.cases() == ''
+
+
+async def test_истории_правит_только_команда():
+    from bot.handlers import admin
+    чужой = FakeMessage(text=u'/евгений_примеры', user=FakeUser(5), bot=FakeBot())
+    await admin.on_evgeny_cases(чужой, _команда(u'Мария Петровна: всё прошло'))
+    assert evgeny.cases() == '' and чужой.answers == []
+
+
+async def test_согласие_на_спортзал__команде_хочет_в_спортзал(monkeypatch):
+    _участник(1)
+    bot = FakeBot()
+    await _знакомство(bot, 1)
+    monkeypatch.setattr(ai, 'complete', ИИ(u'[PAY] хочет в спортзал'))
+    await _пишет(bot, 1, u'Да, хочу в спортзал')
+    команде = [p for k, c, p in bot.sent if c in (SHARP, PAVEL, ALEX) and k == 'text']
+    assert any(texts.EVGENY_PAY_TITLE_GYM in p for p in команде), команде
+    assert _человеку(bot, 1)[-1] == texts.EVGENY_COACH_INTRO, 'об оплате Евгений молчит'
+
+
+def test_на_ты__и_когда_человек_сам_пишет_на_ты():
+    assert u'Перешёл человек сам на «ты» — пишет тебе на «ты»' in texts.EVGENY_COACH_TASK
+    assert u'сам пишет тебе на «ты» или предложил перейти' in texts.EVGENY_PROMPT
+    assert u'Сам на «ты» не переходи, даже если' not in texts.EVGENY_COACH_TASK
+
+
 # ------------------------------------------------------------------ врач
 
 def test_врача_в_обратной_связи_не_советует__только_при_неотложном():

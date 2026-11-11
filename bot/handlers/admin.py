@@ -53,7 +53,8 @@ STATS_COMMANDS = ('stats', 'who', 'кто', 'links', 'ссылки', 'status',
                   'отчет', 'отчёт', 'report', 'отмена', 'cancel',
                   'меню', 'menu', 'дошли', 'stuck', 'эфир', 'stream',
                   'баннер', 'banner',
-                  'евгений', 'evgeny', 'евгений_факты', 'evgeny_facts', 'resend')
+                  'евгений', 'evgeny', 'евгений_факты', 'evgeny_facts',
+                  'евгений_примеры', 'evgeny_cases', 'resend')
 
 
 #: Кнопки под полем ввода у своих (keyboards.team_keys). Это не команды, а
@@ -1413,3 +1414,34 @@ async def on_evgeny_facts(message: Message, command: CommandObject | None = None
         await message.answer(texts.EVGENY_FACTS_SAVED)
         return
     await message.answer(texts.EVGENY_FACTS_NOW.format(facts=html.escape(evgeny.facts())))
+
+
+CASES_SHOW = 3000           # столько знаков историй показываем: сообщение Telegram — до 4096
+_CASES_ADD = re.compile(u'^(?:добавить|add)\\b[\\s:]*(.*)$', re.I | re.S)
+
+
+@router.message(Command('евгений_примеры', 'evgeny_cases'))
+async def on_evgeny_cases(message: Message, command: CommandObject | None = None):
+    u"""Реальные истории участников, которые Евгений приводит в пример (11.11.2026).
+    С текстом — заменить, «добавить …» — дописать, «сброс» — очистить."""
+    if not config.is_team(message.from_user.id):
+        return
+    new = ((command.args if command else None) or u'').strip()
+    if new.lower() in (u'сброс', u'reset'):
+        evgeny.set_cases('')
+        await message.answer(texts.EVGENY_CASES_RESET)
+        return
+    more = _CASES_ADD.match(new)
+    if more and more.group(1).strip():
+        saved = evgeny.set_cases(more.group(1), add=True)
+        await message.answer(texts.EVGENY_CASES_SAVED.format(n=len(saved)))
+        return
+    if new:
+        saved = evgeny.set_cases(new)
+        await message.answer(texts.EVGENY_CASES_SAVED.format(n=len(saved)))
+        return
+    stored = evgeny.cases()
+    shown = html.escape(stored[:CASES_SHOW]) if stored else texts.EVGENY_CASES_EMPTY
+    if len(stored) > CASES_SHOW:
+        shown += texts.EVGENY_CASES_CUT.format(n=len(stored))
+    await message.answer(texts.EVGENY_CASES_NOW.format(cases=shown))
