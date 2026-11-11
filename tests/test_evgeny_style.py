@@ -225,6 +225,7 @@ def test_от_дня_к_дню__пример_рекомендация_и_пре�
 
 def test_людей_для_примеров_не_придумывает():
     assert u'Людей, имена и случаи не придумывай никогда' in texts.EVGENY_PROMPT
+    assert u'обобщённые отклики без имён — так и говори' in texts.EVGENY_PROMPT
     _участник(1)
     правила = evgeny._request(1, texts.EVGENY_REPLY_TASK)[0]['content']
     assert правила.endswith(u'ИСТОРИИ УЧАСТНИКОВ\n' + texts.EVGENY_CASES_NONE), \
