@@ -86,6 +86,9 @@ TRY_KEY = 'evgeny:try:%d'   # проверка командой: про како
 TRY_IDLE = 24 * 3600        # проверку забросили на сутки — свой снова пишет боту как команда
 TY_KEY = 'evgeny:ty:%d'     # '1' — человек сам предложил перейти на «ты» (стирает db.evgeny_forget)
 ECHO = 4                    # столько своих последних сообщений Евгений видит, чтобы не повторяться
+ASK_BY_AI = True            # вопрос про день словами ИИ; False — всегда текст заказчика
+ASK_TIMEOUT = 20.0          # столько ждём ИИ для вопроса про день — дальше уходит текст заказчика
+ASK_MAX = 400               # длиннее — ИИ ушёл не туда, вопрос уходит текстом заказчика
 PAY_WAIT = 5 * 60           # столько ждём, что про оплату человеку напишет команда
 PAY_EPISODE = 3 * 3600      # то же оплатное дело: команде второй раз не пишем
 TEAM_QUIET = 6 * 3600       # команда недавно писала человеку — координатор не встревает
@@ -304,7 +307,42 @@ _TERMS = ((u'«тонкий план»', re.compile(u'тонк\\w*\\s+план',
           (u'«родовая система»', re.compile(u'родов\\w*\\s+систем', re.I)),
           (u'«линия рода»', re.compile(u'лини\\w*\\s+рода', re.I)),
           (u'«застои»', re.compile(u'засто', re.I)),
-          (u'«низкочастотные энергии»', re.compile(u'низкочастотн|низк\\w*\\s+частот', re.I)))
+          (u'«низкочастотные энергии»', re.compile(u'низкочастотн|низк\\w*\\s+частот', re.I)),
+          (u'«отклик»', re.compile(u'отклик', re.I)),
+          (u'«зажим»', re.compile(u'зажим', re.I)))
+
+# Чем начать, чем закончить и каким ритмом — по жребию (Sharp 11.11.2026: «намного
+# разнообразнее… видно, что он однообразный»). Одни и те же правила дают модели одну и ту
+# же форму ответа; жребий меняет её от сообщения к сообщению и от человека к человеку.
+_OPENINGS = (
+    u'начни прямо со смысла самого яркого ощущения, без вводных слов',
+    u'начни с короткой живой реакции на его слова — не «Сильный отклик!» и не «Благодарю»',
+    u'начни с его собственного слова или образа из сообщения — повтори его и объясни, что за ним '
+    u'стоит',
+    u'начни с того, что объединяет его ощущения, а потом коротко про главное',
+    u'начни с истории другого участника, если она подходит, а потом — что это значит у него',
+    u'начни с простой поддержки своими словами: так бывает, и это работа, а не сбой',
+)
+_CLOSINGS = (
+    u'закончи тёплой фразой без вопроса',
+    u'закончи коротким вопросом по сути его ощущений',
+    u'закончи пожеланием к следующему дню, без вопроса',
+    u'закончи совсем коротко — в 3–6 слов',
+    u'закончи мыслью о том, что дальше будет глубже',
+)
+_RHYTHMS = (
+    u'предложения короткие, разговорные',
+    u'одно предложение подлиннее, остальные короткие',
+    u'одна из фраз совсем короткая, в два-три слова',
+    u'мысли связывай союзами, как в живой речи, а не перечнем через тире',
+)
+
+
+def _style(rng=random) -> str:
+    u"""Как написать этот ответ — жребий для разнообразия; правила этапа важнее."""
+    return (u'КАК НАПИСАТЬ ЭТОТ ОТВЕТ (жребий, чтобы ответы не были похожи один на другой): %s; '
+            u'%s; %s. Если правила «ОТ ДНЯ К ДНЮ» или задача требуют другого — они важнее.'
+            % (rng.choice(_OPENINGS), rng.choice(_CLOSINGS), rng.choice(_RHYTHMS)))
 
 
 def _echo(user_id: int) -> str:
@@ -362,8 +400,8 @@ def _history(user_id: int) -> list[dict]:
     return out
 
 
-def _request(user_id: int, task: str) -> list[dict]:
-    role = texts.EVGENY_COACH_TASK if _mode(user_id) == 'coach' else texts.EVGENY_SALES_TASK
+def _request(user_id: int, task: str, mode: str | None = None) -> list[dict]:
+    role = texts.EVGENY_COACH_TASK if (mode or _mode(user_id)) == 'coach' else texts.EVGENY_SALES_TASK
     # Первое системное — одно на всех людей в этом режиме: Claude держит его в кэше
     # (bot/ai.py). Что известно о человеке — отдельным, следом.
     rules = (texts.EVGENY_PROMPT + u'\n\n' + role + u'\n\n' + texts.EVGENY_SENSES
@@ -379,8 +417,13 @@ def _request(user_id: int, task: str) -> list[dict]:
         # with a model turn are not supported» (12.10.2026, у Динара последней
         # была рассылка). Так и в напоминании молчащему — последним писал Евгений.
         messages.append({'role': 'user', 'content': u'(человек пока ничего не ответил)'})
+    last = [task]
+    if task in (texts.EVGENY_COACH_REPLY_TASK, texts.EVGENY_REPLY_TASK):
+        last.append(_style())           # ответ человеку — у остальных задач форма своя
     echo = _echo(user_id)
-    messages.append({'role': 'system', 'content': task + (u'\n\n' + echo if echo else u'')})
+    if echo:
+        last.append(echo)
+    messages.append({'role': 'system', 'content': u'\n\n'.join(last)})
     return messages
 
 
@@ -677,6 +720,39 @@ def coach_text(user_id: int, ref: str) -> str:
     return text if wrote else texts.EVGENY_COACH_HELLO + text
 
 
+async def _ask_text(user_id: int, day: int, fallback: str) -> str:
+    u"""Вопрос про ощущения N-го дня словами ИИ — каждый раз своими (Sharp 11.11.2026:
+    «намного разнообразнее»); смысл — текст заказчика, он же уходит, если ИИ молчит,
+    думает дольше ASK_TIMEOUT или пишет не то. Шаг воронки ждёт не дольше ASK_TIMEOUT."""
+    if not ASK_BY_AI or not ai.ready():
+        return fallback
+    told = [d for d in db.feedback_days(user_id) if d < day]
+    task = texts.EVGENY_ASK_TASK.format(
+        day=day, name=texts.EVGENY_DAY_NAMES[day],
+        before=texts.EVGENY_ASK_BEFORE.format(day=max(told)) if told else u'')
+    try:
+        raw = await asyncio.wait_for(ai.complete(_request(user_id, task, mode='coach')), ASK_TIMEOUT)
+    except Exception as err:            # вопрос про день уйдёт в любом случае — словами заказчика
+        log.warning(u'Евгений: вопрос про %d-й день для %s — текстом заказчика (%s)', day, user_id,
+                    err or err.__class__.__name__)
+        return fallback
+    text, tags = parse(raw)
+    if not text or tags or len(text) > ASK_MAX:
+        log.warning(u'Евгений: ИИ написал не тот вопрос про %d-й день для %s — текст заказчика',
+                    day, user_id)
+        return fallback
+    return text if db.wrote_as(user_id, EVGENY) else texts.EVGENY_COACH_HELLO + text
+
+
+async def coach_message(user_id: int, ref: str) -> str:
+    u"""Что написать по сценарию: знакомство — текст заказчика как есть, вопрос про день —
+    словами ИИ (_ask_text). Пусто — писать нечего (coach_text)."""
+    text = coach_text(user_id, ref)
+    if not text or ref == 'intro':
+        return text
+    return await _ask_text(user_id, int(ref[3:]), text)
+
+
 def _coach_may(user_id: int) -> bool:
     u"""Можно ли координатору писать: бот не закрыт, человек не в чёрном списке,
     не просил не писать, и команда не выключала ему Евгения сама."""
@@ -715,7 +791,7 @@ async def coach(bot, user_id: int, ref: str) -> None:
         log.info(u'Евгений-координатор: %s для %s пропущено (выключен, нет ключа ИИ или '
                  u'человеку писать нельзя)', ref, user_id)
         return
-    text = coach_text(user_id, ref)
+    text = await coach_message(user_id, ref)
     if text and await _say(bot, user_id, text, typing=False, strict=True):
         _listen(user_id)
         log.info(u'Евгений-координатор → %s: %s', user_id, ref)
@@ -812,7 +888,7 @@ async def try_day(bot, user_id: int, day: int) -> str:
     if not _coach_may(user_id):
         return texts.EVGENY_TRY_HELD
     db.put_content(TRY_KEY % user_id, 'evgeny', str(day))
-    text = coach_text(user_id, 'day%d' % day)
+    text = await coach_message(user_id, 'day%d' % day)
     if not text:
         return texts.EVGENY_TRY_TOLD.format(day=day)
     if not await _say(bot, user_id, text, typing=False):

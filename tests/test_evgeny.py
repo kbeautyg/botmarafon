@@ -336,7 +336,7 @@ async def test_включили_когда_человек_ждёт_ответа_
     monkeypatch.setattr(ai, 'complete', фальшивый)
     evgeny.enable(bot, 1, SHARP)
     await asyncio.sleep(0.2)
-    assert фальшивый.запросы[0][-1]['content'] == texts.EVGENY_REPLY_TASK
+    assert фальшивый.запросы[0][-1]['content'].startswith(texts.EVGENY_REPLY_TASK)
 
 
 async def test_команде_и_закрывшим_бота_евгения_не_включить():

@@ -34,6 +34,17 @@ def без_ключа_claude(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def вопрос_про_день_текстом_заказчика(monkeypatch):
+    u"""Вопрос Евгения про день в боте пишет ИИ (evgeny.ASK_BY_AI). В проверках поддельный ИИ
+    отвечает заготовками на всё подряд — вопрос ушёл бы его заготовкой, а без подделки запрос
+    ушёл бы в сеть. Поэтому по умолчанию — текст заказчика; кому нужен ИИ, включает сам
+    (tests/test_evgeny_style.py)."""
+    from bot import evgeny
+
+    monkeypatch.setattr(evgeny, 'ASK_BY_AI', False)
+
+
+@pytest.fixture(autouse=True)
 def без_памяти_между_проверками():
     u"""Отметки «админам про этот день уже сказали» живут в памяти процесса.
 

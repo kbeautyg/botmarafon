@@ -190,10 +190,12 @@ def test_ии_видит_сколько_раз_уже_звучали_слова_
     assert u'низкочастотные' not in echo, 'чего не было — не перечисляем'
 
 
-def test_евгений_ещё_не_писал__в_задании_только_задача():
+def test_евгений_ещё_не_писал__в_задании_задача_и_жребий_без_повторов():
     _участник(1)
     db.save_message(1, 'in', 'text', u'Здравствуйте')
-    assert evgeny._request(1, texts.EVGENY_REPLY_TASK)[-1]['content'] == texts.EVGENY_REPLY_TASK
+    последнее = evgeny._request(1, texts.EVGENY_REPLY_TASK)[-1]['content']
+    assert последнее.startswith(texts.EVGENY_REPLY_TASK + u'\n\nКАК НАПИСАТЬ ЭТОТ ОТВЕТ')
+    assert u'ТАК ТЫ УЖЕ ПИСАЛ' not in последнее
 
 
 def test_берёт_только_последние_сообщения_и_обрезает_длинные():
@@ -214,13 +216,101 @@ def _команда(args):
     return type('Cmd', (), {'args': args})()
 
 
-def test_от_дня_к_дню__пример_рекомендация_и_предложение_спортзала():
+def test_от_дня_к_дню__касание_на_2_м_продажа_на_3_м_и_4_м():
+    u"""Sharp 11.11.2026: «на втором дне он только касается; на третьем и 4 дне он уже продаёт
+    энергоспортзал — что он реально помогает»."""
     задача = texts.EVGENY_COACH_TASK
-    assert u'после 2-го — обратная связь и один пример' in задача
-    assert u'после 3-го — обратная связь, пример и мягкая рекомендация одной фразой, без продажи' in задача
-    assert u'после 4-го — короткая обратная связь и прямое предложение' in задача
+    assert u'после 2-го — обратная связь, один пример' in задача
+    assert u'лёгкое касание спортзала: одной фразой, мимоходом, без рекомендации и продажи' in задача
+    assert u'после 3-го и после 4-го — короткая обратная связь и продажа: спортзал реально помогает' in задача
     assert u'тег [PAY] хочет в спортзал' in задача
     assert u'Спортзал сам не предлагаешь и не продаёшь' not in задача
+
+
+# ------------------------------------------------------------------ разнообразие (11.11.2026)
+
+async def _шаг(bot, uid, chain):
+    db._run('DELETE FROM jobs WHERE user_id=? AND chain=?', (uid, chain))
+    db.add_job(uid, chain, 0, time.time() - 1)
+    job = next(j for j in db.user_jobs(uid) if j['chain'] == chain)
+    await scheduler.run_job(bot, job)
+
+
+def test_ответу_человеку_жребий_как_начать_и_закончить():
+    _участник(1)
+    db.save_message(1, 'in', 'text', u'Было тепло в руках')
+    последнее = evgeny._request(1, texts.EVGENY_COACH_REPLY_TASK)[-1]['content']
+    assert u'КАК НАПИСАТЬ ЭТОТ ОТВЕТ' in последнее
+    assert u'КАК НАПИСАТЬ' not in evgeny._request(1, texts.EVGENY_OPEN_TASK)[-1]['content'], \
+        'у знакомства и напоминаний форма своя'
+    import random
+    жребии = {evgeny._style(random.Random(n)) for n in range(12)}
+    assert len(жребии) >= 6, 'жребий правда разный'
+    assert all(u'правила «ОТ ДНЯ К ДНЮ»' in s for s in жребии), 'правила этапа важнее жребия'
+
+
+def test_ии_видит_повторы_слов_отклик_и_зажим():
+    _участник(1)
+    db.save_message(1, 'out', 'text', u'Сильный отклик! Ушёл зажим. Хороший отклик.', author=evgeny.EVGENY)
+    echo = evgeny._echo(1)
+    assert u'«отклик» — 2' in echo and u'«зажим» — 1' in echo
+
+
+async def test_вопрос_про_день_пишет_ии_своими_словами(monkeypatch):
+    monkeypatch.setattr(evgeny, 'ASK_BY_AI', True)
+    _участник(1)
+    bot = FakeBot()
+    await _знакомство(bot, 1)
+    фальшивый = ИИ(u'Как прошёл для вас первый день — что было в теле? Может, приходили образы?')
+    monkeypatch.setattr(ai, 'complete', фальшивый)
+    await _шаг(bot, 1, 'evgeny_day1')
+    assert _человеку(bot, 1)[-1] == u'Как прошёл для вас первый день — что было в теле? Может, приходили образы?'
+    задача = фальшивый.запросы[-1][-1]['content']
+    assert задача.startswith(texts.EVGENY_ASK_TASK.format(day=1, name=u'Предназначение', before=u''))
+    db.log_event(1, 'feedback', '1')
+    фальшивый.ответы.append(u'А как отозвался день отношений? Расскажите, что чувствовали.')
+    await _шаг(bot, 1, 'evgeny_day2')
+    assert texts.EVGENY_ASK_BEFORE.format(day=1) in фальшивый.запросы[-1][-1]['content'], \
+        'ИИ знает, что после 1-го дня человек уже рассказывал'
+
+
+@pytest.mark.parametrize('ответ', [
+    u'', u'Как прошёл день?\n[FEEDBACK 1]', u'Очень длинно. ' * 40, ai.AIError(u'нет связи'),
+])
+async def test_ии_не_справился__вопрос_уходит_текстом_заказчика(monkeypatch, ответ):
+    monkeypatch.setattr(evgeny, 'ASK_BY_AI', True)
+    _участник(1)
+    bot = FakeBot()
+    await _знакомство(bot, 1)
+
+    async def ии(messages, **kw):
+        if isinstance(ответ, Exception):
+            raise ответ
+        return ответ
+    monkeypatch.setattr(ai, 'complete', ии)
+    await _шаг(bot, 1, 'evgeny_day1')
+    assert _человеку(bot, 1)[-1] == texts.EVGENY_COACH_ASK.format(day=u'первого')
+
+
+async def test_ии_думает_слишком_долго__шаг_воронки_не_ждёт(monkeypatch):
+    monkeypatch.setattr(evgeny, 'ASK_BY_AI', True)
+    monkeypatch.setattr(evgeny, 'ASK_TIMEOUT', 0.05)
+    _участник(1)
+    bot = FakeBot()
+    await _знакомство(bot, 1)
+
+    async def ии(messages, **kw):
+        await asyncio.sleep(5)
+        return u'Поздно'
+    monkeypatch.setattr(ai, 'complete', ии)
+    начало = time.time()
+    await _шаг(bot, 1, 'evgeny_day1')
+    assert time.time() - начало < 2
+    assert _человеку(bot, 1)[-1] == texts.EVGENY_COACH_ASK.format(day=u'первого')
+
+
+async def test_по_умолчанию_в_проверках_вопрос_текстом_заказчика():
+    assert evgeny.ASK_BY_AI is False, 'conftest: без подделки ИИ запрос ушёл бы в сеть'
 
 
 def test_пишет_коротко():
@@ -230,6 +320,13 @@ def test_пишет_коротко():
     assert texts.EVGENY_COACH_REPLY_TASK.endswith(u'с примером или спортзалом — до 450.')
     assert u'до 300 знаков' in texts.EVGENY_REPLY_TASK
     assert u'скажи про каждое, коротко' not in texts.EVGENY_SENSES
+
+
+def test_спортзал_не_продаёт_как_лечение():
+    u"""Немедицинской услуге закон о рекламе не даёт обещать лечебный эффект: истории «ушли
+    головные боли» Евгений результатом спортзала не рассказывает."""
+    assert u'не рассказывай, что у кого-то прошла болезнь или симптом' in texts.EVGENY_PROMPT
+    assert u'спортзал — не лечение' in texts.EVGENY_PROMPT
 
 
 def test_людей_для_примеров_не_придумывает():
