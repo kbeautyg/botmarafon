@@ -222,7 +222,10 @@ CREATE TABLE IF NOT EXISTS evgeny (
   off_kind   TEXT,     -- почему выключен, для бота: team | refused | manual | gone | auto
   pay_at     REAL,     -- когда сказали команде, что человек пишет про оплату
   pay_due    REAL,     -- когда Евгений позовёт коллегу, если команда не ответит
-  pay_ask    TEXT      -- что именно спросил — для напоминания команде
+  pay_ask    TEXT,     -- что именно спросил — для напоминания команде
+  -- 12.11.2026 (Павел): после прощания — два его эфира, через сутки тишины — «как эфиры?»
+  efir_at    REAL,     -- когда ушли эфиры Павла: второй раз не шлём
+  efir_asked REAL      -- когда Евгений спросил, как эфиры
 );
 '''
 
@@ -297,7 +300,8 @@ def connect(path: str) -> sqlite3.Connection:
     # 06.11.2026: Евгений-координатор и передача команде вопросов об оплате.
     evgeny_columns = [row[1] for row in _conn.execute('PRAGMA table_info(evgeny)')]
     for column, kind in (('mode', "TEXT NOT NULL DEFAULT 'sales'"), ('off_kind', 'TEXT'),
-                         ('pay_at', 'REAL'), ('pay_due', 'REAL'), ('pay_ask', 'TEXT')):
+                         ('pay_at', 'REAL'), ('pay_due', 'REAL'), ('pay_ask', 'TEXT'),
+                         ('efir_at', 'REAL'), ('efir_asked', 'REAL')):
         if evgeny_columns and column not in evgeny_columns:
             try:
                 _conn.execute('ALTER TABLE evgeny ADD COLUMN %s %s' % (column, kind))
@@ -1583,10 +1587,11 @@ def evgeny_pending(limit: int) -> list[int]:
 
 def evgeny_silent(before: float, max_nudges: int, limit: int) -> list[dict]:
     u"""Кому пора напомнить: последним писал Евгений, и было это до before.
-    Только дожим: координатору напоминают сами дни марафона."""
+    Только дожим: координатору напоминают сами дни марафона. Кому ушли эфиры
+    Павла, тому сначала — вопрос об эфирах (evgeny._efir_asks), а не напоминание."""
     rows = _conn.execute(
         "SELECT * FROM evgeny WHERE active=1 AND pending=0 AND mode != 'coach' "
-        'AND last_out IS NOT NULL '
+        'AND (efir_at IS NULL OR efir_asked IS NOT NULL) AND last_out IS NOT NULL '
         'AND last_out <= ? AND (last_in IS NULL OR last_in < last_out) AND nudges < ? '
         'ORDER BY last_out LIMIT ?', (before, max_nudges, limit)).fetchall()
     return [dict(r) for r in rows]
@@ -1594,6 +1599,27 @@ def evgeny_silent(before: float, max_nudges: int, limit: int) -> list[dict]:
 
 def evgeny_nudged(user_id: int) -> None:
     _run('UPDATE evgeny SET nudges=nudges+1, last_out=? WHERE user_id=?', (time.time(), user_id))
+
+
+def evgeny_efir(user_id: int) -> None:
+    u"""Эфиры Павла ушли следом за прощанием: второй раз не шлём, через сутки тишины
+    Евгений спросит, как они (Павел 11.11.2026)."""
+    _run('UPDATE evgeny SET efir_at=? WHERE user_id=?', (time.time(), user_id))
+
+
+def evgeny_efir_asked(user_id: int) -> None:
+    _run('UPDATE evgeny SET efir_asked=? WHERE user_id=?', (time.time(), user_id))
+
+
+def evgeny_efir_waiting() -> list[dict]:
+    u"""Кому эфиры ушли, а спросить о них Евгений ещё не спросил: он ведёт диалог, и
+    после эфиров человек ничего не купил. Сколько длится тишина — решает evgeny."""
+    rows = _conn.execute(
+        'SELECT * FROM evgeny g WHERE active=1 AND efir_at IS NOT NULL AND efir_asked IS NULL '
+        'AND NOT EXISTS (SELECT 1 FROM purchases p WHERE p.user_id = g.user_id '
+        '                AND p.at >= g.efir_at) '
+        'ORDER BY efir_at').fetchall()
+    return [dict(r) for r in rows]
 
 
 def evgeny_counts() -> dict[str, int]:

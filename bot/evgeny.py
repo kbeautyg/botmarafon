@@ -61,6 +61,11 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 видит; программа Павла — «Энергоспортзал», не «спортзал» (energo — страховка на случай,
 если ИИ всё же напишет по-старому); «хорошо, посмотрю», «спасибо», «пока нет вопросов» —
 ответ одной короткой фразой без вопроса, а на второе «спасибо» подряд — тишина (closing).
+
+Павел 11.11.2026, ночью (голосовые): прощаясь после предложения Энергоспортзала (отказ, «подумаю»,
+«пока нет вопросов»), Евгений шлёт следом два эфира Павла — его текстом слово в слово, подряд,
+через полминуты каждый (_efir), и затихает. Сутки тишины — спрашивает, как эфиры (_efir_asks), а
+дальше снова говорит с человеком и потихоньку подводит к Энергоспортзалу (EVGENY_EFIR_TALK).
 """
 import asyncio
 import html
@@ -69,6 +74,7 @@ import random
 import re
 import time
 from datetime import datetime
+from typing import NamedTuple
 
 from . import ai, config, contact, db, delivery, keyboards, stats, texts
 
@@ -93,6 +99,11 @@ TY_KEY = 'evgeny:ty:%d'     # '1' — человек сам предложил �
 CLOSED_KEY = 'evgeny:closed:%d'  # когда Евгений ответил на «спасибо» и «хорошо, посмотрю» (closing)
 CLOSING_LEN = 120           # длиннее — человек пишет о деле, а не прощается
 CLOSING_MAX = 160           # ответ на «хорошо, посмотрю» — не длиннее
+EFIR_GAP = 30.0             # эфиры Павла после прощания — по одному через полминуты
+EFIR_QUIET = 24 * 3600      # сутки тишины после эфиров — Евгений спрашивает, как они
+EFIR_QUIET_TRY = 2 * 60     # в проверке командой — через 2 минуты: сутки проверку не держат (TRY_IDLE)
+EFIR_LATEST = 72 * 3600     # позже о них не спрашиваем: записи марафона давно закрыты
+DAY4_ASK = 2 * 3600         # про 4-й день координатор спрашивает через 2 часа (funnel.EVGENY_CHAINS)
 ECHO = 4                    # столько своих последних сообщений Евгений видит, чтобы не повторяться
 ASK_BY_AI = True            # вопрос про день словами ИИ; False — всегда текст заказчика
 ASK_TIMEOUT = 20.0          # столько ждём ИИ для вопроса про день — дальше уходит текст заказчика
@@ -104,7 +115,7 @@ TEAM_QUIET = 6 * 3600       # команда недавно писала чел�
 # команда выключила вручную.
 HOLD = ('refused', 'manual')
 
-_TAG = re.compile(r'\[(BUY|TEAM|STOP|PAY|TY)\]([^\n\[]*)', re.I)
+_TAG = re.compile(r'\[(BUY|TEAM|STOP|PAY|TY|BYE)\]([^\n\[]*)', re.I)
 # «Давай на ты», «можно на ты?», «пишите мне на «ты»», «не надо на вы» — человек сам
 # предлагает перейти на «ты». Чего здесь нет («мы же можем на ты»), узнаёт ИИ: тег [TY].
 _TY_WORDS = u'(?:со\\s+мной\\s+|ко\\s+мне\\s+|мне\\s+|уже\\s+)?на\\s+[«"„\']?%s\\b'
@@ -357,7 +368,8 @@ def _echo(user_id: int) -> str:
     Павел 09.11.2026: «на все дни однотипно рассказывает»; AleX: «„какие будут
     ощущения, хорошо?“ через один день»."""
     mine = [(m.get('text') or '').strip() for m in db.chat_history(user_id, HISTORY)
-            if m.get('author') == EVGENY and m['side'] == 'out' and (m.get('text') or '').strip()]
+            if m.get('author') == EVGENY and m['side'] == 'out' and (m.get('text') or '').strip()
+            and not _attachment(m)]
     if not mine:
         return ''
     heads, tails = [], []
@@ -429,18 +441,28 @@ def closing(text: str | None, asked: bool = False) -> bool:
     return all(_FILLER.fullmatch(word) for word in re.findall(r'\w+', rest))
 
 
-def _ending(user_id: int) -> tuple[str, bool, float]:
-    u"""Что человек написал после последнего ответа бота, спросил ли бот в том ответе о чём-то
-    и когда тот ответ ушёл."""
-    history = db.chat_history(user_id, HISTORY)
-    said = []
+class _End(NamedTuple):
+    said: str           # что человек написал после последнего сообщения бота
+    asked: bool         # в том сообщении бот о чём-то спросил
+    at: float           # когда оно ушло
+    during: bool        # человек написал всё это, пока уходили эфиры Павла
+
+
+def _ending(user_id: int) -> _End:
+    u"""Что человек написал после последнего сообщения бота, спросил ли бот в нём о чём-то и
+    когда оно ушло. Эфиры — продолжение прощания (_settled): написанное между ними — после них."""
+    history = _settled(db.chat_history(user_id, HISTORY))
+    tail = []
     while history and history[-1]['side'] == 'in':
-        said.append((history.pop().get('text') or '').strip())
-    said = u'\n'.join(text for text in reversed(said) if text)
+        tail.append(history.pop())
+    tail.reverse()
+    said = u'\n'.join(t for t in ((m.get('text') or '').strip() for m in tail) if t)
     if not history:
-        return said, False, 0.0
+        return _End(said, False, 0.0, False)
     last = history[-1]
-    return said, '?' in (last.get('text') or ''), float(last.get('at') or 0)
+    at = float(last.get('at') or 0)
+    during = bool(tail) and _attachment(last) and all(float(m.get('at') or 0) < at for m in tail)
+    return _End(said, '?' in (last.get('text') or ''), at, during)
 
 
 def _closed_after(user_id: int, last_out: float) -> bool:
@@ -468,6 +490,102 @@ def _closing(text: str, said: str, ty: bool = False) -> str:
     return texts.EVGENY_CLOSING_FALLBACK[-1][2 if ty else 1]
 
 
+# ------------------------------------------------------------------ эфиры Павла после прощания
+
+_EFIRY = frozenset(text.strip() for text in texts.EVGENY_EFIRY)
+
+# Человек отказался или откладывает — страховка, если ИИ, прощаясь, не поставил [BYE]
+_DECLINE = re.compile(
+    u'(?:нет|нету|не\\s+имею|не\\s+хватает)\\s+(?:\\w+\\s+){0,2}(?:денег|средств|возможност|финанс)|'
+    u'(?:денег|средств|возможност\\w*|финанс\\w*)\\s+(?:\\w+\\s+){0,3}(?:нет|нету|не\\s+хватает)\\b|'
+    u'(?:нет|нету)\\s+вопросов|вопросов\\s+(?:пока\\s+)?(?:нет|нету)|^\\s*(?:нет|неа|нету)\\W*$|'
+    u'\\bнет[,.!\\s]+спасибо|подума|не\\s+сейчас|не\\s+готов|попозже|позже|в\\s+другой\\s+раз|'
+    u'в\\s+следующ\\w+\\s+(?:раз|месяц)|\\bдорого\\b|дороговато|не\\s+потяну|не\\s+по\\s+карману|'
+    u'с\\s+зарплаты|откажусь|воздержусь', re.I)
+
+
+def declined(text: str | None) -> bool:
+    u"""Человек отказался от Энергоспортзала или отложил: «денег нет», «подумаю», «не сейчас»."""
+    return bool(_DECLINE.search(text or ''))
+
+
+def _attachment(m: dict) -> bool:
+    u"""Сообщение — эфир Павла, ушедший следом за прощанием, а не ответ Евгения."""
+    return (m.get('side') == 'out' and m.get('author') == EVGENY
+            and (m.get('text') or '').strip() in _EFIRY)
+
+
+def _settled(rows: list[dict]) -> list[dict]:
+    u"""Переписка, где эфиры стоят сразу за прощанием, к которому они относятся. Между ними
+    полминуты, человек успевает написать («спасибо», вопрос) — для ИИ и для «на что отвечать»
+    это написано после эфиров: ответ ему и уйдёт после них."""
+    out, held = [], []
+    for m in rows:
+        if m['side'] == 'in':
+            held.append(m)
+        elif _attachment(m):
+            out.append(m)
+        else:
+            out.extend(held)
+            held = []
+            out.append(m)
+    return out + held
+
+
+def _records_open(user_id: int, now: float | None = None) -> bool:
+    u"""Записи марафона ещё открыты — 72 часа после 4-го дня: эфиры Павла начинаются словами
+    «в эти 72 часа». Своему в проверке — всегда: дней у него нет, он идёт кнопками."""
+    if config.is_team(user_id):
+        return True
+    got = db.days_of(user_id).get(4)
+    return bool(got) and (now or time.time()) - got < DAY4_WAIT
+
+
+def _offered(user_id: int) -> bool:
+    u"""Координатор уже предложил Энергоспортзал — он предлагает после 4-го дня: человек
+    рассказал об ощущениях 4-го дня, свой в проверке нажал «4-й день», а участнику вопрос про
+    4-й день ушёл (через DAY4_ASK после записи). Так прощание на 3-м дне эфиры не зовёт."""
+    if 4 in db.feedback_days(user_id):
+        return True
+    stage = _stage(user_id)
+    if stage is not None:
+        return stage >= 4
+    got = db.days_of(user_id).get(4)
+    return bool(got) and time.time() - got >= DAY4_ASK
+
+
+def _efir_due(user_id: int) -> bool:
+    u"""Прощаясь сейчас, прислать ли следом эфиры: предложение уже было (в дожиме — с первых
+    сообщений), записи ещё открыты, эфиров этому человеку ещё не было."""
+    row = db.evgeny_get(user_id) or {}
+    if row.get('efir_at') or not _records_open(user_id):
+        return False
+    return (row.get('mode') or 'sales') != 'coach' or _offered(user_id)
+
+
+def _farewell(tags: dict, ends: bool, said: str, text: str) -> bool:
+    u"""Евгений сейчас попрощался: ответил на «хорошо, посмотрю», «подумаю» (closing), сам
+    поставил [BYE] или человек отказался («денег нет»), а Евгений ни о чём не спросил."""
+    if {'team', 'pay', 'stop', 'day', 'buy'} & set(tags):
+        return False
+    return ends or 'bye' in tags or (declined(said) and '?' not in said and '?' not in text)
+
+
+async def _efir(bot, user_id: int) -> bool:
+    u"""Два эфира Павла следом за прощанием — подряд, через полминуты каждый (EFIR_GAP), его
+    текстом слово в слово. Евгения за это время выключили (ответила команда) — не шлём."""
+    for n, text in enumerate(texts.EVGENY_EFIRY):
+        await asyncio.sleep(max(0.0, EFIR_GAP - _typing_seconds(text)))
+        if not listening(user_id) or not await _say(bot, user_id, text):
+            return False
+        if n == 0:
+            db.evgeny_efir(user_id)
+    log.info(u'Евгений: %s — эфиры Павла после прощания', user_id)
+    if config.is_team(user_id):
+        await _try_note(bot, user_id, texts.EVGENY_TRY_EFIR_NOTE.format(minutes=EFIR_QUIET_TRY // 60))
+    return True
+
+
 def _brief(user_id: int) -> str:
     u"""Кто это — одной строкой для команды: откуда пришёл и докуда дошёл."""
     person = db.get_user(user_id) or {}
@@ -484,7 +602,7 @@ def _brief(user_id: int) -> str:
 
 def _history(user_id: int) -> list[dict]:
     out = []
-    for m in db.chat_history(user_id, HISTORY):
+    for m in _settled(db.chat_history(user_id, HISTORY)):
         text = (m.get('text') or '').strip()
         if m['kind'] != 'text':
             what = u'[%s]' % _KIND_NAMES.get(m['kind'], u'вложение')
@@ -498,9 +616,11 @@ def _history(user_id: int) -> list[dict]:
 _REPLY_TASKS = (texts.EVGENY_COACH_REPLY_TASK, texts.EVGENY_REPLY_TASK)
 
 
-def _request(user_id: int, task: str, mode: str | None = None, closing_said: str = '') -> list[dict]:
+def _request(user_id: int, task: str, mode: str | None = None, closing_said: str = '',
+             efir: bool = False) -> list[dict]:
     u"""closing_said — человек закрывает разговор этими словами: вместо жребия формы — одна
-    короткая фраза (texts.EVGENY_CLOSING_TASK)."""
+    короткая фраза (texts.EVGENY_CLOSING_TASK); efir — следом уйдут эфиры Павла. Эфиры уже
+    ушли — Евгений снова подводит к Энергоспортзалу (texts.EVGENY_EFIR_TALK)."""
     role = texts.EVGENY_COACH_TASK if (mode or _mode(user_id)) == 'coach' else texts.EVGENY_SALES_TASK
     # Первое системное — одно на всех людей в этом режиме: Claude держит его в кэше
     # (bot/ai.py). Что известно о человеке — отдельным, следом. В историях команды —
@@ -521,8 +641,12 @@ def _request(user_id: int, task: str, mode: str | None = None, closing_said: str
     last = [task]
     if closing_said:
         last.append(texts.EVGENY_CLOSING_TASK.format(said=_head(closing_said, 120)))
+        if efir:
+            last.append(texts.EVGENY_CLOSING_EFIR)
     elif task in _REPLY_TASKS:
         last.append(_style())           # ответ человеку — у остальных задач форма своя
+        if (db.evgeny_get(user_id) or {}).get('efir_at'):
+            last.append(texts.EVGENY_EFIR_TALK)
     echo = _echo(user_id)
     if echo:
         last.append(echo)
@@ -625,13 +749,18 @@ async def _turn(bot, user_id: int, task: str) -> bool:
     async with lock:
         if not listening(user_id):
             return False
-        said, asked, last_out = _ending(user_id) if task in _REPLY_TASKS else ('', False, 0.0)
-        ends = closing(said, asked)
-        if ends and _closed_after(user_id, last_out):
+        reply = task in _REPLY_TASKS
+        end = _ending(user_id) if reply else _End('', False, 0.0, False)
+        said = end.said
+        ends = closing(said, end.asked)
+        if ends and (end.during or _closed_after(user_id, end.at)):
+            # «спасибо», пока уходили эфиры, — ответом и были эфиры; второе «спасибо» подряд — тоже
             log.info(u'Евгений: %s снова прощается — на прощание уже ответили, молчим', user_id)
             return False
+        due = reply and _efir_due(user_id)
         try:
-            raw = await ai.complete(_request(user_id, task, closing_said=said if ends else ''))
+            raw = await ai.complete(_request(user_id, task, closing_said=said if ends else '',
+                                             efir=due and ends))
         except ai.AIError as err:
             log.warning(u'Евгений: ИИ не ответил для %s: %s', user_id, err)
             await _team(bot, user_id, u'🤖 <b>Евгений не смог ответить</b>\n%s\n%s\n%s' % (
@@ -688,6 +817,8 @@ async def _turn(bot, user_id: int, task: str) -> bool:
             disable(user_id, u'позвал команду', 'team')
             await _team(bot, user_id, texts.EVGENY_TEAM_ASK.format(
                 who=_who(user_id), ask=html.escape(tags['team'] or u'нужен человек из команды')))
+        elif sent and due and _farewell(tags, ends, said, text):
+            await _efir(bot, user_id)       # под тем же замком: ответ на «спасибо» — после эфиров
         return sent
 
 
@@ -1157,6 +1288,40 @@ async def pay_tick(bot, now: float | None = None) -> int:
     return await _pay_waits(bot, now or time.time())
 
 
+async def _efir_asks(bot, now: float) -> int:
+    u"""Сутки тишины после эфиров (своему в проверке — EFIR_QUIET_TRY): Евгений один раз
+    спрашивает, как они, — словами Павла. Участнику — только днём; Евгения остановили — спросит,
+    когда запустят, но не позже EFIR_LATEST после эфиров."""
+    done = 0
+    for row in db.evgeny_efir_waiting():
+        user_id = row['user_id']
+        team = config.is_team(user_id)
+        quiet = max(row.get('last_in') or 0, row.get('last_out') or 0, row['efir_at'])
+        if now - quiet < (EFIR_QUIET_TRY if team else EFIR_QUIET):
+            continue
+        if not team and (why_not(user_id) or now - row['efir_at'] > EFIR_LATEST):
+            db.evgeny_efir_asked(user_id)   # спрашивать некого или уже поздно
+            continue
+        lock = _locks.setdefault(user_id, asyncio.Lock())
+        if (not team and not daytime(now)) or not listening(user_id) or lock.locked():
+            continue                        # ночь, Евгений остановлен или как раз отвечает
+        async with lock:
+            text = texts.EVGENY_EFIR_ASK_TY if on_ty(user_id) else texts.EVGENY_EFIR_ASK
+            sent = await _say(bot, user_id, text, typing=False)
+            db.evgeny_efir_asked(user_id)   # не ушло — не долбим каждые полминуты
+        if sent:
+            done += 1
+            log.info(u'Евгений: %s — спросил, как эфиры', user_id)
+    return done
+
+
+async def efir_tick(bot, now: float | None = None) -> int:
+    u"""Вопрос об эфирах — и своим в проверке, когда участникам Евгений ещё не запущен."""
+    if not ai.ready():
+        return 0
+    return await _efir_asks(bot, now or time.time())
+
+
 async def _every(name: str, step, bot) -> None:
     while True:
         try:
@@ -1169,7 +1334,8 @@ async def _every(name: str, step, bot) -> None:
 
 
 async def loop(bot) -> None:
-    u"""Два цикла рядом: оплата не ждёт, пока уйдут первые сообщения дожима
-    (ревью 06.11.2026: обещанные 5 минут иначе растягивались на 6–8)."""
-    log.info(u'Евгений: циклы дожима и оплаты запущены')
-    await asyncio.gather(_every(u'дожим', tick, bot), _every(u'оплата', pay_tick, bot))
+    u"""Циклы рядом: оплата не ждёт, пока уйдут первые сообщения дожима (ревью 06.11.2026:
+    обещанные 5 минут иначе растягивались на 6–8); вопрос об эфирах — и своим в проверке."""
+    log.info(u'Евгений: циклы дожима, оплаты и эфиров запущены')
+    await asyncio.gather(_every(u'дожим', tick, bot), _every(u'оплата', pay_tick, bot),
+                         _every(u'эфиры', efir_tick, bot))

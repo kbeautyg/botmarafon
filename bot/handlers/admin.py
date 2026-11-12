@@ -1365,7 +1365,9 @@ async def evgeny_try(bot, target: Message, user) -> None:
     # знакомство — до кнопок дней: нажатый сразу «1-й день» не обгонит его (Павел 11.11.2026)
     sent = await evgeny.try_intro(bot, user.id)
     state = texts.EVGENY_TRY_STATE_ON if evgeny.coach_on() else texts.EVGENY_TRY_STATE_OFF
-    await target.answer(texts.EVGENY_TRY_NOTE.format(state=state), reply_markup=keyboards.evgeny_try())
+    await target.answer(texts.EVGENY_TRY_NOTE.format(state=state,
+                                                     minutes=evgeny.EFIR_QUIET_TRY // 60),
+                        reply_markup=keyboards.evgeny_try())
     if not sent:
         await target.answer(texts.EVGENY_TRY_FAILED)
 
