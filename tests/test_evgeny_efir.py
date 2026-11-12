@@ -385,8 +385,8 @@ async def test_проверка__отказ_эфиры_и_через_2_мину�
 
 
 def test_пояснение_проверки__про_эфиры_и_2_минуты():
-    assert u'два эфира Павла' in texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2)
-    assert u'Помолчите 2 мин' in texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2)
+    assert u'два эфира Павла' in texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2, sendoff=10)
+    assert u'Помолчите 2 мин' in texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2, sendoff=10)
 
 
 def test_новая_проверка__эфиры_заново():

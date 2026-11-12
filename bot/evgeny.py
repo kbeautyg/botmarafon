@@ -66,6 +66,11 @@ AleX 11.10.2026: «в пульте — кнопочка (Ai) рядом с те�
 «пока нет вопросов»), Евгений шлёт следом два эфира Павла — его текстом слово в слово, подряд,
 через полминуты каждый (_efir), и затихает. Сутки тишины — спрашивает, как эфиры (_efir_asks), а
 дальше снова говорит с человеком и потихоньку подводит к Энергоспортзалу (EVGENY_EFIR_TALK).
+
+Павел 12.11.2026 (проверка): Евгений спросил «слева или справа?», ответ пришёл через час — и весь
+час Евгений молчал: пока идёт марафон, напоминаний нет, следующее его сообщение — вопрос про
+следующий день. Теперь спросил в разговоре о дне, а человек SENDOFF_AFTER молчит — Евгений один
+раз за день желает смотреть следующий день и прислушиваться к телу (_sendoffs).
 """
 import asyncio
 import html
@@ -104,6 +109,8 @@ EFIR_QUIET = 24 * 3600      # сутки тишины после эфиров �
 EFIR_QUIET_TRY = 2 * 60     # в проверке командой — через 2 минуты: сутки проверку не держат (TRY_IDLE)
 EFIR_LATEST = 72 * 3600     # позже о них не спрашиваем: записи марафона давно закрыты
 DAY4_ASK = 2 * 3600         # про 4-й день координатор спрашивает через 2 часа (funnel.EVGENY_CHAINS)
+SENDOFF_AFTER = 10 * 60     # молчит на вопрос о дне 10 минут — пожелание смотреть следующий день
+SENDOFF_FRESH = 3 * 3600    # разговор о дне — пока рассказ об ощущениях свежий; позже не провожаем
 ECHO = 4                    # столько своих последних сообщений Евгений видит, чтобы не повторяться
 ASK_BY_AI = True            # вопрос про день словами ИИ; False — всегда текст заказчика
 ASK_TIMEOUT = 20.0          # столько ждём ИИ для вопроса про день — дальше уходит текст заказчика
@@ -789,6 +796,12 @@ async def _turn(bot, user_id: int, task: str) -> bool:
                 db.log_event(user_id, 'feedback', str(day))
             except Exception as err:            # отметка — не повод молчать
                 log.warning(u'Евгений: не отметили обратную связь %s у %s: %s', day, user_id, err)
+        if sent and reply and coach_mode:
+            # спросил в разговоре о дне — промолчит человек SENDOFF_AFTER, Евгений пожелает
+            # смотреть следующий день (_sendoffs). Ответил без вопроса — ждать нечего; прислал
+            # запись дня ещё раз — человек её и смотрит; об оплате — отвечает команда.
+            asks = '?' in text and not ({'day', 'pay'} & set(tags))
+            db.evgeny_asked(user_id, _talk_day(user_id) if asks else None)
         for day in tags.get('day', ()):
             if config.is_team(user_id):
                 # проверка: записей дней у своего нет — говорим, что участнику пришло бы
@@ -964,26 +977,34 @@ def coach_text(user_id: int, ref: str) -> str:
     return text if wrote else texts.EVGENY_COACH_HELLO + text
 
 
-async def _ask_text(user_id: int, day: int, fallback: str) -> str:
-    u"""Вопрос про ощущения N-го дня словами ИИ — каждый раз своими (Sharp 11.11.2026:
-    «намного разнообразнее»); смысл — текст заказчика, он же уходит, если ИИ молчит,
-    думает дольше ASK_TIMEOUT или пишет не то. Шаг воронки ждёт не дольше ASK_TIMEOUT."""
+async def _worded(user_id: int, task: str, what: str) -> str:
+    u"""Сообщение по сценарию словами ИИ — каждый раз своими (Sharp 11.11.2026: «намного
+    разнообразнее»). Пусто — уходит текст заказчика: ИИ молчит, думает дольше ASK_TIMEOUT или
+    пишет не то. Шаг воронки ждёт не дольше ASK_TIMEOUT."""
     if not ASK_BY_AI or not ai.ready():
-        return fallback
+        return ''
+    try:
+        raw = await asyncio.wait_for(ai.complete(_request(user_id, task, mode='coach')), ASK_TIMEOUT)
+    except Exception as err:            # сообщение уйдёт в любом случае — словами заказчика
+        log.warning(u'Евгений: %s для %s — текстом заказчика (%s)', what, user_id,
+                    err or err.__class__.__name__)
+        return ''
+    text, tags = parse(raw)
+    if not text or tags or len(text) > ASK_MAX:
+        log.warning(u'Евгений: ИИ написал не то (%s) для %s — текст заказчика', what, user_id)
+        return ''
+    return text
+
+
+async def _ask_text(user_id: int, day: int, fallback: str) -> str:
+    u"""Вопрос про ощущения N-го дня словами ИИ (_worded); смысл — текст заказчика, он же и
+    запасной."""
     told = [d for d in db.feedback_days(user_id) if d < day]
     task = texts.EVGENY_ASK_TASK.format(
         day=day, name=texts.EVGENY_DAY_NAMES[day],
         before=texts.EVGENY_ASK_BEFORE.format(day=max(told)) if told else u'')
-    try:
-        raw = await asyncio.wait_for(ai.complete(_request(user_id, task, mode='coach')), ASK_TIMEOUT)
-    except Exception as err:            # вопрос про день уйдёт в любом случае — словами заказчика
-        log.warning(u'Евгений: вопрос про %d-й день для %s — текстом заказчика (%s)', day, user_id,
-                    err or err.__class__.__name__)
-        return fallback
-    text, tags = parse(raw)
-    if not text or tags or len(text) > ASK_MAX:
-        log.warning(u'Евгений: ИИ написал не тот вопрос про %d-й день для %s — текст заказчика',
-                    day, user_id)
+    text = await _worded(user_id, task, u'вопрос про %d-й день' % day)
+    if not text:
         return fallback
     return text if db.wrote_as(user_id, EVGENY) else texts.EVGENY_COACH_HELLO + text
 
@@ -1322,6 +1343,72 @@ async def efir_tick(bot, now: float | None = None) -> int:
     return await _efir_asks(bot, now or time.time())
 
 
+# ------------------------------------------------------------------ «смотрите следующий день»
+
+def _talk_day(user_id: int) -> int | None:
+    u"""О каком дне сейчас разговор: о том, про который человек рассказывал последним, — если
+    рассказал недавно (SENDOFF_FRESH) и после этого дня марафона есть следующий."""
+    last = db.last_feedback(user_id)
+    if not last or last[0] >= 4 or time.time() - last[1] > SENDOFF_FRESH:
+        return None
+    return last[0]
+
+
+def _unanswered(user_id: int, asked_at: float) -> bool:
+    u"""После вопроса в переписке пусто: человек не писал, и бот — ни Евгений, ни рассылка, ни
+    шаг воронки — тоже."""
+    if ((db.evgeny_get(user_id) or {}).get('last_in') or 0) >= asked_at:
+        return False
+    last = db.chat_history(user_id, 1)
+    return bool(last) and last[-1]['at'] <= asked_at and last[-1].get('author') == EVGENY
+
+
+async def _sendoff_text(user_id: int, day: int) -> str:
+    u"""Пожелание смотреть день после day и прислушиваться к телу — словами ИИ, а не вышло —
+    запасным текстом по словам Павла."""
+    nxt = day + 1
+    later = '' if nxt in _progress(user_id)[0] else texts.EVGENY_SENDOFF_LATER
+    task = texts.EVGENY_SENDOFF_TASK.format(minutes=SENDOFF_AFTER // 60, day=nxt,
+                                            name=texts.EVGENY_DAY_NAMES[nxt], later=later)
+    fallback = texts.EVGENY_SENDOFF_TY if on_ty(user_id) else texts.EVGENY_SENDOFF
+    return (await _worded(user_id, task, u'пожелание смотреть %d-й день' % nxt)
+            or fallback.format(day=texts.EVGENY_COACH_DAY[nxt]))
+
+
+async def _sendoffs(bot, now: float) -> int:
+    u"""Евгений спросил в разговоре о дне, а человек SENDOFF_AFTER молчит (Павел 12.11.2026: «надо,
+    если человек не ответил 10 минут, то он пишет пожелание смотреть второй день и ощущения по
+    телу»). Один раз после каждого дня и только пока Евгений слушает человека — участнику в
+    любое время суток: тот писал минуты назад. Ответит человек позже — разговор пойдёт как обычно."""
+    done = 0
+    for row in db.evgeny_unanswered(now - SENDOFF_AFTER, now - SENDOFF_FRESH):
+        user_id, day = row['user_id'], row['ask_day']
+        lock = _locks.setdefault(user_id, asyncio.Lock())
+        if not listening(user_id) or lock.locked():
+            continue                        # Евгений остановлен или как раз отвечает
+        async with lock:
+            if not _unanswered(user_id, row['ask_at']):
+                db.evgeny_asked(user_id, None)      # после вопроса уже что-то было — ждать нечего
+                continue
+            text = await _sendoff_text(user_id, day)
+            if not listening(user_id) or not _unanswered(user_id, row['ask_at']):
+                continue                    # пока ИИ писал, человек ответил или Евгения остановили
+            sent = await _say(bot, user_id, text, typing=False)
+            db.evgeny_sent_off(user_id, day)        # не ушло — не долбим каждые полминуты
+        if sent:
+            done += 1
+            log.info(u'Евгений: %s молчит на вопрос о %d-м дне — пожелал смотреть следующий',
+                     user_id, day)
+    return done
+
+
+async def sendoff_tick(bot, now: float | None = None) -> int:
+    u"""«Смотрите следующий день» — и своим в проверке, когда участникам Евгений ещё не запущен."""
+    if not ai.ready():
+        return 0
+    return await _sendoffs(bot, now or time.time())
+
+
 async def _every(name: str, step, bot) -> None:
     while True:
         try:
@@ -1335,7 +1422,9 @@ async def _every(name: str, step, bot) -> None:
 
 async def loop(bot) -> None:
     u"""Циклы рядом: оплата не ждёт, пока уйдут первые сообщения дожима (ревью 06.11.2026:
-    обещанные 5 минут иначе растягивались на 6–8); вопрос об эфирах — и своим в проверке."""
-    log.info(u'Евгений: циклы дожима, оплаты и эфиров запущены')
+    обещанные 5 минут иначе растягивались на 6–8); вопрос об эфирах и «смотрите следующий
+    день» — и своим в проверке."""
+    log.info(u'Евгений: циклы дожима, оплаты, эфиров и «следующего дня» запущены')
     await asyncio.gather(_every(u'дожим', tick, bot), _every(u'оплата', pay_tick, bot),
-                         _every(u'эфиры', efir_tick, bot))
+                         _every(u'эфиры', efir_tick, bot),
+                         _every(u'следующий день', sendoff_tick, bot))

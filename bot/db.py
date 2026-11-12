@@ -225,7 +225,11 @@ CREATE TABLE IF NOT EXISTS evgeny (
   pay_ask    TEXT,     -- что именно спросил — для напоминания команде
   -- 12.11.2026 (Павел): после прощания — два его эфира, через сутки тишины — «как эфиры?»
   efir_at    REAL,     -- когда ушли эфиры Павла: второй раз не шлём
-  efir_asked REAL      -- когда Евгений спросил, как эфиры
+  efir_asked REAL,     -- когда Евгений спросил, как эфиры
+  -- 12.11.2026 (Павел): спросил о дне, а человек 10 минут молчит — пожелание смотреть следующий
+  ask_at     REAL,     -- когда координатор задал вопрос в разговоре о дне и ждёт ответа
+  ask_day    INTEGER,  -- о каком дне марафона этот разговор
+  sendoff_day INTEGER  -- после какого дня уже пожелал смотреть следующий: второй раз не пишет
 );
 '''
 
@@ -301,7 +305,8 @@ def connect(path: str) -> sqlite3.Connection:
     evgeny_columns = [row[1] for row in _conn.execute('PRAGMA table_info(evgeny)')]
     for column, kind in (('mode', "TEXT NOT NULL DEFAULT 'sales'"), ('off_kind', 'TEXT'),
                          ('pay_at', 'REAL'), ('pay_due', 'REAL'), ('pay_ask', 'TEXT'),
-                         ('efir_at', 'REAL'), ('efir_asked', 'REAL')):
+                         ('efir_at', 'REAL'), ('efir_asked', 'REAL'), ('ask_at', 'REAL'),
+                         ('ask_day', 'INTEGER'), ('sendoff_day', 'INTEGER')):
         if evgeny_columns and column not in evgeny_columns:
             try:
                 _conn.execute('ALTER TABLE evgeny ADD COLUMN %s %s' % (column, kind))
@@ -1622,6 +1627,30 @@ def evgeny_efir_waiting() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def evgeny_asked(user_id: int, day: int | None) -> None:
+    u"""Координатор задал вопрос в разговоре о дне day: не ответит человек за 10 минут — Евгений
+    пожелает смотреть следующий день (evgeny._sendoffs). None — вопроса нет, ждать нечего."""
+    _run('UPDATE evgeny SET ask_at=?, ask_day=? WHERE user_id=?',
+         (time.time() if day else None, day, user_id))
+
+
+def evgeny_sent_off(user_id: int, day: int) -> None:
+    u"""Пожелание смотреть день после day ушло: по этому дню второй раз не пишем."""
+    _run('UPDATE evgeny SET sendoff_day=?, ask_at=NULL, ask_day=NULL WHERE user_id=?',
+         (day, user_id))
+
+
+def evgeny_unanswered(before: float, after: float) -> list[dict]:
+    u"""Кто молчит на вопрос координатора о дне: вопрос задан между after и before, человек с тех
+    пор не писал, а пожелания смотреть следующий день после этого дня ещё не было."""
+    rows = _conn.execute(
+        "SELECT * FROM evgeny WHERE active=1 AND mode='coach' AND ask_at IS NOT NULL "
+        'AND ask_at <= ? AND ask_at >= ? AND (last_in IS NULL OR last_in < ask_at) '
+        'AND (sendoff_day IS NULL OR sendoff_day < ask_day) ORDER BY ask_at',
+        (before, after)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def evgeny_counts() -> dict[str, int]:
     one = lambda sql: _conn.execute(sql).fetchone()[0]
     return {'active': one('SELECT COUNT(*) FROM evgeny WHERE active=1'),
@@ -1699,6 +1728,15 @@ def feedback_days(user_id: int) -> set[int]:
     rows = _conn.execute("SELECT DISTINCT ref FROM events WHERE user_id=? AND kind='feedback'",
                          (user_id,)).fetchall()
     return {int(r['ref']) for r in rows if str(r['ref']).isdigit()}
+
+
+def last_feedback(user_id: int) -> tuple[int, float] | None:
+    u"""О каком дне человек рассказывал Евгению последним и когда (None — ни о каком)."""
+    row = _conn.execute("SELECT ref, at FROM events WHERE user_id=? AND kind='feedback' "
+                        'ORDER BY at DESC, rowid DESC LIMIT 1', (user_id,)).fetchone()
+    if not row or not str(row['ref']).isdigit():
+        return None
+    return int(row['ref']), row['at']
 
 
 def evgeny_candidates(day4_before: float) -> list[dict]:
