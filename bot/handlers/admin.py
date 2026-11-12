@@ -1367,6 +1367,7 @@ async def evgeny_try(bot, target: Message, user) -> None:
     state = texts.EVGENY_TRY_STATE_ON if evgeny.coach_on() else texts.EVGENY_TRY_STATE_OFF
     await target.answer(texts.EVGENY_TRY_NOTE.format(state=state,
                                                      minutes=evgeny.EFIR_QUIET_TRY // 60,
+                                                     hours=evgeny.EFIR_QUIET // 3600,
                                                      sendoff=evgeny.SENDOFF_AFTER // 60),
                         reply_markup=keyboards.evgeny_try())
     if not sent:

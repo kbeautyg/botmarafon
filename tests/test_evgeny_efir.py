@@ -117,8 +117,12 @@ def test_тексты_эфиров__слово_в_слово_как_у_павл�
     assert ВТОРОЙ == (u'А теперь второй эфир тут уже обратная связь людей , где они сами '
                       u'рассказывают свою историю 🙏\n\n\nhttps://t.me/Tm_Finish/5316')
     assert evgeny.energo(ПЕРВЫЙ) == ПЕРВЫЙ and evgeny.energo(ВТОРОЙ) == ВТОРОЙ
-    assert texts.EVGENY_EFIR_ASK == (u'Приветствую вас! Ну как, просмотрели записи эфиров? '
-                                     u'Есть какие-то вопросы?')
+    # 12.11.2026 вечером: «через 15 часов спросить — смотрели вы эфиры, которые я прислал?»
+    assert texts.EVGENY_EFIR_ASK == u'Приветствую вас! Смотрели вы эфиры, которые я прислал?'
+    assert texts.EVGENY_EFIR_ASK_TY == u'Приветствую! Удалось посмотреть эфиры, которые я прислал?'
+    assert evgeny.EFIR_QUIET == 15 * ЧАС
+    assert u'предложи попробовать месяц в Энергоспортзале' in texts.EVGENY_EFIR_TALK
+    assert u'все сферы жизни' in texts.EVGENY_EFIR_TALK
 
 
 def test_в_подсказке__тег_прощания_и_72_часа():
@@ -275,6 +279,48 @@ async def test_записи_уже_закрыты__эфиров_нет(monkeypat
     assert _человеку(bot, 1) == [ПРОЩАНИЕ]
 
 
+РАССКАЗ_ПАВЛА = (u'Куда то провалился и понял что на дне , финансов нету , и так все остальные '
+                 u'сферы тоже впринцепи просели')        # проверка Павла 12.11.2026, слово в слово
+ПРЕДЛОЖЕНИЕ_БЕЗ_ВОПРОСА = (u'Провалиться и увидеть дно — так начинается выход. Мы с вами прошли '
+                          u'весь марафон, и сейчас самое время продолжить уже в Энергоспортзале 🙏')
+
+
+async def test_финансов_нету_в_рассказе_о_4_м_дне__не_отказ(monkeypatch):
+    u"""Павел рассказал об ощущениях 4-го дня («финансов нету»), Евгений ответил предложением без
+    вопроса — эфиры ушли следом, хотя Павел не отказывался. Эфиры — только на отказ после него."""
+    _прошёл_марафон(1, рассказал_про_4=False)
+    db.log_event(1, 'feedback', '3')
+    bot = FakeBot()
+    monkeypatch.setattr(ai, 'complete', ИИ(ПРЕДЛОЖЕНИЕ_БЕЗ_ВОПРОСА + u'\n[FEEDBACK 4]',
+                                           ПРОЩАНИЕ + u'\n[BYE]'))
+    await _пишет(bot, 1, РАССКАЗ_ПАВЛА)
+    assert _человеку(bot, 1) == [ПРЕДЛОЖЕНИЕ_БЕЗ_ВОПРОСА], 'предложение — без эфиров следом'
+    assert not db.evgeny_get(1)['efir_at']
+    await _пишет(bot, 1, ОТКАЗ)
+    assert _человеку(bot, 1)[-3:] == [ПРОЩАНИЕ, ПЕРВЫЙ, ВТОРОЙ], 'а на отказ после него — эфиры'
+
+
+async def test_после_предложения_ещё_рассказ_об_ощущениях__не_отказ(monkeypatch):
+    _прошёл_марафон(1)
+    bot = FakeBot()
+    monkeypatch.setattr(ai, 'complete', ИИ(u'Дно — это то, что стало видно и уходит 🙏\n[FEEDBACK 4]'))
+    await _пишет(bot, 1, u'Ещё вспомнил: понял, что финансов нету, всё на дне')
+    assert ПЕРВЫЙ not in _человеку(bot, 1)
+
+
+async def test_проверка__финансов_нету_на_4_м_дне__эфиров_нет(monkeypatch):
+    u"""То же у своего в проверке: кнопка «4-й день» сама по себе — ещё не предложение."""
+    evgeny.set_coach(False)
+    bot = FakeBot()
+    monkeypatch.setattr(ai, 'complete', ИИ(ПРЕДЛОЖЕНИЕ_БЕЗ_ВОПРОСА + u'\n[FEEDBACK 4]'))
+    await admin.on_evgeny_try(FakeMessage(text=texts.EVGENY_TRY_BUTTON,
+                                          user=FakeUser(PAVEL, 'pavel', u'Павел'), bot=bot))
+    assert await evgeny.try_day(bot, PAVEL, 4) == ''
+    await _пишет(bot, PAVEL, РАССКАЗ_ПАВЛА)
+    assert _человеку(bot, PAVEL)[-1] == ПРЕДЛОЖЕНИЕ_БЕЗ_ВОПРОСА
+    assert ПЕРВЫЙ not in _человеку(bot, PAVEL)
+
+
 async def test_команда_ответила_пока_ждали__эфиры_не_уходят(monkeypatch):
     _прошёл_марафон(1)
     bot = FakeBot()
@@ -293,8 +339,8 @@ def _эфиры_ушли(uid, часов_назад, ty=False):
         db.put_content(evgeny.TY_KEY % uid, 'evgeny', '1')
 
 
-async def test_сутки_тишины__спрашивает_как_эфиры_один_раз():
-    _эфиры_ушли(1, часов_назад=25)
+async def test_15_часов_тишины__спрашивает_смотрели_ли_эфиры_один_раз():
+    _эфиры_ушли(1, часов_назад=16)
     bot = FakeBot()
     assert await evgeny.efir_tick(bot, _в_мск(12)) == 1
     assert _человеку(bot, 1) == [texts.EVGENY_EFIR_ASK]
@@ -309,15 +355,15 @@ async def test_на_ты__спрашивает_на_ты():
     assert _человеку(bot, 1) == [texts.EVGENY_EFIR_ASK_TY]
 
 
-@pytest.mark.parametrize('часов, час_мск', [(23, 12), (25, 3)])
+@pytest.mark.parametrize('часов, час_мск', [(14, 12), (16, 3)])
 async def test_рано_или_ночь__не_спрашивает(часов, час_мск):
     _эфиры_ушли(1, часов_назад=часов + (12 - час_мск))
     bot = FakeBot()
     assert await evgeny.efir_tick(bot, _в_мск(час_мск)) == 0
-    assert not db.evgeny_get(1)['efir_asked'], 'спросит днём, когда пройдут сутки'
+    assert not db.evgeny_get(1)['efir_asked'], 'спросит днём, когда пройдут 15 часов'
 
 
-async def test_человек_писал_после_эфиров__сутки_от_его_слов():
+async def test_человек_писал_после_эфиров__15_часов_от_его_слов():
     _эфиры_ушли(1, часов_назад=30)
     db._run('UPDATE evgeny SET last_in=? WHERE user_id=?', (_в_мск(12) - 2 * ЧАС, 1))
     assert await evgeny.efir_tick(FakeBot(), _в_мск(12)) == 0
@@ -377,16 +423,17 @@ async def test_проверка__отказ_эфиры_и_через_2_мину�
     await _пишет(bot, ТЕСТЕР, u'Сегодня поднимались страхи, от них дрожало тело')
     await _пишет(bot, ТЕСТЕР, ОТКАЗ)
     пришло = _человеку(bot, ТЕСТЕР)
-    assert пришло[-4:-1] == [ПРОЩАНИЕ, ПЕРВЫЙ, ВТОРОЙ]
-    assert пришло[-1] == texts.EVGENY_TRY_EFIR_NOTE.format(minutes=2)
+    # 12.11.2026 Павел: пометка после эфиров — «хрень, техническое какое-то сообщение»; её нет
+    assert пришло[-3:] == [ПРОЩАНИЕ, ПЕРВЫЙ, ВТОРОЙ], 'после эфиров — ничего технического'
     assert await evgeny.efir_tick(bot, time.time() + 60) == 0
     assert await evgeny.efir_tick(bot, time.time() + evgeny.EFIR_QUIET_TRY + 1) == 1
     assert _человеку(bot, ТЕСТЕР)[-1] == texts.EVGENY_EFIR_ASK
 
 
 def test_пояснение_проверки__про_эфиры_и_2_минуты():
-    assert u'два эфира Павла' in texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2, sendoff=10)
-    assert u'Помолчите 2 мин' in texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2, sendoff=10)
+    пояснение = texts.EVGENY_TRY_NOTE.format(state=u'', minutes=2, hours=15, sendoff=10)
+    assert u'два эфира Павла' in пояснение and u'Помолчите 2 мин' in пояснение
+    assert u'месяц в Энергоспортзале' in пояснение and u'через 15 часов тишины' in пояснение
 
 
 def test_новая_проверка__эфиры_заново():
